@@ -2,11 +2,6 @@
 
 **The Infinite Life Desktop OS** — an open-source, cloud-first operating system that rescues legacy hardware from e-waste.
 
-```
-  ⬤S
-  SLIME OS
-```
-
 > *"Liquid Rejuvenation."* Strip your old machine down to a featherweight local client, stream a full cloud desktop at 60fps over FreeRDP — and keep your hardware alive for another decade.
 
 ---
@@ -83,13 +78,40 @@ sudo systemctl restart slimeos-session
 
 ## Cloud Hosting
 
-The Brain is tested and deployable on:
+The Brain runs on **any Linux host with Docker** — a single VPS, a hyperscaler VM, or a telco edge node. The only public ports required are UDP 51820 (WireGuard) and TCP 443 (HTTPS). RDP never touches the public internet.
 
-| Platform | Notes |
+### Hyperscalers
+| Provider | Notes |
 |---|---|
-| **AWS EC2** | t3.medium or larger recommended; use Security Groups to expose only UDP 51820 (WireGuard) and 443 (HTTPS) |
-| **GCP Compute Engine** | e2-medium or larger; use VPC Firewall rules |
-| **cPanel VPS** | Any VPS with Docker support; enable IP forwarding for WireGuard |
+| **AWS EC2** | t3.medium+; Security Groups expose UDP 51820 + TCP 443 only |
+| **Google Cloud** | e2-medium+; VPC Firewall rules |
+| **Microsoft Azure** | B2s+; Network Security Groups |
+| **Oracle Cloud** | Always-Free tier (VM.Standard.E2.1) works for single-user testing |
+| **Alibaba Cloud** | ecs.t6-c1m2.large+; for Asia-Pacific deployments |
+| **IBM Cloud** | cx2-2x4+; Virtual Server for VPC |
+
+### Developer VPS (great value, easy to self-host)
+| Provider | Notes |
+|---|---|
+| **Hetzner** | CPX21 (€7/mo) — best price-performance in Europe |
+| **DigitalOcean** | Basic 2 vCPU / 4 GB Droplet |
+| **Linode / Akamai** | Nanode or Linode 4 GB |
+| **Vultr** | Regular Cloud Compute 2 vCPU / 4 GB |
+| **OVHcloud** | VPS Comfort — European and Asia-Pacific PoPs |
+| **Scaleway** | DEV1-M; ARM and x86 options in Europe |
+| **UpCloud** | 2 vCPU / 4 GB — strong EU/APAC coverage |
+
+### Telco & Edge (partnership targets)
+This is where Slime OS is headed. A telco partner hosts the Brain on their edge infrastructure, uses their idle compute, and sells Slime OS as a managed cloud desktop subscription on top of their existing 5G/fiber plans.
+
+| Provider type | Examples |
+|---|---|
+| **Telco operators** | Maxis, Celcom, Digi, Singtel, AIS, Telkomsel, PLDT, Globe |
+| **Edge / CDN** | Cloudflare Workers (future WebRTC path), Fastly, Akamai |
+| **Regional DCs** | AIMS DC, Equinix, NTT |
+| **Hyperscaler edge** | AWS Wavelength, GCP Distributed Cloud Edge, Azure Edge Zones |
+
+> If you're a hosting provider or telco interested in partnering, reach out via [slimeos.com](https://www.slimeos.com) or open a GitHub Discussion.
 
 See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup guides.
 
