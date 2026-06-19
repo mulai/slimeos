@@ -1,0 +1,27 @@
+# Slime OS Brain — Caddyfile
+# Automatic HTTPS (Let's Encrypt) + reverse proxy to Authelia.
+# Replace slimeos.com with your actual domain.
+
+{
+    email admin@slimeos.com
+    # Uncomment to test with Let's Encrypt staging (avoids rate limits):
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# ── Authelia SSO portal ────────────────────────────────────────────────────────
+auth.slimeos.com {
+    reverse_proxy authelia:9091
+}
+
+# ── Slime account dashboard (placeholder — Phase 2) ──────────────────────────
+dashboard.slimeos.com {
+    forward_auth authelia:9091 {
+        uri /api/verify?rd=https://auth.slimeos.com
+        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+    }
+    # Placeholder: serve a static page until the dashboard is built
+    respond "Slime OS Dashboard — Coming Soon" 200
+}
+
+# ── WireGuard status (internal only, not exposed publicly) ────────────────────
+# Access via: curl http://wireguard:51821 from inside slimenet

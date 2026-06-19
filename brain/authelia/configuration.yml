@@ -1,0 +1,97 @@
+---
+# Slime OS — Authelia Zero-Trust Configuration
+# Docs: https://www.authelia.com/configuration/
+# All secrets (JWT_SECRET, SESSION_SECRET, etc.) are injected via environment variables
+# defined in brain/.env — never hardcoded here.
+
+theme: dark
+
+server:
+  host: 0.0.0.0
+  port: 9091
+
+log:
+  level: warn
+  format: json
+
+# ── TOTP (authenticator app MFA) ─────────────────────────────────────────────
+totp:
+  issuer: slimeos.com
+  period: 30
+  skew: 1
+  secret_size: 32
+
+# ── Identity validation ───────────────────────────────────────────────────────
+identity_validation:
+  reset_password:
+    jwt_secret: "{{ env `AUTHELIA_JWT_SECRET` }}"
+
+# ── Authentication backend ───────────────────────────────────────────────────
+# File-based for v0.1. Replace with LDAP when scaling.
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2id
+      iterations: 3
+      parallelism: 4
+      memory: 65536
+      key_length: 32
+      salt_length: 16
+  password_reset:
+    disable: false
+
+# ── Access control ────────────────────────────────────────────────────────────
+access_control:
+  default_policy: deny
+
+  rules:
+    # Authelia itself is always accessible
+    - domain: auth.slimeos.com
+      policy: bypass
+
+    # Dashboard requires 2FA
+    - domain: dashboard.slimeos.com
+      policy: two_factor
+
+    # Catch-all: any other subdomain needs at least 1FA
+    - domain: "*.slimeos.com"
+      policy: one_factor
+
+# ── Session ───────────────────────────────────────────────────────────────────
+session:
+  name: slimeos_session
+  same_site: lax
+  inactivity: 12h
+  expiration: 24h
+  remember_me: 30d
+  secret: "{{ env `AUTHELIA_SESSION_SECRET` }}"
+
+  cookies:
+    - domain: slimeos.com
+      authelia_url: https://auth.slimeos.com
+      default_redirection_url: https://dashboard.slimeos.com
+
+  redis:
+    host: redis
+    port: 6379
+    password: "{{ env `REDIS_PASSWORD` }}"
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+storage:
+  encryption_key: "{{ env `AUTHELIA_STORAGE_ENCRYPTION_KEY` }}"
+  postgres:
+    address: postgres:5432
+    database: authelia
+    username: authelia
+    password: "{{ env `AUTHELIA_STORAGE_POSTGRES_PASSWORD` }}"
+
+# ── Notifications (MFA email delivery) ───────────────────────────────────────
+notifier:
+  smtp:
+    address: "smtp://${SMTP_HOST}:${SMTP_PORT}"
+    username: "{{ env `AUTHELIA_NOTIFIER_SMTP_USERNAME` }}"
+    password: "{{ env `AUTHELIA_NOTIFIER_SMTP_PASSWORD` }}"
+    sender: "Slime OS <noreply@slimeos.com>"
+    subject: "[Slime OS] {title}"
+    startup_check_address: admin@slimeos.com
