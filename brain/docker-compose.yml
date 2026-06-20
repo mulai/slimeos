@@ -119,7 +119,7 @@ services:
       PEERS: "${WG_PEERS:-1}"                # number of client configs to generate
       PEERDNS: "auto"
       INTERNAL_SUBNET: "10.10.0.0"
-      ALLOWEDIPS: "10.10.0.0/24"
+      ALLOWEDIPS: "10.10.0.0/24,10.11.0.0/24"
       LOG_CONFS: "false"
     volumes:
       - wireguard_config:/config
@@ -171,7 +171,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.10.0.0/24
+        - subnet: 10.11.0.0/24
 
 # ── Volumes ────────────────────────────────────────────────────────────────────
 volumes:
