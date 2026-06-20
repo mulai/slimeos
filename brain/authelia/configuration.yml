@@ -88,7 +88,7 @@ storage:
 # ── Notifications (MFA email delivery) ───────────────────────────────────────
 notifier:
   smtp:
-    address: "smtps://smtp.larksuite.com:465"
+    address: "submissions://smtp.larksuite.com:465"
     username: "{{ env `AUTHELIA_NOTIFIER_SMTP_USERNAME` }}"
     password: "{{ env `AUTHELIA_NOTIFIER_SMTP_PASSWORD` }}"
     sender: "Slime OS <noreply@slimeos.com>"
