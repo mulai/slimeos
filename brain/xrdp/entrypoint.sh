@@ -25,8 +25,9 @@ rm -f /var/run/dbus/pid
 dbus-daemon --system --fork 2>/dev/null || true
 
 # ── xRDP ─────────────────────────────────────────────────────────────────────
-rm -f /var/run/xrdp/xrdp.pid 2>/dev/null || true
+rm -f /var/run/xrdp/xrdp.pid /var/run/xrdp/xrdp-sesman.pid 2>/dev/null || true
 mkdir -p /var/run/xrdp
 
 echo "[slimeos/desktop] Starting xRDP on :3389"
+/usr/sbin/xrdp-sesman
 exec /usr/sbin/xrdp --nodaemon

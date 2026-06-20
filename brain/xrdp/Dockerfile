@@ -47,15 +47,12 @@ ENV LC_ALL=en_US.UTF-8
 
 # ── xRDP configuration ────────────────────────────────────────────────────────
 # Use Xorg (xorgxrdp) backend for best compatibility with FreeRDP GFX pipeline
-RUN sed -i 's/^#\?port=.*/port=3389/' /etc/xrdp/xrdp.ini && \
+RUN sed -i '0,/^\[Xorg\]/s/^#\?port=.*/port=3389/' /etc/xrdp/xrdp.ini && \
     sed -i 's/^#\?max_bpp=.*/max_bpp=32/' /etc/xrdp/xrdp.ini && \
     sed -i 's/^#\?xserverbpp=.*/xserverbpp=32/' /etc/xrdp/xrdp.ini && \
-    # Allow only local connections (WireGuard provides the secure tunnel)
     sed -i 's/^#\?address=.*/address=0.0.0.0/' /etc/xrdp/xrdp.ini && \
-    # Security: NLA is enforced at the WireGuard+FreeRDP layer
-    sed -i 's/^#\?security_layer=.*/security_layer=rdp/' /etc/xrdp/xrdp.ini && \
-    # Disable TLS inside xRDP (handled by FreeRDP/WireGuard)
-    sed -i 's/^#\?crypt_level=.*/crypt_level=none/' /etc/xrdp/xrdp.ini
+    sed -i 's/^#\?security_layer=.*/security_layer=tls/' /etc/xrdp/xrdp.ini && \
+    sed -i 's/^#\?crypt_level=.*/crypt_level=high/' /etc/xrdp/xrdp.ini
 
 # Use XFCE as the session
 RUN echo "startxfce4" > /etc/skel/.xsession && \

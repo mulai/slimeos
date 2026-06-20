@@ -130,8 +130,9 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
       - net.ipv4.ip_forward=1
     networks:
-      - slimenet
-      - vpnnet
+      slimenet: {}
+      vpnnet:
+        ipv4_address: 10.11.0.2    # fixed — WireGuard bridges peer subnet to vpnnet
 
   # ── Linux Cloud Desktop (free path / BYOL fallback) ────────────────────────────
   # Ubuntu 22.04 + xRDP + XFCE. Reachable only via WireGuard (10.10.0.0/24).
@@ -150,7 +151,8 @@ services:
     volumes:
       - desktop_home:/home
     networks:
-      - vpnnet           # reachable from WireGuard clients at 10.10.0.x
+      vpnnet:
+        ipv4_address: 10.11.0.10   # fixed — use this in Windows App / FreeRDP
     # RDP port intentionally NOT published to host — only via WireGuard
     expose:
       - "3389"
