@@ -48,4 +48,4 @@ fi
 # The connect.sh script is the only application cage manages.
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: $SLIMEOS_COMPOSITOR_RENDERER)"
 
-exec cage -- "$INSTALL_DIR/connect.sh"
+exec cage --renderer "$SLIMEOS_COMPOSITOR_RENDERER" -- "$INSTALL_DIR/connect.sh"

@@ -7,8 +7,7 @@
 theme: dark
 
 server:
-  host: 0.0.0.0
-  port: 9091
+  address: 'tcp://0.0.0.0:9091'
 
 log:
   level: warn
@@ -89,7 +88,7 @@ storage:
 # ── Notifications (MFA email delivery) ───────────────────────────────────────
 notifier:
   smtp:
-    address: "smtp://${SMTP_HOST}:${SMTP_PORT}"
+    address: "smtps://smtp.larksuite.com:465"
     username: "{{ env `AUTHELIA_NOTIFIER_SMTP_USERNAME` }}"
     password: "{{ env `AUTHELIA_NOTIFIER_SMTP_PASSWORD` }}"
     sender: "Slime OS <noreply@slimeos.com>"

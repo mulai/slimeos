@@ -35,7 +35,7 @@ Slime OS is a two-component system:
 |---|---|
 | `membrane/preseed/slimeos.preseed.cfg` | Debian automated installer config |
 | `membrane/installer/install.sh` | Post-install setup script |
-| `membrane/installer/byol.sh` | Windows license detection + upload |
+| `membrane/installer/extract-windows-license.ps1` | Windows key extractor — run on Windows before install, saves to USB |
 | `membrane/session/slimeos-session.sh` | cage session startup |
 | `membrane/freerdp/connect.sh` | FreeRDP connection with security flags |
 
@@ -79,7 +79,7 @@ Internet
 | File | Purpose |
 |---|---|
 | `brain/docker-compose.yml` | Full stack orchestration |
-| `brain/wireguard/setup.sh` | WireGuard server + peer provisioning |
+| `brain/wireguard/provision-peer.sh` | Add a new device peer, prints WireGuard config + QR code |
 | `brain/xrdp/Dockerfile` | Ubuntu + xRDP + desktop image |
 | `brain/authelia/configuration.yml` | Zero-trust identity config |
 
