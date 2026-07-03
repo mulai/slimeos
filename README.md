@@ -147,23 +147,26 @@ Local Device  ──(FreeRDP · NLA · TLS 1.3)──▶  WireGuard VPN  ──�
 
 - **Windows cloud VM** — bring your own 25-digit transferable Retail/Digital key. The installer captures it before wiping the local drive, maps it to your Slime account, and activates a single-user cloud node.
 - **No transferable key?** The system auto-provisions a free Linux cloud desktop (Ubuntu + XFCE) instead.
-- **Slime OS itself** — MIT license. Forever free and open source.
+- **Slime OS itself** — Apache License 2.0. Forever free and open source.
 
 ---
 
 ## Contributing
 
-PRs welcome. Read [`docs/architecture.md`](docs/architecture.md) first.
+PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) — read
+[`docs/architecture.md`](docs/architecture.md) first.
 
 - Membrane issues → label `membrane`
 - Brain infra → label `brain`
 - Android → label `android`
 
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ---
 
 ## License
 
-MIT © Slime OS Contributors
+Apache License 2.0 © Slime OS Contributors — see [`LICENSE`](LICENSE).
 
 ---
 
