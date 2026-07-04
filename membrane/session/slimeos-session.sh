@@ -10,6 +10,7 @@ CONFIG_DIR="/etc/slimeos"
 LOG_FILE="/var/log/slimeos/session.log"
 
 exec >> "$LOG_FILE" 2>&1
+trap 'echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] FAILED at line $LINENO: $BASH_COMMAND"' ERR
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Session starting"
 
 # ── Load hardware profile flags ───────────────────────────────────────────────
