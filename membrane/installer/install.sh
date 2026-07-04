@@ -136,11 +136,17 @@ mkdir -p "$CONFIG_DIR/brains"
 chmod 700 "$CONFIG_DIR/brains"
 
 # ── 6. Systemd service: slimeos-session ───────────────────────────────────────
+# WantedBy=multi-user.target, not graphical.target: with no display manager
+# installed (all of them are masked below), the system's default boot target
+# stays multi-user.target, so graphical.target is never reached and the unit
+# would never start. Conflicts=getty@tty1.service hands us tty1 cleanly
+# instead of racing the default console login prompt for it.
 log "Installing systemd service..."
 cat > "$SYSTEMD_DIR/slimeos-session.service" <<SERVICE
 [Unit]
 Description=Slime OS — Kiosk Session (cage + FreeRDP)
-After=network-online.target graphical.target
+After=network-online.target getty@tty1.service
+Conflicts=getty@tty1.service
 Wants=network-online.target
 
 [Service]
@@ -157,7 +163,7 @@ RestartSec=5
 TimeoutStartSec=60
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
 SERVICE
 
 # ── 7. Systemd service: NIC tuning (Profile 001 only if present) ───────────────
