@@ -53,4 +53,8 @@ fi
 # picker (Connect screen) and hands off to connect.sh once a Brain is chosen.
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: $SLIMEOS_COMPOSITOR_RENDERER)"
 
-exec cage --renderer "$SLIMEOS_COMPOSITOR_RENDERER" -- "$INSTALL_DIR/brain-select.sh"
+# cage 0.1.4 (Debian 12) has no --renderer flag at all ("invalid option -- '-'")
+# -- renderer backend selection for wlroots compositors is done via the
+# WLR_RENDERER env var, not a cage CLI option.
+export WLR_RENDERER="$SLIMEOS_COMPOSITOR_RENDERER"
+exec cage -- "$INSTALL_DIR/brain-select.sh"
