@@ -14,7 +14,7 @@ CONFIG_DIR="/etc/slimeos"
 INSTALL_DIR="/opt/slimeos"
 BRAINS_FILE="$CONFIG_DIR/brains.json"
 CRED_DIR="$CONFIG_DIR/brains"
-LOG_FILE="/var/log/slimeos-connect.log"
+LOG_FILE="/var/log/slimeos/connect.log"
 
 exec >> "$LOG_FILE" 2>&1
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [connect] $*"; }

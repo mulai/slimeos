@@ -17,7 +17,7 @@ CONFIG_DIR="/etc/slimeos"
 INSTALL_DIR="/opt/slimeos"
 BRAINS_FILE="$CONFIG_DIR/brains.json"
 CRED_DIR="$CONFIG_DIR/brains"
-LOG_FILE="/var/log/slimeos-session.log"
+LOG_FILE="/var/log/slimeos/session.log"
 
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [brain-select] $*" >> "$LOG_FILE"; }
 
