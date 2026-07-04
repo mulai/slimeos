@@ -35,7 +35,10 @@ while ! ip link show wg0 &>/dev/null; do
         break
     fi
     sleep 1
-    (( waited++ ))
+    # not (( waited++ )): post-increment evaluates to the pre-increment value,
+    # so on the very first pass (waited=0) it's falsy and set -e kills the
+    # script immediately.
+    waited=$((waited + 1))
 done
 
 if ip link show wg0 &>/dev/null; then
