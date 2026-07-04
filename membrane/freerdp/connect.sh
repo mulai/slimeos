@@ -1,22 +1,49 @@
 #!/usr/bin/env bash
 # Slime OS — FreeRDP connection script
-# Launched inside cage as the sole Wayland client.
-# Reads /etc/slimeos/config and /etc/slimeos/hw-freerdp-flags,
-# then connects to the cloud VM via WireGuard-tunneled RDP.
-# On disconnect, waits RECONNECT_DELAY seconds and reconnects automatically.
+# Launched by brain-select.sh (already running inside the kiosk's terminal
+# client) once the user has picked a saved Brain from the Connect screen.
+# Reads that Brain's host/port/username from /etc/slimeos/brains.json,
+# prompts for a password on first use, then connects via WireGuard-tunneled
+# RDP. On disconnect, waits RECONNECT_DELAY seconds and reconnects
+# automatically; on clean logout or auth failure, hands control back to the
+# Brain picker.
 
 set -euo pipefail
 
 CONFIG_DIR="/etc/slimeos"
+INSTALL_DIR="/opt/slimeos"
+BRAINS_FILE="$CONFIG_DIR/brains.json"
+CRED_DIR="$CONFIG_DIR/brains"
 LOG_FILE="/var/log/slimeos-connect.log"
 
 exec >> "$LOG_FILE" 2>&1
-
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [connect] $*"; }
 
-# ── Load config ───────────────────────────────────────────────────────────────
-# shellcheck source=/dev/null
-source "$CONFIG_DIR/config"
+BRAIN_ID="${1:?Usage: connect.sh <brain-id>}"
+mkdir -p "$CRED_DIR"
+chmod 700 "$CRED_DIR"
+
+# ── Load Brain record ─────────────────────────────────────────────────────────
+BRAIN_JSON=$(jq -c --arg id "$BRAIN_ID" '.[] | select(.id == $id)' "$BRAINS_FILE")
+if [[ -z "$BRAIN_JSON" ]]; then
+    log "ERROR: brain id $BRAIN_ID not found — returning to picker"
+    exec "$INSTALL_DIR/brain-select.sh"
+fi
+
+VM_HOST=$(jq -r '.host' <<<"$BRAIN_JSON")
+VM_PORT=$(jq -r '.port' <<<"$BRAIN_JSON")
+SLIME_USERNAME=$(jq -r '.username' <<<"$BRAIN_JSON")
+BRAIN_NAME=$(jq -r '.name' <<<"$BRAIN_JSON")
+
+if [[ -z "$SLIME_USERNAME" ]]; then
+    SLIME_USERNAME=$(whiptail --title "$BRAIN_NAME" \
+        --inputbox "Username for $BRAIN_NAME" 10 60 3>&1 1>&2 2>&3) || exec "$INSTALL_DIR/brain-select.sh"
+    [[ -n "$SLIME_USERNAME" ]] || exec "$INSTALL_DIR/brain-select.sh"
+
+    tmp=$(mktemp)
+    jq --arg id "$BRAIN_ID" --arg u "$SLIME_USERNAME" \
+        'map(if .id == $id then .username = $u else . end)' "$BRAINS_FILE" > "$tmp" && mv "$tmp" "$BRAINS_FILE"
+fi
 
 # Load hardware-specific FreeRDP flags
 SLIMEOS_FREERDP_EXTRA_FLAGS="/network:broadband /gfx /bpp:32"
@@ -25,43 +52,29 @@ if [[ -f "$CONFIG_DIR/hw-freerdp-flags" ]]; then
     source "$CONFIG_DIR/hw-freerdp-flags"
 fi
 
-# ── Validate config ───────────────────────────────────────────────────────────
-if [[ -z "${VM_HOST:-}" ]]; then
-    log "ERROR: VM_HOST not set in $CONFIG_DIR/config"
-    # Show an error screen inside cage instead of a black screen
-    # (We'll use a simple weston-terminal fallback in v0.1)
-    exec weston-terminal --shell="echo 'Slime OS: VM_HOST not configured. Edit /etc/slimeos/config and reboot.'; bash"
+# Session-wide display/network preferences (not per-brain)
+if [[ -f "$CONFIG_DIR/config" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_DIR/config"
 fi
 
-if [[ -z "${SLIME_USERNAME:-}" ]]; then
-    log "ERROR: SLIME_USERNAME not set in $CONFIG_DIR/config"
-    exec weston-terminal --shell="echo 'Slime OS: SLIME_USERNAME not configured. Edit /etc/slimeos/config and reboot.'; bash"
-fi
+# ── Credential ────────────────────────────────────────────────────────────────
+CRED_FILE="$CRED_DIR/${BRAIN_ID}.cred"
+CRED_PASS="$(cat /etc/machine-id)-${BRAIN_ID}"
 
-# ── Credential helper ─────────────────────────────────────────────────────────
-# Credentials are stored in the kernel keyring by the Slime account daemon.
-# For now (v0.1): prompt once, store encrypted in /etc/slimeos/.rdp-cred
-CRED_FILE="$CONFIG_DIR/.rdp-cred"
 if [[ ! -f "$CRED_FILE" ]]; then
-    log "No stored credential — prompting (weston-terminal)"
-    exec weston-terminal --shell="
-        echo 'Slime OS — First-time Setup';
-        echo 'Enter your Slime account password:';
-        read -rs SLIME_PASS;
-        echo \"\$SLIME_PASS\" | openssl enc -aes-256-cbc -pbkdf2 -pass pass:\$(cat /etc/machine-id) > $CRED_FILE;
-        chmod 600 $CRED_FILE;
-        echo 'Password saved. Rebooting...';
-        sleep 2;
-        sudo reboot"
+    log "No stored credential for $BRAIN_NAME — prompting"
+    RDP_PASS_INPUT=$(whiptail --title "$BRAIN_NAME" \
+        --passwordbox "Password for $SLIME_USERNAME@$BRAIN_NAME" 10 60 3>&1 1>&2 2>&3) || exec "$INSTALL_DIR/brain-select.sh"
+    echo "$RDP_PASS_INPUT" | openssl enc -aes-256-cbc -pbkdf2 -pass pass:"$CRED_PASS" > "$CRED_FILE"
+    chmod 600 "$CRED_FILE"
 fi
 
-RDP_PASS=$(openssl enc -d -aes-256-cbc -pbkdf2 \
-    -pass pass:"$(cat /etc/machine-id)" < "$CRED_FILE" 2>/dev/null || true)
-
+RDP_PASS=$(openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$CRED_PASS" < "$CRED_FILE" 2>/dev/null || true)
 if [[ -z "$RDP_PASS" ]]; then
     log "ERROR: Failed to decrypt stored credential. Re-prompting."
     rm -f "$CRED_FILE"
-    exec "$0"
+    exec "$0" "$BRAIN_ID"
 fi
 
 # ── Resolution ────────────────────────────────────────────────────────────────
@@ -75,7 +88,7 @@ fi
 RECONNECT_DELAY="${RECONNECT_DELAY:-5}"
 
 while true; do
-    log "Connecting to ${VM_HOST}:${VM_PORT} as ${SLIME_USERNAME}"
+    log "Connecting to ${BRAIN_NAME} (${VM_HOST}:${VM_PORT}) as ${SLIME_USERNAME}"
 
     # Security flags (zero-trust stack):
     #   /sec:nla      — Network Level Authentication required
@@ -101,18 +114,23 @@ while true; do
     log "FreeRDP exited with code $EXIT_CODE"
 
     # Exit codes:
-    #   0   = clean disconnect (user logged out)
+    #   0   = clean disconnect (user logged out) → back to Brain picker
     #   1   = connection refused / network error → reconnect
-    #   2   = authentication failure → clear cred and re-prompt
+    #   2   = authentication failure → clear cred, re-prompt
     if [[ $EXIT_CODE -eq 2 ]]; then
         log "Authentication failed — clearing stored credential"
         rm -f "$CRED_FILE"
-        exec "$0"
+        exec "$0" "$BRAIN_ID"
+    fi
+
+    if [[ $EXIT_CODE -eq 0 ]]; then
+        log "Clean disconnect — returning to Brain picker"
+        exec "$INSTALL_DIR/brain-select.sh"
     fi
 
     if [[ "${RECONNECT_DELAY}" -eq 0 ]]; then
-        log "Reconnect disabled — exiting"
-        break
+        log "Reconnect disabled — returning to Brain picker"
+        exec "$INSTALL_DIR/brain-select.sh"
     fi
 
     log "Reconnecting in ${RECONNECT_DELAY}s..."

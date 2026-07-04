@@ -26,9 +26,20 @@ Slime OS is a two-component system:
 ### Boot sequence
 1. GRUB boots Debian (read-only rootfs, OverlayFS).
 2. `systemd` runs `slimeos-session.target`.
-3. `cage` (Wayland compositor) starts in kiosk mode.
-4. `slimeos-connect.sh` reads `/etc/slimeos/config` and launches FreeRDP.
-5. FreeRDP opens a WireGuard-tunneled RDP session to the assigned cloud VM.
+3. `cage` (Wayland compositor) starts in kiosk mode with `brain-select.sh` as its client.
+4. `brain-select.sh` shows the **Connect screen** — a whiptail picker over the saved
+   entries in `/etc/slimeos/brains.json` (add / select / remove a Brain by IP or
+   hostname). This is the open source connect path; no Slime account required.
+5. On selection, it hands off to `connect.sh <brain-id>`, which prompts for
+   credentials on first use (saved per-Brain, encrypted) and launches FreeRDP.
+6. FreeRDP opens a WireGuard-tunneled RDP session to the chosen Brain. A clean
+   logout returns to the Connect screen so the user can switch Brains.
+
+> **Planned:** a second tab on the Connect screen, **"Sign in with Slime ID"**,
+> for the managed-service path — one Slime ID authenticating against multiple
+> Brains via a Slime account API (auth, brain listing, WireGuard peer
+> auto-provisioning). Not yet built. The
+> open source Connect (manual IP) path ships first.
 
 ### Key files
 | File | Purpose |
@@ -37,7 +48,8 @@ Slime OS is a two-component system:
 | `membrane/installer/install.sh` | Post-install setup script |
 | `membrane/installer/extract-windows-license.ps1` | Windows key extractor — run on Windows before install, saves to USB |
 | `membrane/session/slimeos-session.sh` | cage session startup |
-| `membrane/freerdp/connect.sh` | FreeRDP connection with security flags |
+| `membrane/session/brain-select.sh` | Connect screen — saved-Brain picker (add/select/remove) |
+| `membrane/freerdp/connect.sh` | FreeRDP connection for a chosen Brain, with security flags |
 
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.

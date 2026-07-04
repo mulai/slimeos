@@ -68,11 +68,13 @@ docker exec slimeos-wireguard /config/provision-peer.sh my-device
 # On the Membrane device:
 sudo cp wg0.conf /etc/wireguard/wg0.conf
 sudo systemctl enable --now wg-quick@wg0
-
-# Edit the Slime OS config:
-sudo nano /etc/slimeos/config   # set VM_HOST and SLIME_USERNAME
 sudo systemctl restart slimeos-session
 ```
+
+On boot, the Membrane shows a **Connect screen** — pick "+ Add new Brain", enter
+its IP/hostname (the WireGuard address you just configured, e.g. `10.10.0.1`),
+and it's saved for future boots. You can save multiple Brains and switch
+between them from the same screen.
 
 ---
 
@@ -122,7 +124,7 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 | Device | Profile | Status |
 |---|---|---|
 | Gigabyte H97-Gaming 3 / i7-4790 / 16 GB (Win 10) | 001 | ✅ Reference device |
-| Generic x86\_64 | 000 | ✅ Fallback — any uncatalogued machine |
+| Generic (any arch) | 000 | ✅ Fallback — any uncatalogued machine |
 | Huawei Mate 30 Pro (Android) | — | 🔄 Phase 2 |
 
 **Minimum local specs:** x86_64, 512 MB RAM, 4 GB disk, network connection.

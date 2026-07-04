@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Profile 000 — Generic x86_64 fallback
+# Profile 000 — Generic fallback (any architecture)
 # Applied when no specific device match is found.
 # Conservative settings that work on the widest range of hardware.
 
 log() { echo "[slimeos/hw-profile:generic] $*"; }
 
-log "Applying generic x86_64 profile..."
+log "Applying generic profile..."
 
 # ── Kernel parameters ─────────────────────────────────────────────────────────
 SLIMEOS_KERNEL_EXTRA="quiet"

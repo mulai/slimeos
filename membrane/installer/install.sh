@@ -46,6 +46,14 @@ echo -e "${RESET}"
 log "Updating package lists..."
 apt-get update -qq
 
+# CPU microcode packages are amd64-only (no equivalent on arm64, e.g. VMs on
+# Apple Silicon) — apt-get install is all-or-nothing, so pulling them in on an
+# unsupported arch would abort the whole install.
+MICROCODE_PKGS=""
+if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
+    MICROCODE_PKGS="intel-microcode amd64-microcode"
+fi
+
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -53,10 +61,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     systemd-resolved \
     wireguard wireguard-tools \
     freerdp2-x11 \
-    cage weston wayland-utils \
+    cage weston wayland-utils whiptail \
     policykit-1 dbus dbus-user-session \
     network-manager \
-    intel-microcode amd64-microcode \
+    ${MICROCODE_PKGS} \
     ethtool \
     qrencode \
     jq \
@@ -75,7 +83,8 @@ log "Installing Slime OS system files..."
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles"
 
 # Download hardware detection and profiles
-for f in detect.sh 000-generic-x86_64.sh 001-gigabyte-h97.sh; do
+# NOTE: add new profile files here as they're validated (see membrane/hardware-profiles/)
+for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh; do
     curl -fsSL "$REPO_BASE/membrane/hardware-profiles/$f" \
          -o "$INSTALL_DIR/hardware-profiles/$f"
     chmod +x "$INSTALL_DIR/hardware-profiles/$f"
@@ -84,9 +93,11 @@ done
 # Download session and FreeRDP scripts
 curl -fsSL "$REPO_BASE/membrane/session/slimeos-session.sh" \
      -o "$INSTALL_DIR/slimeos-session.sh"
+curl -fsSL "$REPO_BASE/membrane/session/brain-select.sh" \
+     -o "$INSTALL_DIR/brain-select.sh"
 curl -fsSL "$REPO_BASE/membrane/freerdp/connect.sh" \
      -o "$INSTALL_DIR/connect.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/connect.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/brain-select.sh" "$INSTALL_DIR/connect.sh"
 ok "Slime OS files installed to $INSTALL_DIR"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
@@ -99,15 +110,9 @@ if [[ ! -f "$CONFIG_DIR/config" ]]; then
     log "Writing default config..."
     cat > "$CONFIG_DIR/config" <<'CONF'
 # Slime OS Membrane Configuration
-# Edit this file to point to your Slime Brain server.
-# After editing, restart: sudo systemctl restart slimeos-session
-
-# Cloud VM host (IP or hostname behind WireGuard)
-VM_HOST="10.10.0.1"
-VM_PORT="3389"
-
-# Your Slime account username
-SLIME_USERNAME=""
+# Session-wide display/network preferences. Brains themselves (host, port,
+# username) are managed from the on-screen Connect screen, saved to
+# /etc/slimeos/brains.json — no need to edit this file for that.
 
 # RDP display resolution (leave blank for fullscreen/auto)
 RDP_WIDTH=""
@@ -122,6 +127,13 @@ CONF
     chmod 600 "$CONFIG_DIR/config"
     ok "Default config written to $CONFIG_DIR/config"
 fi
+
+if [[ ! -f "$CONFIG_DIR/brains.json" ]]; then
+    echo '[]' > "$CONFIG_DIR/brains.json"
+    chmod 600 "$CONFIG_DIR/brains.json"
+fi
+mkdir -p "$CONFIG_DIR/brains"
+chmod 700 "$CONFIG_DIR/brains"
 
 # ── 6. Systemd service: slimeos-session ───────────────────────────────────────
 log "Installing systemd service..."
@@ -212,10 +224,10 @@ echo ""
 echo -e "${BOLD}${GREEN}  Slime OS Membrane installed successfully!${RESET}"
 echo ""
 echo -e "  ${CYAN}Next steps:${RESET}"
-echo "  1. Edit $CONFIG_DIR/config — set VM_HOST and SLIME_USERNAME"
-echo "  2. Install WireGuard config:  sudo cp client.conf /etc/wireguard/wg0.conf"
-echo "  3. Enable VPN:                sudo systemctl enable --now wg-quick@wg0"
-echo "  4. Reboot:                    sudo reboot"
+echo "  1. Install WireGuard config:  sudo cp client.conf /etc/wireguard/wg0.conf"
+echo "  2. Enable VPN:                sudo systemctl enable --now wg-quick@wg0"
+echo "  3. Reboot:                    sudo reboot"
+echo "  4. On the Connect screen, add your Brain's IP address"
 echo ""
 echo -e "  ${YELLOW}Recovery PIN: ${RECOVERY_PIN}${RESET}  (keep this safe — needed for tty1 login)"
 echo ""

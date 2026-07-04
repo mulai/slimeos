@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Slime OS — cage Wayland session entrypoint
 # Launched by slimeos-session.service as the 'slime' user on tty1.
-# Starts cage (kiosk Wayland compositor) with connect.sh as the sole application.
+# Starts cage (kiosk Wayland compositor) with brain-select.sh as the sole application.
 
 set -euo pipefail
 
@@ -45,7 +45,8 @@ fi
 # cage: minimal Wayland compositor designed for kiosk use
 #   -d = allow drop to shell on exit (disabled in production — remove for security)
 #   -s = allow switching VTs
-# The connect.sh script is the only application cage manages.
+# brain-select.sh is the only application cage manages. It shows the Brain
+# picker (Connect screen) and hands off to connect.sh once a Brain is chosen.
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: $SLIMEOS_COMPOSITOR_RENDERER)"
 
-exec cage --renderer "$SLIMEOS_COMPOSITOR_RENDERER" -- "$INSTALL_DIR/connect.sh"
+exec cage --renderer "$SLIMEOS_COMPOSITOR_RENDERER" -- "$INSTALL_DIR/brain-select.sh"
