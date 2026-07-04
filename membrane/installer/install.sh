@@ -78,6 +78,13 @@ if ! id "$SESSION_USER" &>/dev/null; then
     ok "User '$SESSION_USER' created"
 fi
 
+# slimeos-session.sh runs as $SESSION_USER (unprivileged) and logs to a file
+# for on-device troubleshooting without journalctl -- /var/log itself isn't
+# writable by a non-root user, so it needs its own owned subdirectory.
+mkdir -p /var/log/slimeos
+chown "$SESSION_USER:$SESSION_USER" /var/log/slimeos
+chmod 750 /var/log/slimeos
+
 # ── 3. Install Slime OS files ─────────────────────────────────────────────────
 log "Installing Slime OS system files..."
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles"

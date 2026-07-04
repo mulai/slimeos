@@ -7,7 +7,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
-LOG_FILE="/var/log/slimeos-session.log"
+LOG_FILE="/var/log/slimeos/session.log"
 
 exec >> "$LOG_FILE" 2>&1
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Session starting"
