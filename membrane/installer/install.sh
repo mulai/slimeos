@@ -187,13 +187,43 @@ done
 ok "Unused services disabled"
 
 # ── 9. Firewall ───────────────────────────────────────────────────────────────
-log "Configuring firewall (ufw)..."
+# Deferred to first real boot via systemd, not run here directly: when
+# install.sh executes from preseed/late_command, it runs inside `in-target`
+# (chroot) under the still-live installer kernel, not the freshly installed
+# target kernel -- iptables can't determine kernel/netfilter module support
+# in that environment ("Couldn't determine iptables version"), and ufw
+# dies under set -e before any of the steps below it ever run. Enabling a
+# oneshot unit here is safe (pure unit-file symlinking); actually running
+# ufw waits until the real kernel is up.
+log "Configuring firewall (ufw) for first boot..."
+cat > "$CONFIG_DIR/firewall-setup.sh" <<'FWSCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 # Allow WireGuard outbound (UDP to Brain server — added when WG config is loaded)
 ufw --force enable
-ok "Firewall configured"
+FWSCRIPT
+chmod +x "$CONFIG_DIR/firewall-setup.sh"
+
+cat > "$SYSTEMD_DIR/slimeos-firewall.service" <<SERVICE
+[Unit]
+Description=Slime OS — Firewall setup (ufw)
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=${CONFIG_DIR}/firewall-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-firewall.service
+ok "Firewall service installed (applies on first real boot)"
 
 # ── 10. AppArmor ──────────────────────────────────────────────────────────────
 log "Enabling AppArmor..."
