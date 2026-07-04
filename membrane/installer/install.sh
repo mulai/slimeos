@@ -242,7 +242,11 @@ systemctl enable slimeos-session.service
 ok "slimeos-session.service enabled"
 
 # ── 13. Recovery PIN ─────────────────────────────────────────────────────────
-RECOVERY_PIN=$(tr -dc '0-9' < /dev/urandom | head -c 8)
+# set +o pipefail locally: `tr` reads /dev/urandom indefinitely, so `head -c 8`
+# exiting after 8 bytes sends it SIGPIPE (exit 141) -- harmless here, but
+# `set -o pipefail` (on globally) would otherwise fail this whole assignment
+# under set -e.
+RECOVERY_PIN=$(set +o pipefail; tr -dc '0-9' < /dev/urandom | head -c 8)
 echo "${SESSION_USER}:${RECOVERY_PIN}" | chpasswd
 mkdir -p "$CONFIG_DIR"
 echo "$RECOVERY_PIN" > "$CONFIG_DIR/recovery-pin"
