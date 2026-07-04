@@ -124,6 +124,7 @@ services:
     volumes:
       - wireguard_config:/config
       - /lib/modules:/lib/modules:ro
+      - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
     ports:
       - "${WG_PORT:-51820}:51820/udp"
     sysctls:

@@ -25,7 +25,14 @@ SERVER_CONF="$WG_DIR/wg0.conf"
 [[ -f "$SERVER_CONF" ]] || die "Server config not found at $SERVER_CONF. Is WireGuard running?"
 
 SERVER_PUBKEY=$(grep "^PrivateKey" "$SERVER_CONF" | awk '{print $3}' | wg pubkey)
-SERVER_ENDPOINT=$(grep "^# SERVERURL" "$SERVER_CONF" | awk '{print $3}'):$(grep "^ListenPort" "$SERVER_CONF" | awk '{print $3}')
+
+# SERVERURL/SERVERPORT are the same env vars docker-compose.yml passes into
+# this container (WG_SERVER_URL/WG_PORT) — the linuxserver/wireguard image
+# uses them internally but never writes them back into wg_confs/wg0.conf, so
+# grepping the server config for them (the old approach) always returned
+# empty and silently produced an unusable "Endpoint = :51820".
+[[ -n "${SERVERURL:-}" ]] || die "SERVERURL env var not set — is this running inside the slimeos-wireguard container?"
+SERVER_ENDPOINT="${SERVERURL}:${SERVERPORT:-51820}"
 DNS=$(grep "^DNS" "$SERVER_CONF" | awk '{print $3}' || echo "1.1.1.1")
 
 # Determine next available IP in 10.10.0.0/24
