@@ -54,6 +54,10 @@ if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
     MICROCODE_PKGS="intel-microcode amd64-microcode"
 fi
 
+# xwayland: cage unconditionally tries to start an XWayland server on launch
+# (this build has Xwayland support compiled in) and aborts the whole session
+# if /usr/bin/Xwayland is missing -- --no-install-recommends below means it
+# won't get pulled in as cage's own recommended dependency otherwise.
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -61,7 +65,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     systemd-resolved \
     wireguard wireguard-tools \
     freerdp2-x11 \
-    cage weston wayland-utils whiptail \
+    cage weston wayland-utils whiptail xwayland \
     policykit-1 dbus dbus-user-session \
     network-manager \
     ${MICROCODE_PKGS} \
