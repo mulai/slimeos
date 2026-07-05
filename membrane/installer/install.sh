@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Slime OS — Membrane Installer
-# Runs after a minimal Debian bookworm base install.
+# Runs after a minimal Debian trixie base install.
 # Sets up cage (Wayland kiosk), FreeRDP, WireGuard client, and systemd services.
 #
 # Usage:
@@ -64,7 +64,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     sudo ufw apparmor apparmor-utils \
     systemd-resolved \
     wireguard wireguard-tools \
-    freerdp2-x11 \
+    freerdp3-x11 \
     cage weston wayland-utils whiptail xwayland \
     policykit-1 dbus dbus-user-session \
     network-manager \

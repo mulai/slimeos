@@ -100,7 +100,7 @@ Internet
 ## FreeRDP Security Configuration
 
 ```bash
-xfreerdp \
+xfreerdp3 \
   /v:${VM_HOST}:3389 \
   /u:${USERNAME} \
   /p:${PASSWORD} \

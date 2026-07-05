@@ -95,7 +95,7 @@ while true; do
     #   /tls-seclevel:2 — TLS 1.2 minimum (TLS 1.3 preferred by xRDP)
     #   /cert:tofu    — Trust on first use, then pin
     set +e
-    xfreerdp \
+    xfreerdp3 \
         /v:"${VM_HOST}:${VM_PORT}" \
         /u:"${SLIME_USERNAME}" \
         /p:"${RDP_PASS}" \

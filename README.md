@@ -37,12 +37,12 @@ slimeos/
 ### 1. Install Slime OS on a legacy PC
 
 ```bash
-# Flash Debian 12 netinstall to USB, boot it, then at the GRUB prompt:
+# Flash Debian 13 netinstall to USB, boot it, then at the GRUB prompt:
 # Advanced options → Automated install
 # Add to boot parameters:
 #   auto=true url=https://raw.githubusercontent.com/mulai/slimeos/main/membrane/preseed/slimeos.preseed.cfg
 
-# Or, on an existing minimal Debian 12 install:
+# Or, on an existing minimal Debian 13 install:
 curl -fsSL https://raw.githubusercontent.com/mulai/slimeos/main/membrane/installer/install.sh | sudo bash
 ```
 
