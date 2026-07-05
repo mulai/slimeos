@@ -22,9 +22,13 @@ LOG_FILE="/var/log/slimeos/session.log"
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [brain-select] $*" >> "$LOG_FILE"; }
 
 # ── Become the Wayland client ────────────────────────────────────────────────
+# This weston-terminal build has no --command flag (usage: --fullscreen/-f
+# --maximized/-m --font --font-size --shell=NAME) -- --shell runs a given
+# program as the terminal's child directly, so re-exec straight into this
+# script via that instead of a shell -c string.
 if [[ "${SLIMEOS_UI:-0}" != "1" ]]; then
-    exec weston-terminal --fullscreen \
-        --command="SLIMEOS_UI=1 exec $INSTALL_DIR/brain-select.sh"
+    export SLIMEOS_UI=1
+    exec weston-terminal --fullscreen --shell="$INSTALL_DIR/brain-select.sh"
 fi
 
 mkdir -p "$CRED_DIR"
