@@ -60,8 +60,9 @@ fi
 SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc444 /bpp:32 /rfx /codec-cache"
 
 # ── Compositor renderer ───────────────────────────────────────────────────────
-# cage uses wlroots; Intel GPU with i915 can use GL renderer
-SLIMEOS_COMPOSITOR_RENDERER="gl"
+# cage uses wlroots; valid WLR_RENDERER values are gles2/pixman/vulkan -- "gl"
+# is not one of them. Intel GPU with i915 supports gles2.
+SLIMEOS_COMPOSITOR_RENDERER="gles2"
 
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"

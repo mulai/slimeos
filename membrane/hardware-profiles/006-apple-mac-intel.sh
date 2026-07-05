@@ -41,7 +41,8 @@ cat > /etc/modprobe.d/slimeos-i915-mac.conf <<'EOF'
 options i915 enable_fbc=1 enable_psr=0 fastboot=1
 EOF
 
-SLIMEOS_COMPOSITOR_RENDERER="gl"
+# Valid WLR_RENDERER values are gles2/pixman/vulkan -- "gl" is not one of them.
+SLIMEOS_COMPOSITOR_RENDERER="gles2"
 SLIMEOS_KERNEL_EXTRA="quiet"
 
 # ── Discrete GPU handling ─────────────────────────────────────────────────────

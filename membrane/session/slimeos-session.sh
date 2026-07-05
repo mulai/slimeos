@@ -15,7 +15,7 @@ echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Session starting"
 
 # ── Load hardware profile flags ───────────────────────────────────────────────
 HW_FLAGS="$CONFIG_DIR/hw-freerdp-flags"
-SLIMEOS_COMPOSITOR_RENDERER="pixman"   # safe default
+SLIMEOS_COMPOSITOR_RENDERER=""   # empty = let wlroots auto-detect
 if [[ -f "$HW_FLAGS" ]]; then
     # shellcheck source=/dev/null
     source "$HW_FLAGS"
@@ -51,10 +51,14 @@ fi
 #   -s = allow switching VTs
 # brain-select.sh is the only application cage manages. It shows the Brain
 # picker (Connect screen) and hands off to connect.sh once a Brain is chosen.
-echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: $SLIMEOS_COMPOSITOR_RENDERER)"
+echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: ${SLIMEOS_COMPOSITOR_RENDERER:-auto})"
 
 # cage 0.1.4 (Debian 12) has no --renderer flag at all ("invalid option -- '-'")
 # -- renderer backend selection for wlroots compositors is done via the
-# WLR_RENDERER env var, not a cage CLI option.
-export WLR_RENDERER="$SLIMEOS_COMPOSITOR_RENDERER"
+# WLR_RENDERER env var, not a cage CLI option. Only export it when a hardware
+# profile explicitly requests one; leaving it unset lets wlroots auto-detect
+# (its own default behavior), which is what "empty" is supposed to mean here.
+if [[ -n "$SLIMEOS_COMPOSITOR_RENDERER" ]]; then
+    export WLR_RENDERER="$SLIMEOS_COMPOSITOR_RENDERER"
+fi
 exec cage -- "$INSTALL_DIR/brain-select.sh"
