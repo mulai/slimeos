@@ -66,7 +66,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     wireguard wireguard-tools \
     freerdp3-x11 \
     cage weston wayland-utils whiptail xwayland \
-    policykit-1 dbus dbus-user-session \
+    polkitd pkexec dbus dbus-user-session \
     network-manager \
     ${MICROCODE_PKGS} \
     ethtool \
