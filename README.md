@@ -136,10 +136,10 @@ Adding support for a new device = one new file in `membrane/hardware-profiles/`.
 ## Security Architecture (Zero-Trust Stack)
 
 ```
-Local Device  ──(FreeRDP · NLA · TLS 1.3)──▶  WireGuard VPN  ──▶  Authelia MFA  ──▶  Cloud VM (xRDP)
+Local Device  ──(FreeRDP · TLS 1.2/1.3)──▶  WireGuard VPN  ──▶  Authelia MFA  ──▶  Cloud VM (xRDP)
 ```
 
-1. **Layer 1** — NLA + TLS 1.3 inside FreeRDP. Blocks DDoS and intercept vectors.
+1. **Layer 1** — TLS 1.2/1.3 inside FreeRDP (xRDP's TLS security layer; xRDP does not support NLA). Blocks intercept vectors.
 2. **Layer 2** — WireGuard VPN wraps the entire RDP stream. Cloud ports invisible from the public internet.
 3. **Layer 3** — Authelia reverse-proxy identity gateway with TOTP MFA. Lost or stolen hardware? Revoke access instantly — no one can reconnect without the second factor.
 

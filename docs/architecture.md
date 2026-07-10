@@ -11,7 +11,7 @@ Slime OS is a two-component system:
 │  RAM: ~512 MB    Disk: ~4 GB    CPU: any x86_64             │
 └──────────────────────────┬──────────────────────────────────┘
                            │  WireGuard VPN tunnel
-                           │  FreeRDP stream (TLS 1.3 + NLA)
+                           │  FreeRDP stream (TLS 1.2/1.3)
 ┌──────────────────────────▼──────────────────────────────────┐
 │                      THE BRAIN (Cloud)                       │
 │  Authelia MFA → xRDP/Windows VM  or  xRDP/Linux VM          │
@@ -104,8 +104,8 @@ xfreerdp3 \
   /v:${VM_HOST}:3389 \
   /u:${USERNAME} \
   /p:${PASSWORD} \
-  /sec:nla \          # Network Level Authentication
-  /tls-seclevel:2 \   # TLS 1.2 minimum, TLS 1.3 preferred
+  /sec:tls \          # TLS security layer (xRDP has no NLA/CredSSP support;
+                      # TLS version floor is enforced server-side by xrdp.ini)
   /cert:tofu \        # Trust on first use, pin thereafter
   /network:lan \      # Bandwidth optimization
   /gfx \             # GFX pipeline for efficient streaming

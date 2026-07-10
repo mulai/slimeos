@@ -98,18 +98,21 @@ while true; do
     log "Connecting to ${BRAIN_NAME} (${VM_HOST}:${VM_PORT}) as ${SLIME_USERNAME}"
 
     # Security flags (zero-trust stack):
-    #   /sec:nla      — Network Level Authentication required
-    #   /tls:seclevel:2 — TLS 1.2 minimum (TLS 1.3 preferred by xRDP);
-    #                   FreeRDP 3 syntax — the FreeRDP 2 spelling
-    #                   /tls-seclevel is rejected as "Unexpected keyword"
+    #   /sec:tls      — TLS security layer; matches the Brain's xrdp
+    #                   (security_layer=tls, TLS 1.2/1.3 only). NOT nla:
+    #                   xrdp has no CredSSP/NLA server support, so /sec:nla
+    #                   always dies with "Protocol Security Negotiation
+    #                   Failure". Transport is WireGuard + TLS regardless.
     #   /cert:tofu    — Trust on first use, then pin
+    # No /tls:seclevel: FreeRDP 3.15's /tls sub-option parser rejects even
+    # its own documented values (non-fatal ERROR, option ignored) — the
+    # server side enforces the TLS version floor instead.
     set +e
     xfreerdp3 \
         /v:"${VM_HOST}:${VM_PORT}" \
         /u:"${SLIME_USERNAME}" \
         /p:"${RDP_PASS}" \
-        /sec:nla \
-        /tls:seclevel:2 \
+        /sec:tls \
         /cert:tofu \
         /network:"${RDP_NETWORK:-lan}" \
         ${RES_FLAGS} \
