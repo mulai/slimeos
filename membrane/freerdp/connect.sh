@@ -93,9 +93,18 @@ fi
 
 # ── Connection loop ───────────────────────────────────────────────────────────
 RECONNECT_DELAY="${RECONNECT_DELAY:-5}"
+# A session that survived at least this long before dying is treated as a
+# network drop (auto-reconnect); anything shorter is a connect/auth failure
+# and gets an error dialog instead. Blind retries on fast failures are
+# dangerous: 10 failed NLA logons lock a Windows account for 10 minutes
+# (default policy), so a 5s retry loop with a bad saved password locks the
+# user out of their own Brain within a minute.
+MIN_SESSION_SECONDS=60
 
 while true; do
     log "Connecting to ${BRAIN_NAME} (${VM_HOST}:${VM_PORT}) as ${SLIME_USERNAME}"
+    LOG_OFFSET=$(wc -c < "$LOG_FILE")
+    SECONDS=0
 
     # Security flags (zero-trust stack):
     #   /sec:rdp:off  — disable only legacy plain-RDP security and let the
@@ -123,29 +132,33 @@ while true; do
         ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
     set -e
+    RUNTIME=$SECONDS
 
-    log "FreeRDP exited with code $EXIT_CODE"
-
-    # Exit codes:
-    #   0   = clean disconnect (user logged out) → back to Brain picker
-    #   1   = connection refused / network error → reconnect
-    #   2   = authentication failure → clear cred, re-prompt
-    if [[ $EXIT_CODE -eq 2 ]]; then
-        log "Authentication failed — clearing stored credential"
-        rm -f "$CRED_FILE"
-        exec "$0" "$BRAIN_ID"
-    fi
+    log "FreeRDP exited with code $EXIT_CODE after ${RUNTIME}s"
 
     if [[ $EXIT_CODE -eq 0 ]]; then
         log "Clean disconnect — returning to Brain picker"
         exec "$INSTALL_DIR/brain-select.sh"
     fi
 
-    if [[ "${RECONNECT_DELAY}" -eq 0 ]]; then
-        log "Reconnect disabled — returning to Brain picker"
-        exec "$INSTALL_DIR/brain-select.sh"
+    if (( RUNTIME >= MIN_SESSION_SECONDS )) && [[ "${RECONNECT_DELAY}" -ne 0 ]]; then
+        log "Session dropped — reconnecting in ${RECONNECT_DELAY}s..."
+        sleep "${RECONNECT_DELAY}"
+        continue
     fi
 
-    log "Reconnecting in ${RECONNECT_DELAY}s..."
-    sleep "${RECONNECT_DELAY}"
+    # Fast failure: show the user what happened and let them decide.
+    # Only grep the log this attempt appended, not older attempts' errors.
+    ERR_HINT=$(tail -c +$((LOG_OFFSET + 1)) "$LOG_FILE" | grep -o 'ERRCONNECT_[A-Z_]*' | tail -1 || true)
+    choice=$(whiptail --title "$BRAIN_NAME" --menu \
+        "Connection failed (${ERR_HINT:-exit code $EXIT_CODE})" 14 70 3 \
+        "retry"    "Try again" \
+        "password" "Re-enter password" \
+        "back"     "Back to Brain list" 3>&1 1>&2 2>&3) \
+        || exec "$INSTALL_DIR/brain-select.sh"
+    case "$choice" in
+        retry)    continue ;;
+        password) rm -f "$CRED_FILE"; exec "$0" "$BRAIN_ID" ;;
+        *)        exec "$INSTALL_DIR/brain-select.sh" ;;
+    esac
 done
