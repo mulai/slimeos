@@ -99,7 +99,9 @@ while true; do
 
     # Security flags (zero-trust stack):
     #   /sec:nla      — Network Level Authentication required
-    #   /tls-seclevel:2 — TLS 1.2 minimum (TLS 1.3 preferred by xRDP)
+    #   /tls:seclevel:2 — TLS 1.2 minimum (TLS 1.3 preferred by xRDP);
+    #                   FreeRDP 3 syntax — the FreeRDP 2 spelling
+    #                   /tls-seclevel is rejected as "Unexpected keyword"
     #   /cert:tofu    — Trust on first use, then pin
     set +e
     xfreerdp3 \
@@ -107,7 +109,7 @@ while true; do
         /u:"${SLIME_USERNAME}" \
         /p:"${RDP_PASS}" \
         /sec:nla \
-        /tls-seclevel:2 \
+        /tls:seclevel:2 \
         /cert:tofu \
         /network:"${RDP_NETWORK:-lan}" \
         ${RES_FLAGS} \

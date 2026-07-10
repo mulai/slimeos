@@ -57,7 +57,9 @@ fi
 
 # ── FreeRDP performance flags ─────────────────────────────────────────────────
 # H97 / Haswell has Intel Quick Sync (h264/h265 decode) — enable GFX pipeline
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc444 /bpp:32 /rfx /codec-cache"
+# /cache:codec:rfx is the FreeRDP 3 spelling — FreeRDP 2's /codec-cache was
+# removed and gets the whole command line rejected (exit 23, usage dump).
+SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc444 /bpp:32 /rfx /cache:codec:rfx"
 
 # ── Compositor renderer ───────────────────────────────────────────────────────
 # cage uses wlroots; valid WLR_RENDERER values are gles2/pixman/vulkan -- "gl"
