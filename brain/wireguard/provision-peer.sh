@@ -91,6 +91,13 @@ EOF
 wg addconf wg0 <(wg-quick strip wg0 | grep -A4 "# Peer: ${PEER_NAME}" || true) 2>/dev/null || \
     wg syncconf wg0 <(wg-quick strip wg0) 2>/dev/null || true
 
+# wg addconf registers the peer in the kernel but does NOT install a route to
+# its IP -- wg-quick only creates per-peer routes for peers present when the
+# interface comes up. Without this, the tunnel handshakes fine but all return
+# traffic to the new client exits via the container's default route and
+# vanishes: rx grows, tx stays flat, and every ping/RDP attempt times out.
+ip route add "${CLIENT_IP}" dev wg0 2>/dev/null || true
+
 echo ""
 echo "  ✓ Peer '${PEER_NAME}' provisioned"
 echo "  ✓ Client IP: ${CLIENT_IP}"
