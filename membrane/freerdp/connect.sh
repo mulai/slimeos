@@ -16,8 +16,11 @@ BRAINS_FILE="$CONFIG_DIR/brains.json"
 CRED_DIR="$CONFIG_DIR/brains"
 LOG_FILE="/var/log/slimeos/connect.log"
 
-exec >> "$LOG_FILE" 2>&1
-log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [connect] $*"; }
+# No global 'exec >> log' here: whiptail draws its dialogs on this script's
+# stdout/stderr, so redirecting them paints the UI into the log file and
+# leaves the user staring at a frozen screen with an invisible prompt.
+# log() appends explicitly; only xfreerdp's own output is sent to the log.
+log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [connect] $*" >> "$LOG_FILE"; }
 
 BRAIN_ID="${1:?Usage: connect.sh <brain-id>}"
 mkdir -p "$CRED_DIR"
@@ -41,8 +44,12 @@ if [[ -z "$SLIME_USERNAME" ]]; then
     [[ -n "$SLIME_USERNAME" ]] || exec "$INSTALL_DIR/brain-select.sh"
 
     tmp=$(mktemp)
+    # Write through the existing file, don't mv over it: replacing a file via
+    # rename() needs write permission on /etc/slimeos itself, which is (and
+    # should stay) root-owned -- we only own brains.json inside it.
     jq --arg id "$BRAIN_ID" --arg u "$SLIME_USERNAME" \
-        'map(if .id == $id then .username = $u else . end)' "$BRAINS_FILE" > "$tmp" && mv "$tmp" "$BRAINS_FILE"
+        'map(if .id == $id then .username = $u else . end)' "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
+    rm -f "$tmp"
 fi
 
 # Load hardware-specific FreeRDP flags
@@ -107,7 +114,7 @@ while true; do
         /dynamic-resolution \
         /audio-mode:2 \
         /log-level:WARN \
-        ${SLIMEOS_FREERDP_EXTRA_FLAGS}
+        ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
     set -e
 
