@@ -98,11 +98,12 @@ while true; do
     log "Connecting to ${BRAIN_NAME} (${VM_HOST}:${VM_PORT}) as ${SLIME_USERNAME}"
 
     # Security flags (zero-trust stack):
-    #   /sec:tls      — TLS security layer; matches the Brain's xrdp
-    #                   (security_layer=tls, TLS 1.2/1.3 only). NOT nla:
-    #                   xrdp has no CredSSP/NLA server support, so /sec:nla
-    #                   always dies with "Protocol Security Negotiation
-    #                   Failure". Transport is WireGuard + TLS regardless.
+    #   /sec:rdp:off  — disable only legacy plain-RDP security and let the
+    #                   rest negotiate: Windows Brains require NLA, xrdp
+    #                   Brains only offer TLS (no CredSSP/NLA support at
+    #                   all), so forcing either one breaks the other with
+    #                   "Protocol Security Negotiation Failure". Transport
+    #                   is WireGuard + TLS-or-better regardless.
     #   /cert:tofu    — Trust on first use, then pin
     # No /tls:seclevel: FreeRDP 3.15's /tls sub-option parser rejects even
     # its own documented values (non-fatal ERROR, option ignored) — the
@@ -112,7 +113,7 @@ while true; do
         /v:"${VM_HOST}:${VM_PORT}" \
         /u:"${SLIME_USERNAME}" \
         /p:"${RDP_PASS}" \
-        /sec:tls \
+        /sec:rdp:off \
         /cert:tofu \
         /network:"${RDP_NETWORK:-lan}" \
         ${RES_FLAGS} \

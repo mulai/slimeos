@@ -104,8 +104,9 @@ xfreerdp3 \
   /v:${VM_HOST}:3389 \
   /u:${USERNAME} \
   /p:${PASSWORD} \
-  /sec:tls \          # TLS security layer (xRDP has no NLA/CredSSP support;
-                      # TLS version floor is enforced server-side by xrdp.ini)
+  /sec:rdp:off \      # negotiate NLA (Windows) or TLS (xRDP), never legacy
+                      # RDP security. xRDP has no NLA/CredSSP support, Windows
+                      # requires NLA — forcing either breaks the other.
   /cert:tofu \        # Trust on first use, pin thereafter
   /network:lan \      # Bandwidth optimization
   /gfx \             # GFX pipeline for efficient streaming
