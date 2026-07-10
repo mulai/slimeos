@@ -135,9 +135,13 @@ RDP_NETWORK="lan"
 # Auto-reconnect on disconnect (seconds, 0 = disabled)
 RECONNECT_DELAY="5"
 CONF
-    chmod 600 "$CONFIG_DIR/config"
     ok "Default config written to $CONFIG_DIR/config"
 fi
+# connect.sh sources this file as $SESSION_USER (unprivileged) -- root-only
+# 600 makes every connection attempt die on the source line under set -e.
+# Root keeps ownership (it's admin-edited); the session user gets group read.
+chown "root:$SESSION_USER" "$CONFIG_DIR/config"
+chmod 640 "$CONFIG_DIR/config"
 
 if [[ ! -f "$CONFIG_DIR/brains.json" ]]; then
     echo '[]' > "$CONFIG_DIR/brains.json"
@@ -145,6 +149,13 @@ if [[ ! -f "$CONFIG_DIR/brains.json" ]]; then
 fi
 mkdir -p "$CONFIG_DIR/brains"
 chmod 700 "$CONFIG_DIR/brains"
+# The Connect screen (brain-select.sh) runs as $SESSION_USER and owns this
+# data: it reads/rewrites brains.json and creates per-Brain .cred files in
+# brains/. Left owned by root (this script runs as root), brain-select.sh
+# dies on its first chmod/read and the session crash-loops with a black
+# screen. /etc/slimeos itself stays root-owned -- the session user gets
+# exactly these two entries, nothing else.
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains"
 
 # ── 6. Systemd service: slimeos-session ───────────────────────────────────────
 # WantedBy=multi-user.target, not graphical.target: with no display manager

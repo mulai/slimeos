@@ -51,17 +51,22 @@ add_brain() {
 
     id=$(cat /proc/sys/kernel/random/uuid)
     tmp=$(mktemp)
+    # Write through the existing file, don't mv over it: replacing a file via
+    # rename() needs write permission on /etc/slimeos itself, which is (and
+    # should stay) root-owned -- we only own brains.json inside it.
     jq --arg id "$id" --arg name "$name" --arg host "$host" --arg port "$port" \
         '. += [{id: $id, name: $name, host: $host, port: $port, username: ""}]' \
-        "$BRAINS_FILE" > "$tmp" && mv "$tmp" "$BRAINS_FILE"
+        "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
+    rm -f "$tmp"
     log "Added brain '$name' ($host:$port) id=$id"
 }
 
 remove_brain() {
     local id="$1" tmp
     tmp=$(mktemp)
-    jq --arg id "$id" 'map(select(.id != $id))' "$BRAINS_FILE" > "$tmp" && mv "$tmp" "$BRAINS_FILE"
-    rm -f "$CRED_DIR/${id}.cred"
+    # Same write-through pattern as add_brain: no rename() into root-owned /etc/slimeos.
+    jq --arg id "$id" 'map(select(.id != $id))' "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
+    rm -f "$tmp" "$CRED_DIR/${id}.cred"
     log "Removed brain id=$id"
 }
 
