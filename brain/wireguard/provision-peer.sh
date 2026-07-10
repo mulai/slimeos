@@ -68,7 +68,10 @@ DNS = ${DNS}
 PublicKey = ${SERVER_PUBKEY}
 PresharedKey = ${PSK}
 Endpoint = ${SERVER_ENDPOINT}
-AllowedIPs = 10.10.0.0/24
+# 10.10.0.0/24 = WireGuard peer subnet; 10.11.0.0/24 = vpnnet, where the
+# desktop container actually lives (10.11.0.10:3389). Without the second
+# range, RDP traffic never routes into the tunnel and connects just time out.
+AllowedIPs = 10.10.0.0/24, 10.11.0.0/24
 PersistentKeepalive = 25
 EOF
 
