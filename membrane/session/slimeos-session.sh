@@ -61,4 +61,13 @@ echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: ${
 if [[ -n "$SLIMEOS_COMPOSITOR_RENDERER" ]]; then
     export WLR_RENDERER="$SLIMEOS_COMPOSITOR_RENDERER"
 fi
+
+# Virtual GPUs (UTM/virglrenderer at least) render the DRM hardware-cursor
+# plane flipped vertically with a shifted hotspot — the arrow points down
+# and clicks land off-target. Compositing the cursor in software sidesteps
+# the cursor plane; only needed in VMs, real GPUs handle it fine.
+if systemd-detect-virt --quiet; then
+    export WLR_NO_HARDWARE_CURSORS=1
+fi
+
 exec cage -- "$INSTALL_DIR/brain-select.sh"
