@@ -49,8 +49,12 @@ fi
 # cage: minimal Wayland compositor designed for kiosk use
 #   -d = allow drop to shell on exit (disabled in production — remove for security)
 #   -s = allow switching VTs
-# brain-select.sh is the only application cage manages. It shows the Brain
-# picker (Connect screen) and hands off to connect.sh once a Brain is chosen.
+# cog (WPE WebKit's kiosk launcher) is the only application cage manages,
+# pointed at the local lock screen bundle. cog talks to slimeos-bridge (a
+# separate, independently-supervised systemd unit — see
+# membrane/bridge/) over a loopback WebSocket; the bridge relays JSON
+# events to coordinator.sh, which owns the actual Brain-picker/connect
+# logic that brain-select.sh + connect.sh used to drive via whiptail.
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Launching cage compositor (renderer: ${SLIMEOS_COMPOSITOR_RENDERER:-auto})"
 
 # cage 0.1.4 (Debian 12) has no --renderer flag at all ("invalid option -- '-'")
@@ -70,4 +74,4 @@ if systemd-detect-virt --quiet; then
     export WLR_NO_HARDWARE_CURSORS=1
 fi
 
-exec cage -- "$INSTALL_DIR/brain-select.sh"
+exec cage -- cog -P wayland "file://$INSTALL_DIR/lockscreen/index.html"

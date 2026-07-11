@@ -25,21 +25,54 @@ Slime OS is a two-component system:
 
 ### Boot sequence
 1. GRUB boots Debian (read-only rootfs, OverlayFS).
-2. `systemd` runs `slimeos-session.target`.
-3. `cage` (Wayland compositor) starts in kiosk mode with `brain-select.sh` as its client.
-4. `brain-select.sh` shows the **Connect screen** — a whiptail picker over the saved
-   entries in `/etc/slimeos/brains.json` (add / select / remove a Brain by IP or
-   hostname). This is the open source connect path; no Slime account required.
-5. On selection, it hands off to `connect.sh <brain-id>`, which prompts for
-   credentials on first use (saved per-Brain, encrypted) and launches FreeRDP.
-6. FreeRDP opens a WireGuard-tunneled RDP session to the chosen Brain. A clean
-   logout returns to the Connect screen so the user can switch Brains.
+2. `systemd` starts `slimeos-bridge.service` and `slimeos-session.service`
+   (soft-ordered: cage waits on the bridge but starts regardless if it's
+   slow, see below).
+3. `cage` (Wayland compositor) starts in kiosk mode with `cog` — WPE
+   WebKit's kiosk launcher — as its sole client, pointed at the local kiosk
+   HTML bundle in `membrane/lockscreen/index.html`. Chosen over a Chromium
+   kiosk for a much lower memory footprint and because it's purpose-built
+   for exactly this embedded/wlroots-kiosk scenario.
+4. That page opens a WebSocket to `slimeos-bridge` on `127.0.0.1:7770`,
+   which is a thin relay (a small vendored static Go binary — see
+   `membrane/bridge/`) to `coordinator.sh`, a persistent bash process that
+   owns the actual **Connect screen** logic: adding/selecting/removing a
+   saved Brain (`/etc/slimeos/brains.json`, add by IP or hostname) — the
+   open source connect path, no Slime account required. Whatever the page
+   shows, `coordinator.sh` drives via JSON lines
+   (`SlimeUI.setState`/`setStatus`), which is what `brain-select.sh`'s
+   whiptail menu loop used to do directly; the bridge only relays,
+   `coordinator.sh` owns all state and behavior.
+5. On selection, `coordinator.sh` calls `do_connect <brain-id>` (defined in
+   `connect.sh`, now a sourced function library rather than a standalone
+   script), which prompts for credentials on first use (saved per-Brain,
+   encrypted) and launches FreeRDP.
+6. FreeRDP opens a WireGuard-tunneled RDP session to the chosen Brain,
+   displayed by cage exactly as before (xwayland is still installed for
+   this). A clean logout returns `do_connect` to `coordinator.sh`, which
+   shows the Connect screen again so the user can switch Brains.
 
-> **Planned:** a second tab on the Connect screen, **"Sign in with Slime ID"**,
-> for the managed-service path — one Slime ID authenticating against multiple
-> Brains via a Slime account API (auth, brain listing, WireGuard peer
-> auto-provisioning). Not yet built. The
-> open source Connect (manual IP) path ships first.
+If `slimeos-bridge` itself is ever down or restarting (independent
+`Restart=always` lifecycle, deliberately not tied to cage/cog's own restart
+cycle), the lock screen shows a plain "Reconnecting to Slime OS…"
+placeholder and reconnects with backoff — a coordinator hiccup never
+restarts the whole kiosk session.
+
+> **Planned:** a "Sign in with Slime ID" entry point (already present as an
+> inert "Coming soon" affordance in the kiosk HTML) for the managed-service
+> path — one Slime ID authenticating against multiple Brains via a Slime
+> account API (auth, brain listing, WireGuard peer auto-provisioning). Not
+> yet built. The open source Connect (manual IP) path ships first.
+
+### Kiosk UI ↔ backend bridge
+The lock screen speaks a small JSON-Lines protocol over its WebSocket
+connection — full schema documented in `membrane/lockscreen/index.html`'s
+own header comment (browser → backend) and `membrane/session/coordinator.sh`'s
+own header comment (both directions, plus the bridge-synthesized
+`_clientConnected`/`_clientDisconnected` lifecycle events). `slimeos-bridge`
+itself has no product logic — it's a dumb relay between one WebSocket
+client and one persistent `coordinator.sh` subprocess, restarting the
+latter on crash and resyncing whatever client is attached.
 
 ### Key files
 | File | Purpose |
@@ -47,15 +80,20 @@ Slime OS is a two-component system:
 | `membrane/preseed/slimeos.preseed.cfg` | Debian automated installer config |
 | `membrane/installer/install.sh` | Post-install setup script |
 | `membrane/installer/extract-windows-license.ps1` | Windows key extractor — run on Windows before install, saves to USB |
-| `membrane/session/slimeos-session.sh` | cage session startup |
-| `membrane/session/brain-select.sh` | Connect screen — saved-Brain picker (add/select/remove) |
-| `membrane/freerdp/connect.sh` | FreeRDP connection for a chosen Brain, with security flags |
+| `membrane/session/slimeos-session.sh` | cage session startup (launches cog) |
+| `membrane/lockscreen/index.html` | Connect screen UI — self-contained kiosk HTML/CSS/JS rendered by cog |
+| `membrane/bridge/` | `slimeos-bridge` — local WS↔stdio relay between the kiosk UI and coordinator.sh (committed prebuilt static binary) |
+| `membrane/session/coordinator.sh` | Connect screen backend — saved-Brain picker (add/select/remove), drives the kiosk UI over the bridge |
+| `membrane/freerdp/connect.sh` | FreeRDP connection function library (`do_connect`), sourced by coordinator.sh, with security flags |
 
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.
 - AppArmor profile on the FreeRDP process.
 - No local user home directory. All config in `/etc/slimeos/`.
 - SSH disabled. Local console requires a recovery PIN.
+- `slimeos-bridge` listens on loopback (`127.0.0.1`) only, enforced at its
+  own startup — no new network-facing attack surface, no firewall rule
+  needed.
 
 ---
 

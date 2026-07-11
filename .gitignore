@@ -35,3 +35,8 @@ build/
 *.pem
 wg0.conf
 authelia/secrets/
+
+# Go build (slimeos-bridge) -- transient local scratch only; the actual
+# committed binaries live in membrane/bridge/bin/, which is deliberately
+# NOT ignored.
+membrane/bridge/dist/

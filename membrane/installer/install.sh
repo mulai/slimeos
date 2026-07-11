@@ -57,7 +57,15 @@ fi
 # xwayland: cage unconditionally tries to start an XWayland server on launch
 # (this build has Xwayland support compiled in) and aborts the whole session
 # if /usr/bin/Xwayland is missing -- --no-install-recommends below means it
-# won't get pulled in as cage's own recommended dependency otherwise.
+# won't get pulled in as cage's own recommended dependency otherwise. xfreerdp3
+# still opens its own Xwayland-backed top-level window when launched, cage
+# displays it exactly as before -- the cog swap below doesn't change that.
+#
+# cog + libwpewebkit-2.0-1 replace weston + whiptail: the Connect screen is
+# now the kiosk HTML bundle in membrane/lockscreen/ (rendered by cog, WPE
+# WebKit's kiosk launcher) instead of a whiptail dialog stack running inside
+# weston-terminal. Neither weston nor whiptail has any other user left in
+# this repo once brain-select.sh is gone.
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -65,7 +73,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     systemd-resolved \
     wireguard wireguard-tools \
     freerdp3-x11 \
-    cage weston wayland-utils whiptail xwayland \
+    cage cog libwpewebkit-2.0-1 wayland-utils xwayland \
     polkitd pkexec dbus dbus-user-session \
     network-manager \
     ${MICROCODE_PKGS} \
@@ -91,7 +99,7 @@ chmod 750 /var/log/slimeos
 
 # ── 3. Install Slime OS files ─────────────────────────────────────────────────
 log "Installing Slime OS system files..."
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles"
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles" "$INSTALL_DIR/lockscreen/fonts"
 
 # Download hardware detection and profiles
 # NOTE: add new profile files here as they're validated (see membrane/hardware-profiles/)
@@ -101,14 +109,35 @@ for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh; do
     chmod +x "$INSTALL_DIR/hardware-profiles/$f"
 done
 
-# Download session and FreeRDP scripts
+# Download session, coordinator, and FreeRDP scripts. brain-select.sh is
+# gone -- coordinator.sh (event-driven, talks to slimeos-bridge) replaces
+# its whiptail menu loop; connect.sh is no longer a standalone entry point,
+# it's `source`d by coordinator.sh as a function library, but is still
+# fetched and chmod +x the same way for manual on-device debugging.
 curl -fsSL "$REPO_BASE/membrane/session/slimeos-session.sh" \
      -o "$INSTALL_DIR/slimeos-session.sh"
-curl -fsSL "$REPO_BASE/membrane/session/brain-select.sh" \
-     -o "$INSTALL_DIR/brain-select.sh"
+curl -fsSL "$REPO_BASE/membrane/session/coordinator.sh" \
+     -o "$INSTALL_DIR/coordinator.sh"
 curl -fsSL "$REPO_BASE/membrane/freerdp/connect.sh" \
      -o "$INSTALL_DIR/connect.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/brain-select.sh" "$INSTALL_DIR/connect.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh"
+
+# Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
+# fonts -- zero other network requests at runtime, see the file's own header
+# comment) that cog renders as the Connect screen.
+for f in index.html; do
+    curl -fsSL "$REPO_BASE/membrane/lockscreen/$f" -o "$INSTALL_DIR/lockscreen/$f"
+done
+for f in space-grotesk.woff2 plus-jakarta-sans.woff2 jetbrains-mono.woff2; do
+    curl -fsSL "$REPO_BASE/membrane/lockscreen/fonts/$f" -o "$INSTALL_DIR/lockscreen/fonts/$f"
+done
+
+# Download the slimeos-bridge static binary (committed prebuilt, see
+# membrane/bridge/README.md -- the Membrane never runs a Go toolchain).
+BRIDGE_ARCH="$(dpkg --print-architecture)"
+curl -fsSL "$REPO_BASE/membrane/bridge/bin/slimeos-bridge-linux-${BRIDGE_ARCH}" \
+     -o "$INSTALL_DIR/slimeos-bridge"
+chmod +x "$INSTALL_DIR/slimeos-bridge"
 ok "Slime OS files installed to $INSTALL_DIR"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
@@ -164,12 +193,16 @@ chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brain
 # would never start. Conflicts=getty@tty1.service hands us tty1 cleanly
 # instead of racing the default console login prompt for it.
 log "Installing systemd service..."
+# After=/Wants= slimeos-bridge.service is soft ordering only (Wants, not
+# Requires): a bridge failure must never prevent cage from starting --
+# the lock screen's own WS glue shows a "Reconnecting to Slime OS..."
+# placeholder and retries with backoff if the bridge isn't up yet.
 cat > "$SYSTEMD_DIR/slimeos-session.service" <<SERVICE
 [Unit]
 Description=Slime OS — Kiosk Session (cage + FreeRDP)
-After=network-online.target getty@tty1.service
+After=network-online.target getty@tty1.service slimeos-bridge.service
 Conflicts=getty@tty1.service
-Wants=network-online.target
+Wants=network-online.target slimeos-bridge.service
 
 [Service]
 User=${SESSION_USER}
@@ -187,6 +220,31 @@ TimeoutStartSec=60
 [Install]
 WantedBy=multi-user.target
 SERVICE
+
+# ── 6b. Systemd service: slimeos-bridge ───────────────────────────────────────
+# Independent Restart=always lifecycle, deliberately not tied to cage/cog's
+# own restart cycle -- a 2s coordinator hiccup should show a brief
+# "Reconnecting to Slime OS..." placeholder, not restart the whole kiosk
+# session. Listens on loopback only (enforced by slimeos-bridge itself at
+# startup) -- no firewall rule needed, ufw always permits lo traffic.
+log "Installing slimeos-bridge service..."
+cat > "$SYSTEMD_DIR/slimeos-bridge.service" <<SERVICE
+[Unit]
+Description=Slime OS — Local WS bridge (kiosk UI <-> Brain coordinator)
+After=network.target
+
+[Service]
+User=${SESSION_USER}
+Group=${SESSION_USER}
+ExecStart=${INSTALL_DIR}/slimeos-bridge --listen=127.0.0.1:7770 --coordinator=${INSTALL_DIR}/coordinator.sh --log=/var/log/slimeos/coordinator.log
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-bridge.service
+ok "slimeos-bridge.service enabled"
 
 # ── 7. Systemd service: NIC tuning (Profile 001 only if present) ───────────────
 if [[ -f "$CONFIG_DIR/nic-tune.sh" ]]; then
