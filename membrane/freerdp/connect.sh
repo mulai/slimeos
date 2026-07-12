@@ -105,7 +105,11 @@ do_connect() {
             emit_state connecting "$(jq -nc --arg n "$brain_name" \
                 '{brainName:$n,stage:"Waking up your Brain…"}')"
             log "Connecting to ${brain_name} (${vm_host}:${vm_port}) as ${slime_username}"
-            local log_offset; log_offset=$(wc -c < "$FREERDP_LOG_FILE")
+            # First-ever connect on a fresh install: nothing creates this file
+            # ahead of time (it's only ever opened via the xfreerdp3 `>>`
+            # redirect a few lines down), so `wc -c` on a missing file would
+            # otherwise kill the whole coordinator under `set -e`.
+            local log_offset; log_offset=$(wc -c < "$FREERDP_LOG_FILE" 2>/dev/null || echo 0)
             SECONDS=0
 
             # Security flags (zero-trust stack):
