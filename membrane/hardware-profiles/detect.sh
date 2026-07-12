@@ -61,6 +61,9 @@ select_profile() {
     elif echo "$MATCH_STR" | grep -qi "Raspberry"; then
         echo "007-raspberry-pi.sh"
 
+    elif echo "$DMI_BOARD" | grep -qi "78LMT"; then
+        echo "008-gigabyte-78lmt-s2p.sh"
+
     else
         # Fallback: generic — works on most machines, conservative settings
         echo "000-generic.sh"
