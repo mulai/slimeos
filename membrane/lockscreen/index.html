@@ -75,6 +75,9 @@
    'slime:wifi-rescan'     {}
    'slime:wifi-skip'       {}                             // boot mode only
 
+   'slime:power-shutdown'  {}                             // power icon, confirmed -- no response expected, the machine powers off
+   'slime:power-restart'   {}                             // power icon, confirmed -- no response expected, the machine reboots
+
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
    settings mode — same semantics (retry same target / re-supply secret / go
@@ -280,6 +283,7 @@
     <div class="right">
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
       <span class="settings-gear" id="btnNetworkSettings" tabindex="0" role="button" title="Network settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
+      <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
       <span class="bars"><span style="height:4px;"></span><span style="height:7px;"></span><span style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
     </div>
@@ -884,6 +888,46 @@
 
   function closeModal(){ modalRoot.innerHTML = ''; pendingRemoveId = null; }
 
+  function showPowerConfirm(){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Power options</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">Any active session will be closed.</p>' +
+          '<div style="display:flex;flex-direction:column;gap:10px;margin-top:22px;">' +
+            '<button class="btn-secondary" id="btnConfirmRestart">Restart</button>' +
+            '<button style="background:#3a1414;border:1px solid rgba(255,107,107,0.3);border-radius:10px;padding:11px;font-family:var(--font-display);font-weight:600;font-size:13.5px;color:#ff8f8f;" id="btnConfirmShutdown">Shut Down</button>' +
+            '<button class="btn-tertiary" id="btnCancelPower">Cancel</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnCancelPower').onclick = closeModal;
+    document.getElementById('btnConfirmShutdown').onclick = function(){
+      closeModal();
+      showPowerOverlay('Shutting down…');
+      emit('slime:power-shutdown');
+    };
+    document.getElementById('btnConfirmRestart').onclick = function(){
+      closeModal();
+      showPowerOverlay('Restarting…');
+      emit('slime:power-restart');
+    };
+    modalRoot.querySelector('#btnCancelPower').focus();
+  }
+
+  // Client-only, non-interactive: once confirmed, the real machine is
+  // about to power off/reboot regardless of anything the backend does
+  // next, so there's nothing left to route an event to.
+  function showPowerOverlay(text){
+    screenRoot.innerHTML =
+      '<div class="screen" data-screen="powerOverlay">' +
+        '<div class="reconnect-panel">' +
+          '<span class="spinner"></span>' +
+          '<h2 style="margin:18px 0 0;font-family:var(--font-display);font-weight:600;font-size:17px;color:#F2F6FB;">' + escapeHtml(text) + '</h2>' +
+        '</div>' +
+      '</div>';
+  }
+
   /* ===================== global keyboard (Esc = back/cancel) ===================== */
 
   document.addEventListener('keydown', function(e){
@@ -901,6 +945,10 @@
   var btnNetworkSettings = document.getElementById('btnNetworkSettings');
   btnNetworkSettings.addEventListener('click', function(){ emit('slime:network-settings'); });
   btnNetworkSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:network-settings'); });
+
+  var btnPower = document.getElementById('btnPower');
+  btnPower.addEventListener('click', showPowerConfirm);
+  btnPower.addEventListener('keydown', function(e){ if (e.key === 'Enter') showPowerConfirm(); });
 
   /* ===================== public API ===================== */
 
@@ -928,7 +976,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:network-settings','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:network-settings','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1073,7 +1121,9 @@
       'slime:wifi-connect': 'wifiConnect',
       'slime:wifi-password': 'wifiPassword',
       'slime:wifi-rescan': 'wifiRescan',
-      'slime:wifi-skip': 'wifiSkip'
+      'slime:wifi-skip': 'wifiSkip',
+      'slime:power-shutdown': 'powerShutdown',
+      'slime:power-restart': 'powerRestart'
     };
 
     function sendEvent(type, detail){

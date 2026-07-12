@@ -106,6 +106,20 @@ is what polkit's default NetworkManager authorization normally keys off —
 session user's own group) for `org.freedesktop.NetworkManager.*` actions,
 without which `nmcli` would silently fail with "Insufficient privileges."
 
+### Power off / restart
+A power icon in the status strip (next to the network-settings gear)
+opens a confirm modal (Restart / Shut Down / Cancel) — the same
+`showRemoveConfirm`-style modal pattern used for removing a saved Brain.
+Once confirmed, the page immediately shows a local, client-only "Shutting
+down…"/"Restarting…" overlay (there's nothing left to route a backend
+response to) and emits `slime:power-shutdown`/`slime:power-restart`,
+which `coordinator.sh` handles by calling `systemctl poweroff`/`systemctl
+reboot` directly. Same logind/polkit gap as NetworkManager above — these
+actions normally rely on an "active" logind session, which this kiosk's
+`slime` user doesn't have (no `PAMName=login`) — so `install.sh` drops a
+second polkit rule (`org.freedesktop.login1.power-off`/`.reboot`,
+scoped to the `$SESSION_USER` directly) authorizing it.
+
 ### Key files
 | File | Purpose |
 |---|---|

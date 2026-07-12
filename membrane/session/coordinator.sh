@@ -21,6 +21,7 @@
 #   {"type":"wifiConnect","ssid":..} | {"type":"wifiPassword","password":..} | {"type":"wifiRescan"} | {"type":"wifiSkip"}
 #     (wifiConnect/wifiPassword/wifiRescan/wifiSkip only consumed by do_network_setup, see network-setup.sh —
 #      retry/reenterPassword/back are reused there too, same as do_connect does)
+#   {"type":"powerShutdown"} | {"type":"powerRestart"}      already confirmed client-side (see index.html); no response emitted, the machine powers off/reboots
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
 #   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError","data":{...}}
@@ -252,6 +253,18 @@ while true; do
             do_network_setup settings
             send_status
             show_picker_or_empty
+            ;;
+        powerShutdown)
+            log "Power: shutdown requested"
+            # `|| log ...` deliberately, not a bare call: a failure here (e.g.
+            # the polkit rule below not authorizing it) must not crash the
+            # whole coordinator under set -e -- same lesson as the
+            # once-missing connect.log guard in connect.sh.
+            systemctl poweroff || log "ERROR: systemctl poweroff failed — check org.freedesktop.login1.power-off polkit rule"
+            ;;
+        powerRestart)
+            log "Power: restart requested"
+            systemctl reboot || log "ERROR: systemctl reboot failed — check org.freedesktop.login1.reboot polkit rule"
             ;;
         *)
             # credentials/retry/reenterPassword/cancelConnect only make

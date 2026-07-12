@@ -189,6 +189,27 @@ polkit.addRule(function(action, subject) {
 POLKIT
 ok "NetworkManager enabled for Wi-Fi/Ethernet onboarding"
 
+# ── 3c. Polkit rule: power off / restart from the kiosk UI ───────────────────
+# Same root cause as the NetworkManager rule above: coordinator.sh calls
+# `systemctl poweroff`/`systemctl reboot` as $SESSION_USER in response to the
+# lock screen's power icon, but without an active logind session (no
+# PAMName=login, see above), polkit's default "allow the active local user"
+# authorization for these actions doesn't apply -- without this rule they'd
+# fail with "Insufficient privileges" and the button would silently do
+# nothing beyond the client-side "Shutting down..."/"Restarting..." overlay.
+cat > /etc/polkit-1/rules.d/51-slimeos-power.rules <<POLKIT
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions") &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+ok "Power off/restart enabled for the kiosk UI"
+
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
 bash "$INSTALL_DIR/hardware-profiles/detect.sh"
