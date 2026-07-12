@@ -353,6 +353,37 @@
     });
   }
 
+  /* ===================== mousedown -> click activation workaround =====================
+     Real-hardware finding (2026-07-12, Gigabyte GA-78LMT-S2P, cage 0.2.0 +
+     cog + WPE on trixie): mouse clicks on buttons/cards/icons never
+     register at all, while native input-focus-on-click and keyboard Enter
+     both work fine. Matches a known category of Wayland click-completion
+     bugs (compositors must pair pointer-button events with a "frame"
+     completion signal for a browser's `click` to fire -- see
+     cage-kiosk/cage#305 and related wlroots seat/frame issues; cage 0.2.0
+     is a much newer version than this repo's other comments were written
+     against, so the exact bug surface has shifted). Patching cage/cog/
+     wlroots upstream isn't practical here, so the page compensates itself:
+     synthesize a `click` from `mousedown` after a short grace window, but
+     only if a real `click` didn't already arrive -- so exactly one click
+     fires whether or not the platform's own synthesis works. Verified
+     this doesn't double-fire in a normal browser (demo mode); needs
+     real-hardware confirmation that it actually fixes the reported bug.
+  */
+  var pendingClickEl = null;
+  document.addEventListener('mousedown', function(e){
+    var el = e.target.closest('button, [tabindex]');
+    if (!el) return;
+    pendingClickEl = el;
+    setTimeout(function(){
+      if (pendingClickEl === el){
+        pendingClickEl = null;
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }
+    }, 200);
+  }, true);
+  document.addEventListener('click', function(){ pendingClickEl = null; }, true);
+
   /* ===================== status strip ===================== */
 
   function setStatus(opts){
