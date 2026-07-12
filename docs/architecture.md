@@ -42,7 +42,10 @@ Slime OS is a two-component system:
    shows, `coordinator.sh` drives via JSON lines
    (`SlimeUI.setState`/`setStatus`), which is what `brain-select.sh`'s
    whiptail menu loop used to do directly; the bridge only relays,
-   `coordinator.sh` owns all state and behavior.
+   `coordinator.sh` owns all state and behavior. Before showing the normal
+   Connect screen, `coordinator.sh` checks for a working network and shows
+   a Wi-Fi/Ethernet setup screen instead if none exists yet (see "Network
+   setup" below) — also reachable later from a settings icon.
 5. On selection, `coordinator.sh` calls `do_connect <brain-id>` (defined in
    `connect.sh`, now a sourced function library rather than a standalone
    script), which prompts for credentials on first use (saved per-Brain,
@@ -74,6 +77,35 @@ itself has no product logic — it's a dumb relay between one WebSocket
 client and one persistent `coordinator.sh` subprocess, restarting the
 latter on crash and resyncing whatever client is attached.
 
+### Network setup (WiFi + Ethernet onboarding)
+The whole Connect flow above assumes a working network already exists.
+`coordinator.sh` checks that assumption once per process, on the first
+`_clientConnected` event: if `ip route show default` comes up empty after a
+short retry window (`have_default_route()`), it calls `do_network_setup
+boot` — defined in `membrane/session/network-setup.sh`, `source`d the same
+way `connect.sh` is — *before* showing the normal picker. That function
+takes over the event loop exactly like `do_connect()` does, driving three
+new lock-screen states (`wifiList` → `wifiPassword` for secured networks →
+`wifiConnecting`) via `nmcli`, with a `wifiError` recovery screen that
+reuses the existing `slime:retry`/`slime:reenter-password`/`slime:back`
+events (same semantics as the Brain-connect error screen, no new events
+needed there). A gear icon in the status strip (`slime:network-settings`)
+reaches the same function in `settings` mode — non-blocking, reachable any
+time a network already works, for switching WiFi networks — the only
+difference from `boot` mode is a Back button instead of a Skip button.
+
+`nmcli` needs `wpasupplicant` (its actual WiFi backend) and NetworkManager
+itself enabled unconditionally in `install.sh` (previously only the
+generic fallback hardware profile enabled it — a latent gap that meant any
+machine matching a *named* profile never got it enabled at all). Because
+this kiosk's systemd units deliberately skip `PAMName=login` (see the
+`slimeos-session.service` comment below on why — it broke cog's WebKit
+sandbox), the session never registers as an "active" logind session, which
+is what polkit's default NetworkManager authorization normally keys off —
+`install.sh` also drops a polkit rule authorizing the `netdev` group (the
+session user's own group) for `org.freedesktop.NetworkManager.*` actions,
+without which `nmcli` would silently fail with "Insufficient privileges."
+
 ### Key files
 | File | Purpose |
 |---|---|
@@ -85,6 +117,7 @@ latter on crash and resyncing whatever client is attached.
 | `membrane/bridge/` | `slimeos-bridge` — local WS↔stdio relay between the kiosk UI and coordinator.sh (committed prebuilt static binary) |
 | `membrane/session/coordinator.sh` | Connect screen backend — saved-Brain picker (add/select/remove), drives the kiosk UI over the bridge |
 | `membrane/freerdp/connect.sh` | FreeRDP connection function library (`do_connect`), sourced by coordinator.sh, with security flags |
+| `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
 
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.

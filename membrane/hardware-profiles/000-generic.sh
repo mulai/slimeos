@@ -17,11 +17,6 @@ SLIMEOS_KERNEL_EXTRA="quiet"
 # broke output negotiation on at least one virtual GPU (virtio-gpu-gl).
 SLIMEOS_COMPOSITOR_RENDERER=""
 
-# ── Power management ─────────────────────────────────────────────────────────
-if command -v systemctl &>/dev/null; then
-    systemctl enable NetworkManager 2>/dev/null || true
-fi
-
 # ── FreeRDP performance flags ─────────────────────────────────────────────────
 # Conservative codec set — works on all GPUs
 SLIMEOS_FREERDP_EXTRA_FLAGS="/network:broadband /gfx:rfx /bpp:32"

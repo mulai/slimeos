@@ -17,15 +17,20 @@
 #   {"type":"removeBrain","id":..}
 #   {"type":"credentials","username":?,"password":..}     (only consumed by do_connect, see connect.sh)
 #   {"type":"retry"} | {"type":"reenterPassword"} | {"type":"back"} | {"type":"cancelConnect"}
+#   {"type":"networkSettings"}                             dispatched here; hands off to do_network_setup (see network-setup.sh)
+#   {"type":"wifiConnect","ssid":..} | {"type":"wifiPassword","password":..} | {"type":"wifiRescan"} | {"type":"wifiSkip"}
+#     (wifiConnect/wifiPassword/wifiRescan/wifiSkip only consumed by do_network_setup, see network-setup.sh —
+#      retry/reenterPassword/back are reused there too, same as do_connect does)
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
 # form itself needs no backend round-trip); this script only ever emits
-# empty/picker/credentials/connecting/error/reconnecting.
+# empty/picker/credentials/connecting/error/reconnecting/wifiList/
+# wifiPassword/wifiConnecting/wifiError.
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -63,6 +68,21 @@ send_status() {
     emit_status "$clock" "$tunnel"
 }
 
+# Used both to gate the automatic network-setup screen (see network_checked
+# below) and by network-setup.sh's own wifiList "ethernetUp" hint. A short
+# retry window (not an instant single check) avoids a false "offline"
+# reading on a slow-negotiating Ethernet link right at boot — same shape as
+# slimeos-session.sh's own MAX_WAIT wait for wg0.
+have_default_route() {
+    local waited=0
+    while [[ -z "$(ip route show default 2>/dev/null)" ]]; do
+        (( waited >= 5 )) && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 0
+}
+
 read_event() {
     local line
     IFS= read -r line <&0 || return 1
@@ -94,6 +114,15 @@ MIN_SESSION_SECONDS=60
 
 # shellcheck source=../freerdp/connect.sh
 source "$INSTALL_DIR/connect.sh" # defines do_connect()
+# shellcheck source=network-setup.sh
+source "$INSTALL_DIR/network-setup.sh" # defines do_network_setup()
+
+# Gates the automatic (boot-mode) network-setup screen to once per
+# coordinator process, not once per _clientConnected -- that event also
+# fires on every WS reconnect and bridge-crash-recovery resync, which would
+# otherwise re-trigger the check (and its up-to-5s have_default_route wait)
+# on every client reattach.
+network_checked=false
 
 add_brain() {
     local name="$1" host="$2" port="$3"
@@ -180,6 +209,13 @@ while true; do
     case "$ev_type" in
         _clientConnected)
             log "Client connected — resyncing"
+            if ! $network_checked; then
+                network_checked=true
+                if ! have_default_route; then
+                    log "No default route detected — entering network setup (boot mode)"
+                    do_network_setup boot
+                fi
+            fi
             send_status
             show_picker_or_empty
             ;;
@@ -212,12 +248,19 @@ while true; do
             send_status
             show_picker_or_empty
             ;;
+        networkSettings)
+            do_network_setup settings
+            send_status
+            show_picker_or_empty
+            ;;
         *)
             # credentials/retry/reenterPassword/cancelConnect only make
-            # sense while do_connect() is running — it consumes them
-            # itself via its own read_event() calls. Anything else
-            # (unrecognized types, stray events at the picker level) is
-            # silently ignored.
+            # sense while do_connect() is running, and wifiConnect/
+            # wifiPassword/wifiRescan/wifiSkip (plus retry/reenterPassword/
+            # back again) only make sense while do_network_setup() is
+            # running — both consume their own events directly via their
+            # own read_event() calls. Anything else (unrecognized types,
+            # stray events at the picker level) is silently ignored.
             ;;
     esac
 done

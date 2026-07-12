@@ -66,6 +66,12 @@ fi
 # WebKit's kiosk launcher) instead of a whiptail dialog stack running inside
 # weston-terminal. Neither weston nor whiptail has any other user left in
 # this repo once brain-select.sh is gone.
+#
+# wpasupplicant: NetworkManager's actual WiFi backend. Normally pulled in as
+# a Recommends of network-manager, but --no-install-recommends (below) means
+# it never gets pulled in on its own -- without it, NetworkManager installs
+# and its service enables fine, but `nmcli device wifi list`/`connect` see
+# no usable WiFi device at all (network-setup.sh's do_network_setup()).
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -75,7 +81,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     freerdp3-x11 \
     cage cog libwpewebkit-2.0-1 wayland-utils xwayland \
     polkitd pkexec dbus dbus-user-session \
-    network-manager \
+    network-manager wpasupplicant \
     ${MICROCODE_PKGS} \
     ethtool \
     qrencode \
@@ -107,7 +113,7 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles" "$INSTALL
 
 # Download hardware detection and profiles
 # NOTE: add new profile files here as they're validated (see membrane/hardware-profiles/)
-for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh; do
+for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh 008-gigabyte-78lmt-s2p.sh; do
     curl -fsSL "$REPO_BASE/membrane/hardware-profiles/$f" \
          -o "$INSTALL_DIR/hardware-profiles/$f"
     chmod +x "$INSTALL_DIR/hardware-profiles/$f"
@@ -124,7 +130,9 @@ curl -fsSL "$REPO_BASE/membrane/session/coordinator.sh" \
      -o "$INSTALL_DIR/coordinator.sh"
 curl -fsSL "$REPO_BASE/membrane/freerdp/connect.sh" \
      -o "$INSTALL_DIR/connect.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh"
+curl -fsSL "$REPO_BASE/membrane/session/network-setup.sh" \
+     -o "$INSTALL_DIR/network-setup.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -143,6 +151,43 @@ curl -fsSL "$REPO_BASE/membrane/bridge/bin/slimeos-bridge-linux-${BRIDGE_ARCH}" 
      -o "$INSTALL_DIR/slimeos-bridge"
 chmod +x "$INSTALL_DIR/slimeos-bridge"
 ok "Slime OS files installed to $INSTALL_DIR"
+
+# ── 3b. NetworkManager (WiFi/Ethernet backend for network-setup.sh) ───────────
+# Unconditional here, not left to hardware-profiles/*.sh: only
+# 000-generic.sh ever enabled NetworkManager, so any machine matching a
+# *named* profile (001, 006, 008, ...) never got it enabled at all --
+# nmcli would silently do nothing on exactly the hardware this feature
+# needs to work on. Every profile gets it now, unconditionally.
+log "Enabling NetworkManager..."
+systemctl enable NetworkManager 2>/dev/null || true
+
+# Debian's ifupdown and NetworkManager can both try to own the same
+# interface; when ifupdown wins, `nmcli device status` shows it
+# "unmanaged" and nmcli can't touch it at all. Force NetworkManager to
+# manage everything regardless of /etc/network/interfaces.
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/10-slimeos-managed.conf <<'NMCONF'
+[ifupdown]
+managed=true
+NMCONF
+
+# network-setup.sh runs nmcli as the unprivileged $SESSION_USER (netdev
+# group). This kiosk deliberately skips PAMName=login on its systemd units
+# (see slimeos-session.service below -- it broke cog's WebKit sandbox), so
+# the session may never register as an "active" logind session, which is
+# what polkit's default NetworkManager authorization normally keys off.
+# Without this rule, nmcli as $SESSION_USER can silently fail with an
+# "Insufficient privileges" denial.
+mkdir -p /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/50-slimeos-network-manager.rules <<'POLKIT'
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
+        subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+ok "NetworkManager enabled for Wi-Fi/Ethernet onboarding"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
