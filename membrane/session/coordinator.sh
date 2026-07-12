@@ -47,6 +47,22 @@ log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [coordinator] $*" >&2; }
 emit_state()  { jq -nc --arg state "$1" --argjson data "$2" '{type:"setState", state:$state, data:$data}'; }
 emit_status() { jq -nc --arg clock "$1" --arg tunnel "$2" '{type:"setStatus", clock:$clock, tunnel:$tunnel}'; }
 
+# Sends the current real clock + tunnel state. The page auto-advances the
+# clock locally every 30s after that (see index.html), so one correct value
+# per client connection/resync is enough — without this, the status strip
+# never leaves the hardcoded 00:00 default the page paints before its first
+# backend message ever arrives.
+send_status() {
+    local clock tunnel
+    clock=$(date +"%H:%M")
+    if ip link show wg0 &>/dev/null; then
+        tunnel="up"
+    else
+        tunnel="down"
+    fi
+    emit_status "$clock" "$tunnel"
+}
+
 read_event() {
     local line
     IFS= read -r line <&0 || return 1
@@ -164,6 +180,7 @@ while true; do
     case "$ev_type" in
         _clientConnected)
             log "Client connected — resyncing"
+            send_status
             show_picker_or_empty
             ;;
         _clientDisconnected)
@@ -188,9 +205,11 @@ while true; do
                 stamp_last_connected "$id"
                 do_connect "$id"
             fi
+            send_status
             show_picker_or_empty
             ;;
         back)
+            send_status
             show_picker_or_empty
             ;;
         *)

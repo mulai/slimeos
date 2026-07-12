@@ -84,9 +84,13 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 ok "Dependencies installed"
 
 # ── 2. Create session user if not exists ─────────────────────────────────────
+# `render` (not just `video`) is required for GPU-accelerated rendering:
+# /dev/dri/renderD128 is group-owned by `render`, separately from card0's
+# `video` ownership. Without it, wlroots/cog silently fall back to software
+# rendering (kms_swrast) -- functional, but loses hardware acceleration.
 if ! id "$SESSION_USER" &>/dev/null; then
     log "Creating session user '$SESSION_USER'..."
-    useradd -m -s /bin/bash -G audio,video,netdev,sudo "$SESSION_USER"
+    useradd -m -s /bin/bash -G audio,video,render,netdev,sudo "$SESSION_USER"
     ok "User '$SESSION_USER' created"
 fi
 
@@ -192,6 +196,19 @@ chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brain
 # stays multi-user.target, so graphical.target is never reached and the unit
 # would never start. Conflicts=getty@tty1.service hands us tty1 cleanly
 # instead of racing the default console login prompt for it.
+#
+# Deliberately NOT using PAMName=login / TTYPath=/dev/tty1 / StandardInput=tty
+# (an earlier version of this unit did): that combination puts the session
+# under systemd-logind's seat0/console handling, which left the calling
+# process in a capability state that made bubblewrap abort with "Unexpected
+# capabilities but not setuid, old file caps config?" — breaking cog's
+# WebKit sandbox (bwrap + xdg-dbus-proxy) before it could even open a
+# window. Confirmed by direct A/B test: removing these three lines (keeping
+# everything else identical) let cage/cog start and the kiosk UI's WebSocket
+# reach slimeos-bridge successfully; re-adding them reproduced the failure
+# every time. logind still assigns the session to seat0 without an explicit
+# TTYPath as long as nothing else (getty) is contesting the console, which
+# Conflicts=getty@tty1.service already guarantees.
 log "Installing systemd service..."
 # After=/Wants= slimeos-bridge.service is soft ordering only (Wants, not
 # Requires): a bridge failure must never prevent cage from starting --
@@ -207,9 +224,12 @@ Wants=network-online.target slimeos-bridge.service
 [Service]
 User=${SESSION_USER}
 Group=${SESSION_USER}
-PAMName=login
-TTYPath=/dev/tty1
-StandardInput=tty
+# Without PAMName=login, nothing else creates /run/user/<uid> for us --
+# that used to be pam_systemd's job. RuntimeDirectory= is systemd's own
+# PAM-independent equivalent: it creates and owns the directory itself
+# before ExecStart runs.
+RuntimeDirectory=user/$(id -u ${SESSION_USER})
+RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/user/$(id -u ${SESSION_USER})
 ExecStartPre=/bin/sleep 2
 ExecStart=${INSTALL_DIR}/slimeos-session.sh

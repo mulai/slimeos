@@ -118,6 +118,22 @@ do_connect() {
             # No /tls:seclevel: FreeRDP 3.15's /tls sub-option parser
             # rejects even its own documented values (non-fatal ERROR,
             # option ignored) — the server side enforces the TLS floor.
+            #
+            # xfreerdp3 (freerdp3-x11) is an X11 client and needs $DISPLAY,
+            # but this process tree (coordinator.sh, under slimeos-bridge.
+            # service) is not a descendant of cage/cog (slimeos-session.
+            # service) — two separate systemd units — so it never inherits
+            # the DISPLAY cage injects into cog's own environment. Both
+            # units share XDG_RUNTIME_DIR, and Xwayland's X11 socket lives
+            # in the filesystem regardless of process ancestry, so discover
+            # it directly rather than relying on inheritance. Re-checked
+            # every attempt (cheap) in case cage restarts mid-retry-loop
+            # and Xwayland comes back on a different display number.
+            local x11_socket
+            x11_socket=$(ls /tmp/.X11-unix/ 2>/dev/null | head -1)
+            export DISPLAY="${x11_socket:+:${x11_socket#X}}"
+            export DISPLAY="${DISPLAY:-:0}"
+
             set +e
             xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \

@@ -74,4 +74,19 @@ if systemd-detect-virt --quiet; then
     export WLR_NO_HARDWARE_CURSORS=1
 fi
 
-exec cage -- cog -P wayland "file://$INSTALL_DIR/lockscreen/index.html"
+# WebKit's internal renderer sandbox (bubblewrap + xdg-dbus-proxy) refuses to
+# start with "Unexpected capabilities but not setuid" in this environment --
+# bwrap itself is healthy (works fine invoked directly), the failure is
+# specific to whatever capability/namespace state WebKit's own dbus-proxy
+# launch sees. Disabling it is an acceptable trade for this kiosk
+# specifically: the sandbox exists to contain a compromised renderer that
+# loaded untrusted remote content, but this page is always first-party,
+# locally-shipped, static HTML (membrane/lockscreen/index.html) -- it never
+# fetches or renders anything from the network. Every other layer (AppArmor,
+# no SSH, encrypted credentials, WireGuard-only network) stays in place.
+export WEBKIT_FORCE_SANDBOX=0
+
+# cog's Wayland platform module is named "wl" (libcogplatform-wl.so), not
+# "wayland" -- passing the latter makes cog fail to find any usable platform
+# and abort before ever opening a window.
+exec cage -- cog -P wl "file://$INSTALL_DIR/lockscreen/index.html"
