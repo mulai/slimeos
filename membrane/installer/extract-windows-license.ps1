@@ -1,4 +1,4 @@
-# Slime OS — Windows License Extractor
+# Slime OS - Windows License Extractor
 # Run this on the machine BEFORE installing Slime OS (before the disk is wiped).
 # Saves key info to C:\slimeos-license.json
 # Run as Administrator in PowerShell:
@@ -10,7 +10,7 @@
 $outFile = "C:\slimeos-license.json"
 
 Write-Host ""
-Write-Host "  Slime OS — Windows License Extractor" -ForegroundColor Cyan
+Write-Host "  Slime OS - Windows License Extractor" -ForegroundColor Cyan
 Write-Host "  ======================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -133,9 +133,9 @@ Write-Host "  Machine:      $($payload.machine.manufacturer) $($payload.machine.
 Write-Host "  CPU:          $($payload.machine.cpu)"
 Write-Host "  RAM:          $($payload.machine.total_ram_mb) MB"
 Write-Host "  Windows:      $($payload.windows.edition) ($($payload.windows.architecture))"
-Write-Host "  License:      $($payload.windows.license_channel) — $($payload.windows.license_status)"
+Write-Host "  License:      $($payload.windows.license_channel) - $($payload.windows.license_status)"
 Write-Host "  Key found:    $(if ($productKey) { 'YES (' + $payload.key_source + ')' } else { 'NO' })"
-Write-Host "  Transferable: $(if ($payload.transferable) { 'YES — Cloud Windows VM will be provisioned' } else { 'NO — Free Linux cloud VM will be provisioned' })"
+Write-Host "  Transferable: $(if ($payload.transferable) { 'YES - Cloud Windows VM will be provisioned' } else { 'NO - Free Linux cloud VM will be provisioned' })"
 Write-Host "  Hardware ID:  $($payload.hardware_id)"
 Write-Host ""
 
