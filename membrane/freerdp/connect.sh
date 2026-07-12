@@ -185,10 +185,27 @@ do_connect() {
             fi
             log "FreeRDP exited with code $exit_code after ${runtime}s"
 
-            if [[ $exit_code -eq 0 ]]; then
-                log "Clean disconnect — returning to Brain picker"
-                return 0
-            fi
+            # FreeRDP3 returns the raw ERRINFO_* wire code as its exit
+            # status for a graceful, protocol-level session end (as
+            # opposed to the 128+ range used for real connection
+            # failures) -- 0 alone missed the common case of a user
+            # logging off *from inside* the remote desktop, which
+            # surfaced as a bogus "Can't reach this Brain" error instead
+            # of a silent return to the picker. Per FreeRDP's error.h:
+            #   0  ERRINFO_SUCCESS
+            #   1  ERRINFO_RPC_INITIATED_DISCONNECT
+            #   2  ERRINFO_RPC_INITIATED_LOGOFF
+            #   11 ERRINFO_RPC_INITIATED_DISCONNECT_BY_USER
+            #   12 ERRINFO_LOGOFF_BY_USER
+            # Deliberately NOT included: idle/logon timeout and
+            # disconnected-by-other-connection -- those are worth
+            # surfacing to the user, not swallowing silently.
+            case "$exit_code" in
+                0|1|2|11|12)
+                    log "Clean disconnect (exit code $exit_code) — returning to Brain picker"
+                    return 0
+                    ;;
+            esac
 
             # A session that survived at least this long before dying is
             # treated as a network drop (auto-reconnect); anything shorter
