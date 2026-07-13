@@ -90,6 +90,28 @@ nm_connect() {
     nmcli connection up "$con_name" 2>&1
 }
 
+# Which device type is actually providing connectivity right now. Not the
+# same question as coordinator.sh's have_default_route() (any route at all,
+# used only to gate whether to show this screen automatically at boot) --
+# confirmed live that reusing that generic check here mislabeled an active
+# WiFi connection as "Ethernet is connected" once Ethernet was physically
+# unplugged, because a route still existed (via WiFi), just not the one the
+# message claimed.
+active_connection_type() {
+    if nmcli -t -f TYPE,STATE device status 2>/dev/null | grep -q '^ethernet:connected$'; then
+        echo "ethernet"
+    elif nmcli -t -f TYPE,STATE device status 2>/dev/null | grep -q '^wifi:connected$'; then
+        echo "wifi"
+    fi
+}
+
+# The active connection's *name* (con-name) is "slimeos-wifi-<ssid>" (see
+# nm_connect above), not the bare SSID -- query the real broadcast SSID
+# directly instead of stripping our own naming convention back apart.
+active_wifi_ssid() {
+    nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}'
+}
+
 do_network_setup() {
     local mode="$1"
     local phase="list"
@@ -100,10 +122,11 @@ do_network_setup() {
         if [[ "$phase" == "list" ]]; then
             log "Network setup ($mode): scanning for Wi-Fi networks"
             last_scan="$(nm_scan_wifi)" || last_scan='[]'
-            local ethernet_up="false"
-            have_default_route && ethernet_up="true"
-            emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --argjson eth "$ethernet_up" \
-                '{networks:$n, scanning:false, mode:$mode, ethernetUp:$eth, skippable:($mode=="boot")}')"
+            local conn_type conn_ssid=""
+            conn_type=$(active_connection_type)
+            [[ "$conn_type" == "wifi" ]] && conn_ssid=$(active_wifi_ssid)
+            emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --arg connType "$conn_type" --arg connSsid "$conn_ssid" \
+                '{networks:$n, scanning:false, mode:$mode, connectionType:$connType, connectionSsid:$connSsid, skippable:($mode=="boot")}')"
 
             while true; do
                 local line ev_type

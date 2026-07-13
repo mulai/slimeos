@@ -27,7 +27,13 @@
                           // whenever it drops; no buttons (nothing could
                           // route an event anywhere while disconnected).
        wifiList:       { networks: [{ssid, signal, secured}], scanning: bool,
-                         mode: 'boot'|'settings', ethernetUp: bool, skippable: bool }
+                         mode: 'boot'|'settings', connectionType: ''|'ethernet'|'wifi',
+                         connectionSsid: string, skippable: bool }
+                       // connectionType/connectionSsid describe what's ACTUALLY
+                       // providing connectivity right now (queried live via
+                       // nmcli device type, not just "is there some route") --
+                       // connectionSsid is only meaningful when connectionType
+                       // is 'wifi'.
                        // mode 'boot' = shown automatically, no working network
                        // yet (Skip button, no Back). mode 'settings' = opened
                        // deliberately from the picker's gear icon while a
@@ -54,7 +60,7 @@
        SlimeUI.setState('connecting', { brainName: 'Home Office', stage: 'Waking up your Brain…' });
        SlimeUI.setState('error', { brainName: 'Home Office', message: "That password didn't work.", detail: 'ERR_AUTH_1002' });
        SlimeUI.setState('reconnecting', { brainName: 'Home Office', attempt: 2 });
-       SlimeUI.setState('wifiList', { networks: [{ssid:'HomeNet', signal:80, secured:true}], scanning:false, mode:'boot', ethernetUp:false, skippable:true });
+       SlimeUI.setState('wifiList', { networks: [{ssid:'HomeNet', signal:80, secured:true}], scanning:false, mode:'boot', connectionType:'', connectionSsid:'', skippable:true });
 
    window.SlimeUI.setStatus({ clock, tunnel })
      clock:  'HH:MM' string. Once set, the strip advances it locally every 30s.
@@ -662,7 +668,11 @@
       '<div class="screen" data-screen="wifiList">' +
         slimeBlobSVG(52, 'color', false) +
         '<h1 style="margin:20px 0 4px;font-family:var(--font-display);font-weight:700;font-size:26px;letter-spacing:-.4px;color:#F2F6FB;">Connect to Wi-Fi</h1>' +
-        '<p style="margin:0 0 24px;font-size:13.5px;color:var(--text-muted);">' + (data.ethernetUp ? 'Ethernet is connected — switch Wi-Fi networks below.' : 'This device needs a network to reach your Brain.') + '</p>' +
+        '<p style="margin:0 0 24px;font-size:13.5px;color:var(--text-muted);">' + (
+          data.connectionType === 'ethernet' ? 'Ethernet is connected — switch Wi-Fi networks below.' :
+          data.connectionType === 'wifi' ? ('Connected to ' + escapeHtml(data.connectionSsid || 'Wi-Fi') + ' — switch networks below.') :
+          'This device needs a network to reach your Brain.'
+        ) + '</p>' +
         '<div class="picker-list" id="wifiListRoot" role="list">' + rows + '</div>' +
         emptyMsg +
         '<div style="display:flex;gap:14px;margin-top:28px;">' + actions + '</div>' +
@@ -1106,13 +1116,13 @@
 
     document.addEventListener('slime:network-settings', function(){
       demoWifiMode = 'settings';
-      window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: 'settings', ethernetUp: true, skippable: false });
+      window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: 'settings', connectionType: 'ethernet', connectionSsid: '', skippable: false });
     });
 
     document.addEventListener('slime:wifi-rescan', function(){
-      window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: true, mode: demoWifiMode, ethernetUp: demoWifiMode === 'settings', skippable: demoWifiMode === 'boot' });
+      window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: true, mode: demoWifiMode, connectionType: (demoWifiMode === 'settings' ? 'ethernet' : ''), connectionSsid: '', skippable: demoWifiMode === 'boot' });
       setTimeout(function(){
-        window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: demoWifiMode, ethernetUp: demoWifiMode === 'settings', skippable: demoWifiMode === 'boot' });
+        window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: demoWifiMode, connectionType: (demoWifiMode === 'settings' ? 'ethernet' : ''), connectionSsid: '', skippable: demoWifiMode === 'boot' });
       }, 900);
     });
 
@@ -1214,7 +1224,7 @@
       // fall through to the picker below, not re-render the same screen.
       if (demoWifiSsid !== null && (current.state === 'wifiPassword' || current.state === 'wifiError')){
         demoWifiSsid = null;
-        window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: demoWifiMode, ethernetUp: demoWifiMode === 'settings', skippable: demoWifiMode === 'boot' });
+        window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: demoWifiMode, connectionType: (demoWifiMode === 'settings' ? 'ethernet' : ''), connectionSsid: '', skippable: demoWifiMode === 'boot' });
         return;
       }
       // Same shape for pairing: backing out of pairError returns to
