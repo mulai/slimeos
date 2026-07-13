@@ -61,11 +61,33 @@ nm_scan_wifi() {
 
 nm_connect() {
     local ssid="$1" password="${2:-}"
+    local con_name="slimeos-wifi-$ssid"
+    # `nmcli connection add` + `up` instead of the `device wifi connect`
+    # shortcut: that shortcut infers 802-11-wireless-security.key-mgmt from
+    # nmcli's own scan cache, which doesn't always populate reliably --
+    # confirmed on real hardware failing with "802-11-wireless-security.
+    # key-mgmt: property is missing" even with a correct password. Setting
+    # key-mgmt explicitly at profile-creation time sidesteps that detection
+    # entirely. Delete any stale profile from a previous attempt (both our
+    # own naming and the shortcut's default SSID-as-name) so retries don't
+    # collide with a half-configured leftover.
+    nmcli connection delete "$con_name" &>/dev/null || true
+    nmcli connection delete "$ssid" &>/dev/null || true
+
+    local output exit_code
     if [[ -n "$password" ]]; then
-        nmcli device wifi connect "$ssid" password "$password" 2>&1
+        output=$(nmcli connection add type wifi con-name "$con_name" ifname "*" ssid "$ssid" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" 2>&1)
     else
-        nmcli device wifi connect "$ssid" 2>&1
+        output=$(nmcli connection add type wifi con-name "$con_name" ifname "*" ssid "$ssid" 2>&1)
     fi
+    exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        echo "$output"
+        return $exit_code
+    fi
+
+    nmcli connection up "$con_name" 2>&1
 }
 
 do_network_setup() {
@@ -153,7 +175,7 @@ do_network_setup() {
             # nmcli has no fine-grained ERRCONNECT_*-style codes the way
             # FreeRDP's error.h does -- classify from its own stderr text.
             local message
-            if grep -qi 'secrets were required\|802-11-wireless-security\|no suitable device' <<<"$output"; then
+            if grep -qi 'secrets were required\|no suitable device' <<<"$output"; then
                 message="That password didn't work."
             elif grep -qi 'no network with ssid' <<<"$output"; then
                 message="That network is no longer in range."

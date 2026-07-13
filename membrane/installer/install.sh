@@ -92,13 +92,19 @@ ok "Dependencies installed"
 # ── 2. Create session user if not exists ─────────────────────────────────────
 # `render` (not just `video`) is required for GPU-accelerated rendering:
 # /dev/dri/renderD128 is group-owned by `render`, separately from card0's
-# `video` ownership. Without it, wlroots/cog silently fall back to software
-# rendering (kms_swrast) -- functional, but loses hardware acceleration.
+# `video` ownership. Without it, wlroots/cog fail outright ("Permission
+# denied" on renderD128 -> EGL init failure -> cage never starts), not just
+# fall back to software rendering.
+# The preseed's own d-i passwd/user-default-groups already creates this user
+# before install.sh ever runs, so the `useradd` branch below is frequently
+# skipped -- `usermod -aG` runs unconditionally so required groups are always
+# guaranteed regardless of which path created the user.
 if ! id "$SESSION_USER" &>/dev/null; then
     log "Creating session user '$SESSION_USER'..."
     useradd -m -s /bin/bash -G audio,video,render,netdev,sudo "$SESSION_USER"
     ok "User '$SESSION_USER' created"
 fi
+usermod -aG audio,video,render,netdev,sudo "$SESSION_USER"
 
 # slimeos-session.sh runs as $SESSION_USER (unprivileged) and logs to a file
 # for on-device troubleshooting without journalctl -- /var/log itself isn't
