@@ -110,6 +110,8 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
+    depends_on:
+      - redis
     environment:
       PUID: "1000"
       PGID: "1000"
@@ -121,10 +123,13 @@ services:
       INTERNAL_SUBNET: "10.10.0.0"
       ALLOWEDIPS: "10.10.0.0/24,10.11.0.0/24"
       LOG_CONFS: "false"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"    # used by pair-peer.sh to stash pairing codes
     volumes:
       - wireguard_config:/config
       - /lib/modules:/lib/modules:ro
       - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
+      - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
+      - ./wireguard/custom-init/10-redis-cli.sh:/custom-cont-init.d/10-redis-cli.sh:ro
     ports:
       - "${WG_PORT:-51820}:51820/udp"
     sysctls:
@@ -134,6 +139,27 @@ services:
       slimenet: {}
       vpnnet:
         ipv4_address: 10.11.0.2    # fixed — WireGuard bridges peer subnet to vpnnet
+
+  # ── Enroll — self-service WireGuard pairing endpoint ───────────────────────────
+  # Serves the one-time codes pair-peer.sh stashes in Redis. Deliberately
+  # standalone (not merged into the wireguard container): it only ever does a
+  # Redis GETDEL, so it needs no NET_ADMIN and no Docker-socket access — a
+  # compromise of this container can read/delete pair:* Redis keys and
+  # nothing else. Part of the account-free Connect path; not behind Authelia.
+  enroll:
+    build:
+      context: ./enroll
+      dockerfile: Dockerfile
+    image: slimeos/enroll:latest
+    container_name: slimeos-enroll
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    depends_on:
+      - redis
+    networks:
+      - slimenet
+    # No ports: published — reachable only via Caddy's reverse_proxy on slimenet.
 
   # ── Linux Cloud Desktop (free path / BYOL fallback) ────────────────────────────
   # Ubuntu 22.04 + xRDP + XFCE. Reachable only via WireGuard (10.10.0.0/24).

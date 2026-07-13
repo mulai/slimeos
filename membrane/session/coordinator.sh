@@ -21,17 +21,20 @@
 #   {"type":"wifiConnect","ssid":..} | {"type":"wifiPassword","password":..} | {"type":"wifiRescan"} | {"type":"wifiSkip"}
 #     (wifiConnect/wifiPassword/wifiRescan/wifiSkip only consumed by do_network_setup, see network-setup.sh —
 #      retry/reenterPassword/back are reused there too, same as do_connect does)
+#   {"type":"pairSettings"}                                  dispatched here; hands off to do_pair (see pair.sh)
+#   {"type":"pairSubmit","host":..,"code":..} | {"type":"pairSkip"}
+#     (pairSubmit/pairSkip only consumed by do_pair, see pair.sh — retry/back are reused there too)
 #   {"type":"powerShutdown"} | {"type":"powerRestart"}      already confirmed client-side (see index.html); no response emitted, the machine powers off/reboots
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
-# wifiPassword/wifiConnecting/wifiError.
+# wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError.
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -84,6 +87,13 @@ have_default_route() {
     return 0
 }
 
+# File existence, not `ip link show wg0`: this is a durable "has this device
+# already been paired" marker. Link state is transient runtime status
+# (already reported separately by send_status()'s tunnel indicator) and
+# would wrongly re-trigger the pairing screen if the interface is just
+# administratively down.
+have_wg_tunnel() { [[ -f /etc/wireguard/wg0.conf ]]; }
+
 read_event() {
     local line
     IFS= read -r line <&0 || return 1
@@ -117,13 +127,16 @@ MIN_SESSION_SECONDS=60
 source "$INSTALL_DIR/connect.sh" # defines do_connect()
 # shellcheck source=network-setup.sh
 source "$INSTALL_DIR/network-setup.sh" # defines do_network_setup()
+# shellcheck source=pair.sh
+source "$INSTALL_DIR/pair.sh" # defines do_pair()
 
-# Gates the automatic (boot-mode) network-setup screen to once per
-# coordinator process, not once per _clientConnected -- that event also
+# Gates the automatic (boot-mode) network-setup / pairing screens to once
+# per coordinator process, not once per _clientConnected -- that event also
 # fires on every WS reconnect and bridge-crash-recovery resync, which would
-# otherwise re-trigger the check (and its up-to-5s have_default_route wait)
-# on every client reattach.
+# otherwise re-trigger the checks (and network_checked's up-to-5s
+# have_default_route wait) on every client reattach.
 network_checked=false
+wg_checked=false
 
 add_brain() {
     local name="$1" host="$2" port="$3"
@@ -217,6 +230,13 @@ while true; do
                     do_network_setup boot
                 fi
             fi
+            if ! $wg_checked; then
+                wg_checked=true
+                if ! have_wg_tunnel; then
+                    log "No WireGuard tunnel configured — entering pairing (boot mode)"
+                    do_pair boot
+                fi
+            fi
             send_status
             show_picker_or_empty
             ;;
@@ -254,6 +274,11 @@ while true; do
             send_status
             show_picker_or_empty
             ;;
+        pairSettings)
+            do_pair settings
+            send_status
+            show_picker_or_empty
+            ;;
         powerShutdown)
             log "Power: shutdown requested"
             # `|| log ...` deliberately, not a bare call: a failure here (e.g.
@@ -268,12 +293,14 @@ while true; do
             ;;
         *)
             # credentials/retry/reenterPassword/cancelConnect only make
-            # sense while do_connect() is running, and wifiConnect/
+            # sense while do_connect() is running, wifiConnect/
             # wifiPassword/wifiRescan/wifiSkip (plus retry/reenterPassword/
             # back again) only make sense while do_network_setup() is
-            # running — both consume their own events directly via their
-            # own read_event() calls. Anything else (unrecognized types,
-            # stray events at the picker level) is silently ignored.
+            # running, and pairSubmit/pairSkip (plus retry/back again) only
+            # make sense while do_pair() is running — each consumes its own
+            # events directly via its own read_event() calls. Anything else
+            # (unrecognized types, stray events at the picker level) is
+            # silently ignored.
             ;;
     esac
 done

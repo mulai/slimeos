@@ -23,5 +23,14 @@ dashboard.slimeos.com {
     respond "Slime OS Dashboard — Coming Soon" 200
 }
 
+# ── WireGuard self-service pairing (account-free — no Authelia gate) ─────────
+# Membrane devices POST a short-lived pairing code here to self-enroll their
+# WireGuard tunnel, replacing manual provision-peer.sh + USB/rescue-mode
+# copying. Deliberately NOT behind Authelia/dashboard.slimeos.com — that's
+# reserved for the separate, not-yet-built "Sign in with Slime ID" path.
+enroll.slimeos.com {
+    reverse_proxy enroll:8080
+}
+
 # ── WireGuard status (internal only, not exposed publicly) ────────────────────
 # Access via: curl http://wireguard:51821 from inside slimenet

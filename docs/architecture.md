@@ -106,6 +106,46 @@ is what polkit's default NetworkManager authorization normally keys off —
 session user's own group) for `org.freedesktop.NetworkManager.*` actions,
 without which `nmcli` would silently fail with "Insufficient privileges."
 
+### WireGuard pairing
+Like network setup above, this is part of the open-source, account-free
+**Connect** path — it does not touch Authelia or `dashboard.slimeos.com`,
+which stay reserved for the separate, not-yet-built "Sign in with Slime ID"
+managed path referenced above. It replaces the previously fully-manual flow
+(admin runs `provision-peer.sh` on the Brain, hand-copies the resulting
+`wg0.conf` onto the device over USB/rescue-mode shell access) with an
+on-screen "enter a pairing code" step.
+
+`coordinator.sh` checks for an existing tunnel once per process, on the
+first `_clientConnected` event, the same way it checks for a default route:
+`have_wg_tunnel()` (a plain `/etc/wireguard/wg0.conf` existence check, not
+`ip link show wg0` — link state is transient and already reported
+separately by the tunnel status indicator) gates an automatic `do_pair
+boot` call — defined in `membrane/session/pair.sh`, `source`d the same way
+`network-setup.sh` is. A dedicated pairing icon in the status strip
+(`slime:pair-settings`) reaches the same function in `settings` mode any
+time, for re-pairing or adding a second Brain network.
+
+`do_pair()` takes a host (an enrollment endpoint, e.g. `enroll.slimeos.com`)
+and a short-lived code, entered on the new `pairEntry` screen. It POSTs the
+code to that host's `brain/enroll/` service — a small standalone Go binary
+(zero third-party dependencies, same rationale as `membrane/bridge/`, since
+it sits right next to WireGuard peer configs) that does an atomic Redis
+`GETDEL` against a code an admin generated with `brain/wireguard/
+pair-peer.sh` (single-use, 15-minute TTL — the actual security control, not
+the code's length). On success, `pair.sh` writes `/etc/wireguard/wg0.conf`
+and runs `systemctl enable --now wg-quick@wg0`; a `pairError` screen (reusing
+the existing `slime:retry`/`slime:back` events, no new ones needed) handles
+an invalid/expired code or an unreachable host.
+
+Same logind/polkit gap as network setup and power off above: `install.sh`
+drops a third polkit rule (`org.freedesktop.systemd1.manage-units` +
+`.manage-unit-files`, scoped to the `wg-quick@wg0.service` unit and
+`$SESSION_USER`) — both action IDs are required, since the first alone
+would bring the tunnel up now but silently fail to survive a reboot.
+Writing `wg0.conf` itself is a plain filesystem write, not a D-Bus action,
+so `install.sh` instead just hands `/etc/wireguard` to `$SESSION_USER`
+(same pattern as `brains.json`/`brains/`).
+
 ### Power off / restart
 A power icon in the status strip (next to the network-settings gear)
 opens a confirm modal (Restart / Shut Down / Cancel) — the same
@@ -132,6 +172,7 @@ scoped to the `$SESSION_USER` directly) authorizing it.
 | `membrane/session/coordinator.sh` | Connect screen backend — saved-Brain picker (add/select/remove), drives the kiosk UI over the bridge |
 | `membrane/freerdp/connect.sh` | FreeRDP connection function library (`do_connect`), sourced by coordinator.sh, with security flags |
 | `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
+| `membrane/session/pair.sh` | WireGuard self-pairing function library (`do_pair`), sourced by coordinator.sh |
 
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.
@@ -177,6 +218,8 @@ Internet
 |---|---|
 | `brain/docker-compose.yml` | Full stack orchestration |
 | `brain/wireguard/provision-peer.sh` | Add a new device peer, prints WireGuard config + QR code |
+| `brain/wireguard/pair-peer.sh` | Same, plus stashes the config in Redis behind a single-use pairing code for self-enrollment |
+| `brain/enroll/` | `slimeos-enroll` — account-free HTTPS endpoint serving pairing codes to Membrane devices |
 | `brain/xrdp/Dockerfile` | Ubuntu + xRDP + desktop image |
 | `brain/authelia/configuration.yml` | Zero-trust identity config |
 

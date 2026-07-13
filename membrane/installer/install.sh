@@ -138,7 +138,9 @@ curl -fsSL "$REPO_BASE/membrane/freerdp/connect.sh" \
      -o "$INSTALL_DIR/connect.sh"
 curl -fsSL "$REPO_BASE/membrane/session/network-setup.sh" \
      -o "$INSTALL_DIR/network-setup.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh"
+curl -fsSL "$REPO_BASE/membrane/session/pair.sh" \
+     -o "$INSTALL_DIR/pair.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -216,6 +218,26 @@ polkit.addRule(function(action, subject) {
 POLKIT
 ok "Power off/restart enabled for the kiosk UI"
 
+# ── 3d. Polkit rule: WireGuard pairing from the kiosk UI ─────────────────────
+# pair.sh's do_pair() calls `systemctl enable --now wg-quick@wg0` as
+# $SESSION_USER after fetching a config via the enrollment endpoint. Same
+# missing-active-session root cause as the two rules above. Two separate
+# systemd action IDs are needed, not one: manage-units covers start/stop,
+# manage-unit-files covers enable/disable (the [Install] symlink) --
+# granting only the first would bring the tunnel up now but silently fail
+# to make it survive a reboot.
+cat > /etc/polkit-1/rules.d/52-slimeos-wireguard.rules <<POLKIT
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.systemd1.manage-units" ||
+         action.id == "org.freedesktop.systemd1.manage-unit-files") &&
+        action.lookup("unit") == "wg-quick@wg0.service" &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+ok "WireGuard pairing enabled for the kiosk UI"
+
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
 bash "$INSTALL_DIR/hardware-profiles/detect.sh"
@@ -261,6 +283,16 @@ chmod 700 "$CONFIG_DIR/brains"
 # screen. /etc/slimeos itself stays root-owned -- the session user gets
 # exactly these two entries, nothing else.
 chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains"
+
+# pair.sh's do_pair() writes /etc/wireguard/wg0.conf directly as
+# $SESSION_USER once it fetches a config from the enrollment endpoint --
+# same reasoning as the brains.json/brains chown above, this is a plain
+# filesystem write, not a D-Bus action, so no polkit rule covers it.
+# wireguard-tools (already in the package list) creates /etc/wireguard on
+# install; this only needs to hand it to the session user.
+mkdir -p /etc/wireguard
+chown "$SESSION_USER:$SESSION_USER" /etc/wireguard
+chmod 700 /etc/wireguard
 
 # ── 6. Systemd service: slimeos-session ───────────────────────────────────────
 # WantedBy=multi-user.target, not graphical.target: with no display manager

@@ -13,7 +13,8 @@
    window.SlimeUI.setState(state, data)
      state: 'empty' | 'picker' | 'addBrain' | 'credentials' |
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
-            'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError'
+            'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
+            'pairEntry' | 'pairConnecting' | 'pairError'
      data per state:
        picker:       { brains: [{ id, name, host, lastConnected }] }
        credentials:  { brainName, needUsername: bool }   // false => password-only
@@ -36,6 +37,14 @@
        wifiError:      { ssid, message, detail, mode, secured: bool }
                        // secured governs whether "Re-enter password" shows —
                        // meaningless for an open network.
+       pairEntry:      { mode: 'boot'|'settings', skippable: bool }
+                       // WireGuard self-pairing (see brain/enroll/): host +
+                       // code entry. mode/skippable follow the same
+                       // boot-vs-settings convention as wifiList.
+       pairConnecting: { stage }
+       pairError:      { message, detail, mode }
+                       // No secured/re-enter-password concept here (one
+                       // secret field, not two) — just Try again / Back.
 
      Examples:
        SlimeUI.setState('picker', { brains: [
@@ -78,11 +87,16 @@
    'slime:power-shutdown'  {}                             // power icon, confirmed -- no response expected, the machine powers off
    'slime:power-restart'   {}                             // power icon, confirmed -- no response expected, the machine reboots
 
+   'slime:pair-settings'   {}                             // pairing icon: open "Pair with a Brain"
+   'slime:pair-submit'     { host, code }
+   'slime:pair-skip'       {}                             // boot mode only
+
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
    settings mode — same semantics (retry same target / re-supply secret / go
    back) as the Brain-connect flow, so no separate wifi-specific names exist
-   for those three.
+   for those three. Pairing reuses 'slime:retry' / 'slime:back' the same way
+   (no re-enter-password equivalent — pairError has only one secret field).
 
  All form state (typed name/host/password, toggles) lives only in this page.
  The password is never stored or echoed anywhere except the single
@@ -283,6 +297,7 @@
     <div class="right">
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
       <span class="settings-gear" id="btnNetworkSettings" tabindex="0" role="button" title="Network settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
+      <span class="settings-gear" id="btnPairSettings" tabindex="0" role="button" title="Pair with a Brain"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0Z"></path><path d="M4 12h2"></path><path d="M18 12h2"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
       <span class="bars"><span style="height:4px;"></span><span style="height:7px;"></span><span style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
@@ -447,6 +462,9 @@
     else if (state === 'wifiPassword') html = renderWifiPassword(data);
     else if (state === 'wifiConnecting') html = renderWifiConnecting(data);
     else if (state === 'wifiError') html = renderWifiError(data);
+    else if (state === 'pairEntry') html = renderPairEntry(data);
+    else if (state === 'pairConnecting') html = renderPairConnecting(data);
+    else if (state === 'pairError') html = renderPairError(data);
     screenRoot.innerHTML = html;
     bindScreen(state, data);
     autofocus(state);
@@ -703,6 +721,58 @@
     );
   }
 
+  function renderPairEntry(data){
+    var skippable = !!data.skippable;
+    var mode = data.mode || 'boot';
+    return (
+      '<div class="screen" data-screen="pairEntry">' +
+        '<form class="card" id="pairEntryForm" novalidate>' +
+          '<h2 class="title">Pair with a Brain</h2>' +
+          '<p style="margin:0 0 26px;font-size:13.5px;color:var(--text-muted);">Enter the enrollment address and the code your admin gave you.</p>' +
+          '<label class="field-label">Enrollment host</label>' +
+          '<input class="field" id="fieldPairHost" placeholder="e.g. enroll.slimeos.com" data-autofocus>' +
+          '<label class="field-label">Pairing code</label>' +
+          '<input class="field" id="fieldPairCode" placeholder="XXXX-XXXX" style="margin-bottom:0;font-family:var(--font-mono);text-transform:uppercase;">' +
+          '<div id="pairHostError" style="min-height:22px;margin-top:8px;font-size:12.5px;color:var(--error);"></div>' +
+          '<div style="display:flex;gap:10px;margin-top:22px;">' +
+            (mode === 'settings' ? '<button type="button" class="btn-secondary" style="flex:1;" id="btnBackFromPair">Back</button>' : '') +
+            (mode === 'boot' && skippable ? '<button type="button" class="btn-ghost" style="flex:1;" id="btnPairSkip">Skip for now</button>' : '') +
+            '<button type="submit" class="btn-primary" style="flex:1.4;padding:12px;box-shadow:none;">Pair</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>'
+    );
+  }
+
+  function renderPairConnecting(data){
+    return (
+      '<div class="screen" data-screen="pairConnecting">' +
+        '<div class="ring-wrap">' +
+          '<span class="ring"></span><span class="ring inner"></span>' +
+          slimeBlobSVG(66, 'color', false) +
+        '</div>' +
+        '<h2 style="margin:30px 0 0;font-family:var(--font-display);font-weight:700;font-size:21px;color:#F2F6FB;">Pairing</h2>' +
+        '<p style="margin:12px 0 0;font-size:14.5px;color:var(--mint);font-family:var(--font-mono);">' + escapeHtml(data.stage || 'Fetching your Brain’s configuration…') + '</p>' +
+      '</div>'
+    );
+  }
+
+  function renderPairError(data){
+    return (
+      '<div class="screen" data-screen="pairError">' +
+        '<div class="error-card">' +
+          '<span class="error-icon">!</span>' +
+          '<h2 style="margin:20px 0 0;font-family:var(--font-display);font-weight:700;font-size:19px;color:#F2F6FB;">' + escapeHtml(data.message || 'Couldn’t pair.') + '</h2>' +
+          '<div class="error-actions">' +
+            '<button class="btn-primary" style="box-shadow:none;" id="btnPairTryAgain" data-autofocus>Try again</button>' +
+            '<button class="btn-tertiary" id="btnBackFromPairError">Back</button>' +
+          '</div>' +
+          '<details class="tech"><summary>+ Technical details</summary><div class="code">' + escapeHtml(data.detail || '') + '</div></details>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   /* ===================== event binding ===================== */
 
   function bindScreen(state, data){
@@ -842,7 +912,39 @@
     }
     /* wifiConnecting has no interactive elements — nmcli connect is short and
        synchronous, unlike the long-lived xfreerdp session renderConnecting
-       guards against, so no cancel affordance is needed. */
+       guards against, so no cancel affordance is needed. pairConnecting is
+       the same shape, for the same reason. */
+    else if (state === 'pairEntry'){
+      var pform = document.getElementById('pairEntryForm');
+      var pBackBtn = document.getElementById('btnBackFromPair');
+      if (pBackBtn) pBackBtn.addEventListener('click', function(){ emit('slime:back'); });
+      var pSkipBtn = document.getElementById('btnPairSkip');
+      if (pSkipBtn) pSkipBtn.addEventListener('click', function(){ emit('slime:pair-skip'); });
+      pform.addEventListener('submit', function(e){
+        e.preventDefault();
+        var hostInput = document.getElementById('fieldPairHost');
+        var host = hostInput.value.trim();
+        var errBox = document.getElementById('pairHostError');
+        if (!host || !HOST_RE.test(host)){
+          hostInput.classList.add('error');
+          errBox.textContent = 'Enter a valid enrollment address.';
+          hostInput.focus();
+          return;
+        }
+        hostInput.classList.remove('error');
+        var code = document.getElementById('fieldPairCode').value.trim();
+        if (!code){
+          errBox.textContent = 'Enter your pairing code.';
+          return;
+        }
+        errBox.textContent = '';
+        emit('slime:pair-submit', { host: host, code: code });
+      });
+    }
+    else if (state === 'pairError'){
+      document.getElementById('btnPairTryAgain').addEventListener('click', function(){ emit('slime:retry'); });
+      document.getElementById('btnBackFromPairError').addEventListener('click', function(){ emit('slime:back'); });
+    }
   }
 
   function autofocus(state){
@@ -938,6 +1040,8 @@
     else if (s === 'addBrain' || s === 'credentials' || s === 'error' || s === 'reconnecting') emit('slime:back');
     else if (s === 'wifiPassword' || s === 'wifiError') emit('slime:back');
     else if (s === 'wifiList' && current.data && current.data.mode === 'settings') emit('slime:back');
+    else if (s === 'pairError') emit('slime:back');
+    else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
   });
 
   /* Gear icon lives in the always-present status strip, outside #screenRoot,
@@ -945,6 +1049,10 @@
   var btnNetworkSettings = document.getElementById('btnNetworkSettings');
   btnNetworkSettings.addEventListener('click', function(){ emit('slime:network-settings'); });
   btnNetworkSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:network-settings'); });
+
+  var btnPairSettings = document.getElementById('btnPairSettings');
+  btnPairSettings.addEventListener('click', function(){ emit('slime:pair-settings'); });
+  btnPairSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:pair-settings'); });
 
   var btnPower = document.getElementById('btnPower');
   btnPower.addEventListener('click', showPowerConfirm);
@@ -976,7 +1084,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:network-settings','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:network-settings','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-settings','slime:pair-submit','slime:pair-skip'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1041,6 +1149,22 @@
       if (demoWifiSsid) window.SlimeUI.setState('wifiPassword', { ssid: demoWifiSsid, mode: demoWifiMode });
     });
 
+    document.addEventListener('slime:pair-settings', function(){
+      window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
+    });
+
+    document.addEventListener('slime:pair-submit', function(){
+      var pmode = (current.data && current.data.mode) || 'settings';
+      window.SlimeUI.setState('pairConnecting', { stage: 'Fetching your Brain’s configuration…' });
+      setTimeout(function(){
+        window.SlimeUI.setState('pairError', { message: 'That code is invalid or has expired.', detail: 'invalid_or_expired (HTTP 404)', mode: pmode });
+      }, 1200);
+    });
+
+    document.addEventListener('slime:pair-skip', function(){
+      window.SlimeUI.setState('picker', { brains: demoBrains });
+    });
+
     setStatus({ clock: '14:32', tunnel: 'down' });
     window.SlimeUI.setState('picker', { brains: demoBrains });
 
@@ -1059,6 +1183,14 @@
     });
 
     document.addEventListener('slime:retry', function(){
+      if (current.state === 'pairError'){
+        window.SlimeUI.setState('pairConnecting', { stage: 'Fetching your Brain’s configuration…' });
+        setTimeout(function(){
+          setStatus({ tunnel: 'up' });
+          window.SlimeUI.setState('picker', { brains: demoBrains });
+        }, 1200);
+        return;
+      }
       if (demoWifiSsid){
         window.SlimeUI.setState('wifiConnecting', { ssid: demoWifiSsid, stage: 'Connecting\u2026' });
         setTimeout(function(){
@@ -1083,6 +1215,14 @@
       if (demoWifiSsid !== null && (current.state === 'wifiPassword' || current.state === 'wifiError')){
         demoWifiSsid = null;
         window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: demoWifiMode, ethernetUp: demoWifiMode === 'settings', skippable: demoWifiMode === 'boot' });
+        return;
+      }
+      // Same shape for pairing: backing out of pairError returns to
+      // pairEntry (not the picker); backing out of pairEntry itself falls
+      // through to the picker below.
+      if (current.state === 'pairError'){
+        var pmode = current.data.mode || 'settings';
+        window.SlimeUI.setState('pairEntry', { mode: pmode, skippable: pmode === 'boot' });
         return;
       }
       setStatus({ tunnel: 'down' });
@@ -1123,7 +1263,10 @@
       'slime:wifi-rescan': 'wifiRescan',
       'slime:wifi-skip': 'wifiSkip',
       'slime:power-shutdown': 'powerShutdown',
-      'slime:power-restart': 'powerRestart'
+      'slime:power-restart': 'powerRestart',
+      'slime:pair-settings': 'pairSettings',
+      'slime:pair-submit': 'pairSubmit',
+      'slime:pair-skip': 'pairSkip'
     };
 
     function sendEvent(type, detail){
