@@ -100,6 +100,33 @@ read_event() {
     printf '%s' "$line"
 }
 
+# do_connect()/do_network_setup()/do_pair() each take over the event loop
+# with their own blocking read_event() calls -- while any of them "owns" it,
+# an unrecognized event type (including powerShutdown/powerRestart) falls
+# into that loop's own catch-all and is silently dropped, never reaching the
+# outer dispatch's powerShutdown/powerRestart cases below. Confirmed live:
+# the power button visibly did nothing while sitting on the pairing screen.
+# Every blocking-read site in connect.sh/network-setup.sh/pair.sh checks
+# this first for any event type it doesn't itself recognize, so power off/
+# restart works from any screen, not just the idle picker. Returns 0 (and
+# acts) if it was a power event, 1 otherwise -- callers fall through to
+# their own no-op on a 1.
+try_handle_power_event() {
+    case "$1" in
+        powerShutdown)
+            log "Power: shutdown requested"
+            systemctl poweroff || log "ERROR: systemctl poweroff failed — check org.freedesktop.login1.power-off polkit rule"
+            ;;
+        powerRestart)
+            log "Power: restart requested"
+            systemctl reboot || log "ERROR: systemctl reboot failed — check org.freedesktop.login1.reboot polkit rule"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 mkdir -p "$CRED_DIR"
 chmod 700 "$CRED_DIR"
 [[ -f "$BRAINS_FILE" ]] || echo '[]' > "$BRAINS_FILE"
@@ -279,17 +306,12 @@ while true; do
             send_status
             show_picker_or_empty
             ;;
-        powerShutdown)
-            log "Power: shutdown requested"
-            # `|| log ...` deliberately, not a bare call: a failure here (e.g.
-            # the polkit rule below not authorizing it) must not crash the
+        powerShutdown|powerRestart)
+            # `|| log ...` inside the helper, not a bare call: a failure here
+            # (e.g. a polkit rule not authorizing it) must not crash the
             # whole coordinator under set -e -- same lesson as the
             # once-missing connect.log guard in connect.sh.
-            systemctl poweroff || log "ERROR: systemctl poweroff failed — check org.freedesktop.login1.power-off polkit rule"
-            ;;
-        powerRestart)
-            log "Power: restart requested"
-            systemctl reboot || log "ERROR: systemctl reboot failed — check org.freedesktop.login1.reboot polkit rule"
+            try_handle_power_event "$ev_type"
             ;;
         *)
             # credentials/retry/reenterPassword/cancelConnect only make

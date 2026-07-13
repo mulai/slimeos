@@ -91,7 +91,7 @@ do_pair() {
                     back)
                         [[ "$mode" == "settings" ]] && return 0
                         ;;
-                    *) : ;;
+                    *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done
         fi
@@ -143,7 +143,7 @@ do_pair() {
                 case "$ev_type" in
                     retry) phase="fetching"; continue 2 ;;
                     back) phase="entry"; continue 2 ;;
-                    *) : ;;
+                    *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done
         fi

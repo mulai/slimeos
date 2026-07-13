@@ -84,7 +84,7 @@ do_connect() {
                             got_creds=true
                             ;;
                         back) return 0 ;;
-                        *) : ;; # ignore anything else while waiting for credentials
+                        *) try_handle_power_event "$ev_type" || : ;; # ignore anything else while waiting for credentials
                     esac
                 done
             fi
@@ -161,6 +161,11 @@ do_connect() {
                         kill "$xpid" 2>/dev/null || true
                         cancelled=true
                         break
+                    else
+                        # A successful systemctl call here means the machine is
+                        # about to power off/reboot regardless -- no need to
+                        # kill xfreerdp ourselves, the OS shutdown handles that.
+                        try_handle_power_event "$ev_type" || :
                     fi
                 else
                     local rc=$?
@@ -226,7 +231,12 @@ do_connect() {
                     if read -t 1 -r line <&0; then
                         local ev_type
                         ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
-                        [[ "$ev_type" == "back" ]] && { backed_out=true; break; }
+                        if [[ "$ev_type" == "back" ]]; then
+                            backed_out=true
+                            break
+                        else
+                            try_handle_power_event "$ev_type" || :
+                        fi
                     else
                         local rc=$?
                         if (( rc <= 128 )); then
@@ -275,7 +285,7 @@ do_connect() {
                         continue 3
                         ;;
                     back) return 0 ;;
-                    *) : ;;
+                    *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done
         done
