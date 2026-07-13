@@ -133,10 +133,12 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 **Validated end-to-end so far:** the automated Debian preseed install (both
 UEFI and Legacy BIOS variants), the cog/WPE kiosk lock screen driving a
 real WireGuard tunnel to a cloud Brain, RDP connect through to both a
-Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding, account-free
-WireGuard self-pairing (real pairing code → real Brain, tunnel persists
-across reboot), and the on-screen power off/restart controls — all
-confirmed on real hardware, not just in a VM.
+Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding (including
+switching from Ethernet to WiFi with the network-settings screen correctly
+naming which network is active), account-free WireGuard self-pairing (real
+pairing code → real Brain, tunnel persists across reboot), and the
+on-screen power off/restart controls — all confirmed on real hardware, not
+just in a VM.
 
 Adding support for a new device = one new file in `membrane/hardware-profiles/`. See [Profile 001](membrane/hardware-profiles/001-gigabyte-h97.sh) as a template.
 
