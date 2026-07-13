@@ -226,11 +226,22 @@ ok "Power off/restart enabled for the kiosk UI"
 # manage-unit-files covers enable/disable (the [Install] symlink) --
 # granting only the first would bring the tunnel up now but silently fail
 # to make it survive a reboot.
+#
+# manage-unit-files does NOT reliably expose a per-unit action.lookup("unit")
+# detail the way manage-units does (confirmed live: a rule requiring it never
+# matched, `systemctl enable` fell through to polkit's default deny with
+# "Interactive authentication required" -- no interactive agent exists in
+# this headless kiosk, so it just failed). Scoped to $SESSION_USER only for
+# that action, not per-unit; manage-units keeps the tighter per-unit scope
+# since that one does support it.
 cat > /etc/polkit-1/rules.d/52-slimeos-wireguard.rules <<POLKIT
 polkit.addRule(function(action, subject) {
-    if ((action.id == "org.freedesktop.systemd1.manage-units" ||
-         action.id == "org.freedesktop.systemd1.manage-unit-files") &&
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
         action.lookup("unit") == "wg-quick@wg0.service" &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+    if (action.id == "org.freedesktop.systemd1.manage-unit-files" &&
         subject.user == "${SESSION_USER}") {
         return polkit.Result.YES;
     }
