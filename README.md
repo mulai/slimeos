@@ -124,7 +124,7 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 | Device | Profile | Boot mode | Status |
 |---|---|---|---|
 | Gigabyte H97-Gaming 3 / i7-4790 / 16 GB (Win 10) | 001 | UEFI | ✅ Reference device — full install → kiosk → WireGuard tunnel → RDP connect confirmed |
-| Gigabyte GA-78LMT-S2P / AMD FX-6100 / 8 GB (Win 10) | 008 | Legacy BIOS | ✅ Full install → kiosk → tunnel → RDP connect confirmed (over Ethernet); WiFi onboarding built, real-WiFi-hardware confirmation pending |
+| Gigabyte GA-78LMT-S2P / AMD FX-6100 / 8 GB (Win 10) | 008 | Legacy BIOS | ✅ Full install → kiosk → tunnel → RDP connect confirmed; mouse input, WiFi onboarding, and power off/restart all confirmed on real hardware |
 | Generic (any arch) | 000 | — | ✅ Fallback — any uncatalogued machine |
 | Huawei Mate 30 Pro (Android) | — | — | 🔄 Phase 2 |
 
@@ -132,10 +132,10 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 
 **Validated end-to-end so far:** the automated Debian preseed install (both
 UEFI and Legacy BIOS variants), the cog/WPE kiosk lock screen driving a
-real WireGuard tunnel to a cloud Brain, and RDP connect through to both a
-Linux (xRDP) and Windows Brain. WiFi onboarding and the on-screen power
-off/restart controls are implemented and logic-tested, but still await a
-live pass on real WiFi hardware and a real (non-VM) polkit check.
+real WireGuard tunnel to a cloud Brain, RDP connect through to both a
+Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding, and the
+on-screen power off/restart controls — all confirmed on real hardware,
+not just in a VM.
 
 Adding support for a new device = one new file in `membrane/hardware-profiles/`. See [Profile 001](membrane/hardware-profiles/001-gigabyte-h97.sh) as a template.
 
