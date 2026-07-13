@@ -37,7 +37,10 @@ CONFIG_FILE="$PEER_DIR/wg0.conf"
 # hand-typed on the kiosk's on-screen/physical keyboard. 8 chars ~= 40 bits
 # of entropy; combined with single-use + a short TTL below, that's plenty
 # against network brute force -- the TTL is the real control, not the length.
-CODE=$(tr -dc 'ABCDEFGHJKMNPQRSTVWXYZ23456789' < /dev/urandom | head -c 8)
+# `set +o pipefail` inside the substitution only (same fix as install.sh's
+# RECOVERY_PIN generation): head -c 8 closing early sends tr SIGPIPE, which
+# pipefail would otherwise turn into a whole-script abort under set -e.
+CODE=$(set +o pipefail; tr -dc 'ABCDEFGHJKMNPQRSTVWXYZ23456789' < /dev/urandom | head -c 8)
 CODE_DISPLAY="${CODE:0:4}-${CODE:4:4}"
 
 # TTL 900s (15 min): long enough for an admin to relay the code and the user
