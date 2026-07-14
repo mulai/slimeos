@@ -138,6 +138,18 @@ do_connect() {
             export DISPLAY="${x11_socket:+:${x11_socket#X}}"
             export DISPLAY="${DISPLAY:-:0}"
 
+            # Peripheral redirection (speaker/mic/USB storage):
+            #   /sound, /microphone — explicit `sys:alsa` because the
+            #     Membrane has no PulseAudio/PipeWire daemon installed;
+            #     ALSA talks to the kernel driver directly (session user is
+            #     in the `audio` group). Was previously /audio-mode:2
+            #     ("do not play"), which disabled sound outright.
+            #   /drive:usb,... — shares whatever udiskie (slimeos-automount.
+            #     service) has auto-mounted under /media/<user> as one
+            #     dynamic network drive in the Brain; picks up drives
+            #     plugged in mid-session without a reconnect. Encrypted
+            #     (LUKS) volumes aren't handled — no unlock-prompt UI exists
+            #     on this kiosk yet.
             set +e
             xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
@@ -148,7 +160,9 @@ do_connect() {
                 /network:"${RDP_NETWORK:-lan}" \
                 ${RES_FLAGS} \
                 /dynamic-resolution \
-                /audio-mode:2 \
+                /sound:sys:alsa \
+                /microphone:sys:alsa \
+                /drive:usb,"/media/$(id -un)" \
                 /log-level:WARN \
                 ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 &
             local xpid=$! cancelled=false

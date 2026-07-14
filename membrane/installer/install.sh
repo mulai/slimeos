@@ -72,6 +72,15 @@ fi
 # it never gets pulled in on its own -- without it, NetworkManager installs
 # and its service enables fine, but `nmcli device wifi list`/`connect` see
 # no usable WiFi device at all (network-setup.sh's do_network_setup()).
+#
+# udisks2 + udiskie: `usbmount` (the classic headless auto-mounter) no
+# longer exists in Debian trixie -- udisks2 is the modern replacement, but
+# it only exposes a D-Bus API; nothing mounts a plugged-in drive on its own
+# without a client listening for its signals. udiskie is that client (does
+# NOT need a desktop/tray -- see slimeos-automount.service below, which
+# runs it headless with --no-tray --no-notify). No new audio packages are
+# needed for /sound and /microphone in connect.sh: freerdp3-x11 already
+# depends on libasound2/libpulse0 transitively via libfreerdp-client3-3.
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -82,6 +91,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     cage cog libwpewebkit-2.0-1 wayland-utils xwayland \
     polkitd pkexec dbus dbus-user-session \
     network-manager wpasupplicant \
+    udisks2 udiskie \
     ${MICROCODE_PKGS} \
     ethtool \
     qrencode \
@@ -249,6 +259,24 @@ polkit.addRule(function(action, subject) {
 POLKIT
 ok "WireGuard pairing enabled for the kiosk UI"
 
+# ── 3e. Polkit rule: USB storage automount (udiskie) for the Brain's /drive redirect ──
+# Same missing-active-session root cause as the three rules above: udiskie
+# runs as $SESSION_USER (slimeos-automount.service, below) and calls
+# udisks2 to mount/unmount plugged-in USB drives so connect.sh's
+# /drive:usb,/media/<user> flag has something to redirect. Without this,
+# udisks2's default policy falls back to requiring an interactive
+# authentication agent, which doesn't exist in this headless kiosk, and
+# every plug-in would silently fail to mount.
+cat > /etc/polkit-1/rules.d/53-slimeos-udisks2.rules <<POLKIT
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.udisks2.") == 0 &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+ok "USB storage automount enabled for the kiosk UI"
+
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
 bash "$INSTALL_DIR/hardware-profiles/detect.sh"
@@ -380,6 +408,34 @@ WantedBy=multi-user.target
 SERVICE
 systemctl enable slimeos-bridge.service
 ok "slimeos-bridge.service enabled"
+
+# ── 6c. Systemd service: slimeos-automount (udiskie) ──────────────────────────
+# Headless USB-storage automounter for connect.sh's /drive:usb,/media/<user>
+# redirection (see the udisks2/udiskie package comment above). --no-tray:
+# no systray protocol exists in this cage/cog kiosk to host an icon in.
+# --no-notify: skips libnotify session-bus calls -- no notification daemon
+# is installed either, and none of this needs a session bus at all, only
+# the system bus (where udisks2 lives), so no RuntimeDirectory/
+# XDG_RUNTIME_DIR is needed here unlike slimeos-session.service.
+log "Installing slimeos-automount service..."
+cat > "$SYSTEMD_DIR/slimeos-automount.service" <<SERVICE
+[Unit]
+Description=Slime OS — USB storage automount (udiskie)
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+
+[Service]
+User=${SESSION_USER}
+Group=${SESSION_USER}
+ExecStart=/usr/bin/udiskie --automount --no-tray --no-notify
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-automount.service
+ok "slimeos-automount.service enabled"
 
 # ── 7. Systemd service: NIC tuning (Profile 001 only if present) ───────────────
 if [[ -f "$CONFIG_DIR/nic-tune.sh" ]]; then

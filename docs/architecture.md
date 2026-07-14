@@ -55,6 +55,30 @@ Slime OS is a two-component system:
    this). A clean logout returns `do_connect` to `coordinator.sh`, which
    shows the Connect screen again so the user can switch Brains.
 
+### Peripheral redirection
+`connect.sh`'s `xfreerdp3` invocation redirects three classes of local
+hardware into the Brain session:
+- **Speaker/mic** — `/sound:sys:alsa` + `/microphone:sys:alsa`. ALSA
+  talks to the kernel driver directly; the Membrane has no PulseAudio/
+  PipeWire daemon installed, and none is needed — `freerdp3-x11` already
+  pulls in `libasound2`/`libpulse0` transitively.
+- **USB storage** — `/drive:usb,/media/<user>`, one dynamic network
+  drive covering whatever `udiskie` (`slimeos-automount.service`) has
+  auto-mounted under `/media/<user>` at the moment, including drives
+  plugged in mid-session. Encrypted (LUKS) volumes aren't supported —
+  there's no unlock-prompt UI on this kiosk.
+- **Other USB devices** (webcams, printers, generic HID/serial) — not
+  yet wired up. FreeRDP's `urbdrc` channel (`/usb:id,dev:<vid>:<pid>`)
+  supports this but needs per-device vendor/product IDs, unlike the
+  automatic cases above; deferred until there's a concrete device to
+  test against.
+
+Both xrdp (Linux) and native Windows RDP Brains accept all three flags —
+audio and drive redirection are RDP-standard channels, not xrdp-specific
+extensions — but this hasn't yet been verified against a real xrdp Brain
+end-to-end (xrdp's channel support has historically had more gaps than a
+real Windows RDP host's).
+
 If `slimeos-bridge` itself is ever down or restarting (independent
 `Restart=always` lifecycle, deliberately not tied to cage/cog's own restart
 cycle), the lock screen shows a plain "Reconnecting to Slime OS…"
@@ -173,6 +197,7 @@ scoped to the `$SESSION_USER` directly) authorizing it.
 | `membrane/freerdp/connect.sh` | FreeRDP connection function library (`do_connect`), sourced by coordinator.sh, with security flags |
 | `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
 | `membrane/session/pair.sh` | WireGuard self-pairing function library (`do_pair`), sourced by coordinator.sh |
+| `slimeos-automount.service` (written by install.sh) | Runs `udiskie` headlessly so USB drives auto-mount under `/media/<user>` for connect.sh's `/drive` redirect |
 
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.
