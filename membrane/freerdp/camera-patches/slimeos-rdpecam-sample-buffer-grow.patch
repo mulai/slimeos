@@ -1,0 +1,18 @@
+Index: freerdp3-3.15.0+dfsg/channels/rdpecam/client/camera_device_main.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/channels/rdpecam/client/camera_device_main.c
++++ freerdp3-3.15.0+dfsg/channels/rdpecam/client/camera_device_main.c
+@@ -97,6 +97,13 @@ static UINT ecam_dev_send_sample_respons
+ 
+ 	Stream_SetPosition(stream->sampleRespBuffer, 0);
+ 
++	/* Slime OS: sampleRespBuffer is a fixed ECAM_SAMPLE_RESPONSE_BUFFER_SIZE
++	 * buffer; an uncompressed frame (e.g. 1080p YUY2 ~4.15MB) exceeds it,
++	 * so Stream_Write below wrote out of bounds and ecam_channel_write's
++	 * Stream_SealLength aborted the whole client. Grow to fit. */
++	if (!Stream_EnsureRemainingCapacity(stream->sampleRespBuffer, 3ULL + size))
++		return CHANNEL_RC_NO_MEMORY;
++
+ 	Stream_Write_UINT8(stream->sampleRespBuffer,
+ 	                   WINPR_ASSERTING_INT_CAST(uint8_t, dev->ecam->version));
+ 	Stream_Write_UINT8(stream->sampleRespBuffer, WINPR_ASSERTING_INT_CAST(uint8_t, msg));

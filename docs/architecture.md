@@ -77,7 +77,17 @@ hardware into the Brain session:
   `ntfs-3g`/`exfatprogs` are installed so NTFS/exFAT external drives
   mount too, not just FAT32. Encrypted (LUKS) volumes aren't supported —
   there's no unlock-prompt UI on this kiosk.
-- **Other USB devices** (webcams, printers, generic HID/serial) — not
+- **Webcam** — `/dvc:rdpecam` (MS-RDPECAM), **experimental, off by
+  default** (opt in with `SLIMEOS_ENABLE_CAMERA=1` in
+  `/etc/slimeos/config`). Debian's stock `freerdp3` ships without the
+  camera channel compiled in (a packaging bug — the code builds but
+  never lands in a binary package), so `install.sh` installs a
+  checksum-pinned rebuild that includes it. The channel loads and the
+  Brain sees the camera, but FreeRDP's rdpecam stream path still crashes
+  the client a few seconds into streaming (a young upstream feature with
+  several overflow bugs — see `membrane/freerdp/camera-patches/`). Left
+  wired but disabled until the upstream path stabilizes.
+- **Other USB devices** (printers, generic HID/serial) — not
   yet wired up. FreeRDP's `urbdrc` channel (`/usb:id,dev:<vid>:<pid>`)
   supports this but needs per-device vendor/product IDs, unlike the
   automatic cases above; deferred until there's a concrete device to
