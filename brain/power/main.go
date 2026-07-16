@@ -50,6 +50,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +75,11 @@ func main() {
 	rdpPort := envInt("POWER_RDP_PORT", 3389)
 	staleGrace := envInt("POWER_STALE_GRACE_SECONDS", 3600)
 	idleMinutes := envInt("POWER_IDLE_MINUTES", 20)
+	// Per-minute WireGuard transfer above this = someone is using the VM.
+	// Session-less floor is WG's own keepalives (~700 B/min); an idle-but-
+	// connected RDP session measures several KB/min. 4096 sits well clear
+	// of the floor and well under the quietest real session.
+	xferThreshold := int64(envInt("POWER_IDLE_XFER_BYTES", 4096))
 
 	if *debugConntrack != "" {
 		debugDump(*debugConntrack, *debugHost, strconv.Itoa(rdpPort), staleGrace)
@@ -86,14 +92,15 @@ func main() {
 	}
 
 	s := &server{
-		tenant:       os.Getenv("AZURE_TENANT_ID"),
-		clientID:     os.Getenv("AZURE_CLIENT_ID"),
-		clientSecret: os.Getenv("AZURE_CLIENT_SECRET"),
-		httpc:        &http.Client{Timeout: 15 * time.Second},
-		hosts:        make(map[string]*hostState),
-		rdpPort:      strconv.Itoa(rdpPort),
-		staleGrace:   staleGrace,
-		idleTarget:   idleMinutes,
+		tenant:        os.Getenv("AZURE_TENANT_ID"),
+		clientID:      os.Getenv("AZURE_CLIENT_ID"),
+		clientSecret:  os.Getenv("AZURE_CLIENT_SECRET"),
+		httpc:         &http.Client{Timeout: 15 * time.Second},
+		hosts:         make(map[string]*hostState),
+		rdpPort:       strconv.Itoa(rdpPort),
+		staleGrace:    staleGrace,
+		idleTarget:    idleMinutes,
+		xferThreshold: xferThreshold,
 	}
 	for host, ref := range vms {
 		s.hosts[host] = &hostState{ref: ref}
@@ -205,6 +212,9 @@ type hostState struct {
 	idleTicks     int
 	stoppedTicks  int
 	lastLogged    string // last state we logged (log transitions, not ticks)
+	peerKey       string // WireGuard public key owning this host/32 (cached)
+	lastXfer      int64  // rx+tx at the previous watchdog tick
+	xferValid     bool   // lastXfer holds a real reading (not first tick)
 }
 
 type server struct {
@@ -215,6 +225,7 @@ type server struct {
 	staleGrace                     int
 	idleTarget                     int
 	maxEstablished                 int
+	xferThreshold                  int64
 
 	mu     sync.Mutex
 	tok    string
@@ -582,7 +593,42 @@ func parseConntrackLine(line, dstIP, dstPort string, maxTimeout, staleGrace int)
 
 // countActiveRDP counts live RDP flows to host. Any error is returned as
 // an error — never as a fake zero, which the watchdog would act on.
+//
+// Reads the table up to three times (400ms apart) and returns the MAXIMUM:
+// /proc/net/nf_conntrack is a racy iteration over a live hash table and
+// can transiently return an incomplete — even empty — view while entries
+// exist. Observed live 2026-07-16: a 15s-interval recorder caught a read
+// with zero 3389 entries sandwiched between two reads showing the same
+// healthy ESTABLISHED session, and a run of such misses made the watchdog
+// deallocate a VM out from under a connected user. A single read saying
+// "zero" is therefore never believed on its own.
 func (s *server) countActiveRDP(host string) (int, error) {
+	best := 0
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(400 * time.Millisecond)
+		}
+		n, err := s.countActiveRDPOnce(host)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lastErr = nil
+		if n > best {
+			best = n
+		}
+		if best > 0 {
+			return best, nil // any positive read proves life; stop early
+		}
+	}
+	if lastErr != nil {
+		return 0, lastErr
+	}
+	return best, nil
+}
+
+func (s *server) countActiveRDPOnce(host string) (int, error) {
 	f, err := os.Open(conntrackPath)
 	if err != nil {
 		return 0, err
@@ -600,6 +646,72 @@ func (s *server) countActiveRDP(host string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// ── Second, independent idle signal: WireGuard peer transfer counters ───────
+// `wg show wg0 ...` speaks netlink (deterministic, no procfs iteration
+// race — this is why it exists here) and needs CAP_NET_ADMIN, which
+// docker-compose grants this container. An idle-but-connected RDP session
+// still moves kilobytes per minute through the peer (session heartbeats —
+// measured live: the conntrack entry's timeout refreshes every second or
+// two even with zero user input), while a session-less VM peer moves only
+// WireGuard's own 25s persistent-keepalives (~700 B/min). The threshold
+// between them is generous on both sides.
+
+// wgPeerKey finds the public key of the peer that owns host/32, resolved
+// once and cached (peer identity doesn't change while we run).
+func (s *server) wgPeerKey(host string, hs *hostState) (string, error) {
+	s.mu.Lock()
+	if hs.peerKey != "" {
+		k := hs.peerKey
+		s.mu.Unlock()
+		return k, nil
+	}
+	s.mu.Unlock()
+
+	out, err := exec.Command("wg", "show", "wg0", "allowed-ips").Output()
+	if err != nil {
+		return "", fmt.Errorf("wg show allowed-ips: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		for _, ip := range fields[1:] {
+			if ip == host+"/32" {
+				s.mu.Lock()
+				hs.peerKey = fields[0]
+				s.mu.Unlock()
+				return fields[0], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no WireGuard peer owns %s/32", host)
+}
+
+// peerTransferTotal returns rx+tx bytes for the host's peer.
+func (s *server) peerTransferTotal(host string, hs *hostState) (int64, error) {
+	key, err := s.wgPeerKey(host, hs)
+	if err != nil {
+		return 0, err
+	}
+	out, err := exec.Command("wg", "show", "wg0", "transfer").Output()
+	if err != nil {
+		return 0, fmt.Errorf("wg show transfer: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == key {
+			rx, err1 := strconv.ParseInt(fields[1], 10, 64)
+			tx, err2 := strconv.ParseInt(fields[2], 10, 64)
+			if err1 != nil || err2 != nil {
+				return 0, fmt.Errorf("unparseable transfer line %q", line)
+			}
+			return rx + tx, nil
+		}
+	}
+	return 0, fmt.Errorf("peer %s not in transfer output", key)
 }
 
 // ── Watchdog ─────────────────────────────────────────────────────────────────
@@ -665,29 +777,56 @@ func (s *server) watchdog() {
 				hs.stoppedTicks = 0
 				s.mu.Unlock()
 
-				flows, err := s.countActiveRDP(host)
-				if err != nil {
-					// Never deallocate blind. Warn once, not every minute.
-					if !conntrackWarned {
-						log.Printf("conntrack unreadable (%v) — idle auto-deallocate DISABLED until it recovers", err)
-						conntrackWarned = true
-					}
-					continue
+				// Two INDEPENDENT idle signals; the VM is only ever
+				// considered idle when both are readable and both agree.
+				// One unreadable/ambiguous signal = hold power as-is.
+				flows, ferr := s.countActiveRDP(host)
+				if ferr != nil && !conntrackWarned {
+					log.Printf("conntrack unreadable (%v) — holding power state until it recovers", ferr)
+					conntrackWarned = true
 				}
-				conntrackWarned = false
+				if ferr == nil {
+					conntrackWarned = false
+				}
 
+				xfer, xerr := s.peerTransferTotal(host, hs)
+				var xferDelta int64 = -1 // -1 = unknown
 				s.mu.Lock()
+				if xerr == nil {
+					if hs.xferValid {
+						xferDelta = xfer - hs.lastXfer
+						if xferDelta < 0 {
+							// Counter reset (wg0 re-created) — unknown.
+							xferDelta = -1
+						}
+					}
+					hs.lastXfer = xfer
+					hs.xferValid = true
+				} else {
+					hs.xferValid = false
+				}
+
+				active := (ferr == nil && flows > 0) || xferDelta > s.xferThreshold
+				bothIdle := ferr == nil && flows == 0 &&
+					xferDelta >= 0 && xferDelta <= s.xferThreshold
+
 				switch {
-				case flows > 0:
+				case active:
 					hs.idleTicks = 0
 				case time.Since(hs.lastWake) < idleWindow:
 					// Post-wake grace: a freshly started VM has zero flows
 					// while Windows boots and the user types a password.
-				default:
+				case bothIdle:
 					hs.idleTicks++
+				default:
+					// One or both signals unknown — fail safe, no progress
+					// toward deallocation.
 				}
 				fire := hs.idleTicks >= s.idleTarget
 				s.mu.Unlock()
+				if xerr != nil {
+					log.Printf("wg transfer unreadable for %s: %v", host, xerr)
+				}
 
 				if fire {
 					// Final fresh read immediately before acting: shrinks
@@ -696,7 +835,7 @@ func (s *server) watchdog() {
 					if err != nil || again > 0 {
 						continue
 					}
-					log.Printf("%s idle for %dm — deallocating %s", host, s.idleTarget, hs.ref.name)
+					log.Printf("%s idle for %dm (flows=0, wg delta ≤ %dB/min) — deallocating %s", host, s.idleTarget, s.xferThreshold, hs.ref.name)
 					if err := s.deallocateVM(hs); err != nil {
 						log.Printf("deallocate %s failed: %v", host, err)
 					}

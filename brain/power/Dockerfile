@@ -19,6 +19,9 @@ COPY go.mod main.go ./
 RUN CGO_ENABLED=0 go build -o /slimeos-power .
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+# wireguard-tools: the idle watchdog's second signal is `wg show wg0
+# transfer` (netlink — immune to the /proc/net/nf_conntrack iteration
+# race that once produced a false-idle deallocation under a live session).
+RUN apk add --no-cache ca-certificates wireguard-tools
 COPY --from=build /slimeos-power /usr/local/bin/slimeos-power
 ENTRYPOINT ["/usr/local/bin/slimeos-power"]

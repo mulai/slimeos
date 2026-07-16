@@ -161,6 +161,14 @@ services:
     container_name: slimeos-power
     restart: unless-stopped
     network_mode: service:wireguard
+    # NET_ADMIN: solely for read-only `wg show wg0 transfer` (netlink
+    # requires it even for reads) — the watchdog's second idle signal,
+    # added after /proc/net/nf_conntrack was caught returning transiently
+    # empty views and deallocating a VM under a live session. Capabilities
+    # are per-process, not per-netns, so sharing wireguard's namespace
+    # alone doesn't grant this.
+    cap_add:
+      - NET_ADMIN
     depends_on:
       - wireguard
     environment:
