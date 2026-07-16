@@ -72,19 +72,32 @@ send_status() {
     emit_status "$clock" "$tunnel"
 }
 
-# Used both to gate the automatic network-setup screen (see network_checked
-# below) and by network-setup.sh's own wifiList "ethernetUp" hint. A short
-# retry window (not an instant single check) avoids a false "offline"
-# reading on a slow-negotiating Ethernet link right at boot — same shape as
-# slimeos-session.sh's own MAX_WAIT wait for wg0.
+# Used to gate the automatic network-setup screen (see network_checked
+# below). A retry window (not an instant single check) avoids a false
+# "offline" reading on a link that's still coming up right at boot — same
+# shape as slimeos-session.sh's own MAX_WAIT wait for wg0. Callers pick the
+# window: Ethernet negotiates within a few seconds, but WiFi
+# (firmware load + scan + WPA handshake + DHCP) routinely needs 10-30s, so
+# a saved WiFi profile that WOULD autoconnect loses a short race and the
+# setup screen re-appears on every boot asking for a network the device
+# already knows — confirmed on real hardware.
 have_default_route() {
-    local waited=0
+    local max_wait="${1:-5}" waited=0
     while [[ -z "$(ip route show default 2>/dev/null)" ]]; do
-        (( waited >= 5 )) && return 1
+        (( waited >= max_wait )) && return 1
         sleep 1
         waited=$((waited + 1))
     done
     return 0
+}
+
+# Whether NetworkManager already holds a WiFi profile it will bring up on
+# its own (autoconnect defaults to yes for profiles nm_connect() creates).
+# Read-only nmcli query — allowed for any user by default polkit policy, no
+# custom rule needed.
+have_saved_wifi_profile() {
+    nmcli -t -f TYPE,AUTOCONNECT connection show 2>/dev/null \
+        | grep -q '^802-11-wireless:yes$'
 }
 
 # File existence, not `ip link show wg0`: this is a durable "has this device
@@ -252,7 +265,13 @@ while true; do
             log "Client connected — resyncing"
             if ! $network_checked; then
                 network_checked=true
-                if ! have_default_route; then
+                # Give a saved WiFi profile time to autoconnect before
+                # concluding the device is offline (see have_default_route's
+                # comment); a device with no saved WiFi keeps the short
+                # window so first-boot onboarding still appears promptly.
+                route_wait=5
+                have_saved_wifi_profile && route_wait=30
+                if ! have_default_route "$route_wait"; then
                     log "No default route detected — entering network setup (boot mode)"
                     do_network_setup boot
                 fi
