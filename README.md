@@ -137,10 +137,12 @@ Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding (including
 switching from Ethernet to WiFi with the network-settings screen correctly
 naming which network is active), account-free WireGuard self-pairing (real
 pairing code → real Brain, tunnel persists across reboot), the
-on-screen power off/restart controls, and peripheral redirection into a
+on-screen power off/restart controls, peripheral redirection into a
 Windows Brain (local speakers, a USB microphone, and hot-plugged USB
-storage all working inside the remote session) — all confirmed on real
-hardware, not just in a VM.
+storage all working inside the remote session), and cloud Brain power
+management (an idle Azure VM deallocates itself to stop billing and
+wakes automatically on connect, ~2 minutes to desktop) — all confirmed
+on real hardware, not just in a VM.
 
 Adding support for a new device = one new file in `membrane/hardware-profiles/`. See [Profile 001](membrane/hardware-profiles/001-gigabyte-h97.sh) as a template.
 
