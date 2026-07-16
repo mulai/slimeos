@@ -18,8 +18,14 @@ SLIMEOS_KERNEL_EXTRA="quiet"
 SLIMEOS_COMPOSITOR_RENDERER=""
 
 # ── FreeRDP performance flags ─────────────────────────────────────────────────
-# Conservative codec set — works on all GPUs
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:broadband /gfx:rfx /bpp:32"
+# AVC444 (H.264) over the GFX pipeline. Decode is pure CPU via libavcodec
+# (no GPU requirement — Debian's freerdp3 always links it), so this is as
+# universal as the old /gfx:rfx while producing a far lighter stream for
+# video/animation-heavy sessions; Brains without GFX/H.264 (xrdp 0.9)
+# negotiate down harmlessly. No /network flag here: it would silently
+# override the config file's RDP_NETWORK setting (later flag wins on the
+# xfreerdp3 command line).
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
 
 # Export for use by connect.sh
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
