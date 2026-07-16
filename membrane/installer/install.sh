@@ -111,6 +111,38 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     2>/dev/null
 ok "Dependencies installed"
 
+# ── 1b. FreeRDP camera-channel rebuild (rdpecam) ──────────────────────────────
+# Debian trixie's freerdp3 archive binaries ship WITHOUT the rdpecam
+# camera channel even though debian/rules enables it — the plugin
+# compiles fine from the very same deb13u3 source (verified 2026-07-16),
+# it just never made it into the archive build. Until Debian ships a
+# fixed build, install our unmodified rebuild of that exact source
+# (version-bumped +slimeos1 so apt prefers it), checksum-pinned below.
+# connect.sh's /dvc:rdpecam webcam redirection is inert without this.
+#
+# ⚠ A future Debian point release (deb13u4+) sorts HIGHER than
+# +slimeos1: an apt upgrade would replace these and silently drop camera
+# support again. When that happens, rebuild from the new source and bump
+# (procedure in the release notes at $FREERDP_REL below).
+FREERDP_REL="https://github.com/mulai/slimeos/releases/download/freerdp3-camera-slimeos1"
+if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
+    log "Installing FreeRDP camera-channel rebuild..."
+    FREERDP_TMP=$(mktemp -d)
+    while IFS='  ' read -r sum deb; do
+        curl -fsSL -o "$FREERDP_TMP/$deb" "$FREERDP_REL/$deb"
+        echo "$sum  $FREERDP_TMP/$deb" | sha256sum -c - >/dev/null
+    done <<'DEBSUMS'
+004c858957e1a36efcea439f00cde79198f72b2941edd927d039753b0bffa02f  freerdp3-x11_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
+f316b47218257d0149ac48c33a0b3a8cb5f8043785bb68d8479c3b508c238672  libfreerdp-client3-3_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
+be8c252b2fee85e5014d34a92e314c49cadba521b5b5952ca4123b5e9e51b51b  libfreerdp3-3_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
+DEBSUMS
+    dpkg -i "$FREERDP_TMP"/*.deb
+    rm -rf "$FREERDP_TMP"
+    ok "FreeRDP camera-channel rebuild installed (+slimeos1)"
+else
+    log "Non-amd64 architecture — skipping camera rebuild (no prebuilt debs); webcam redirection unavailable"
+fi
+
 # ── 2. Create session user if not exists ─────────────────────────────────────
 # `render` (not just `video`) is required for GPU-accelerated rendering:
 # /dev/dri/renderD128 is group-owned by `render`, separately from card0's
