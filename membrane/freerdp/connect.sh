@@ -278,20 +278,22 @@ do_connect() {
                 log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
             fi
 
-            # Webcam redirection (MS-RDPECAM, /dvc:rdpecam): a proper
-            # protocol-level channel — the camera appears as a native
-            # device in the Brain, unlike raw USB forwarding (urbdrc),
-            # which is unusable for cameras over a WAN tunnel. Compiled
-            # into Debian's freerdp3 since 3.12.0 (trixie ships newer);
-            # loaded only when a V4L2 device actually exists — the
-            # session user is in the `video` group (install.sh). Known
-            # upstream wrinkle: some cameras negotiate H264 poorly
-            # (FreeRDP#11198) — if the camera shows up in Windows but
-            # renders black, check connect.log for rdpecam format errors.
+            # Webcam redirection (MS-RDPECAM, /dvc:rdpecam) — OPT-IN,
+            # default OFF. The channel works (Windows sees the camera and
+            # requests frames), but FreeRDP 3.15's rdpecam sample path has
+            # a bug that SIGABRTs the whole client seconds after streaming
+            # starts (Stream write out of bounds in
+            # ecam_dev_send_sample_response; confirmed live 2026-07-16,
+            # matches the still-churning upstream rdpecam fixes — e.g.
+            # FreeRDP#11198/#11990). A crash here kills the entire RDP
+            # session, so it must never be on by default: a plugged-in
+            # webcam would otherwise crash-loop every connection. Enable
+            # per-device once the stream path is stable by setting
+            # SLIMEOS_ENABLE_CAMERA=1 in /etc/slimeos/config.
             local cam_flag=""
-            if compgen -G "/dev/video*" >/dev/null; then
+            if [[ "${SLIMEOS_ENABLE_CAMERA:-0}" == "1" ]] && compgen -G "/dev/video*" >/dev/null; then
                 cam_flag="/dvc:rdpecam"
-                log "Camera device present — enabling webcam redirection (rdpecam)"
+                log "Camera device present and SLIMEOS_ENABLE_CAMERA=1 — enabling webcam redirection (experimental)"
             fi
 
             # Peripheral redirection (speaker/mic/USB storage):
