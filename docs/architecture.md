@@ -268,13 +268,24 @@ Windows VM and no Membrane-side configuration:
   "Brain is up — starting the desktop…" while Windows boots
   (wake-to-desktop is typically 1–2 minutes).
 - **Idle auto-deallocate** — the service shares the WireGuard container's
-  network namespace, so `/proc/net/nf_conntrack` there shows every
-  forwarded Membrane→Brain RDP flow. A watchdog deallocates the VM after
-  `POWER_IDLE_MINUTES` (default 20) with zero live flows. Conntrack
-  entries carry a decaying timeout refreshed by every packet, and the
-  watchdog ignores entries with no packets for over an hour — so a
-  Membrane that was hard-powered-off mid-session can't hold the VM
-  awake for the kernel's 5-day entry lifetime.
+  network namespace and requires **two independent signals to both say
+  idle**, every minute for `POWER_IDLE_MINUTES` (default 20), before
+  acting:
+  1. Zero live RDP flows in `/proc/net/nf_conntrack` (read three times
+     per check — this file is a racy iteration over a live hash table
+     and was caught live returning a transiently *empty* view while a
+     session's entry demonstrably existed, which once deallocated a VM
+     under a connected user). Entries carry a decaying timeout refreshed
+     by every packet; the watchdog ignores entries with no packets for
+     over an hour, so a Membrane hard-powered-off mid-session can't hold
+     the VM awake for the kernel's 5-day entry lifetime.
+  2. The VM peer's WireGuard transfer counters (`wg show wg0 transfer`,
+     netlink — immune to the procfs race) moving less than
+     `POWER_IDLE_XFER_BYTES` (default 4096) per minute. Measured live:
+     an idle-but-connected session moves ~15 KB/min; a session-less
+     peer only WireGuard's own keepalives (~700 B/min).
+  Either signal unreadable or ambiguous ⇒ no progress toward
+  deallocation.
 - **Guest shutdown coverage** — a VM shut down from inside Windows stays
   allocated (and billed) on Azure; the watchdog deallocates it.
 
