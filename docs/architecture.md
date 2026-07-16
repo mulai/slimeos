@@ -248,6 +248,55 @@ Internet
 | Life-Dev | 8 | 16 GB | — | Development workloads |
 | Life-Lite | 2 | 4 GB | — | Schoolwork / light use |
 
+Measured floor (real hardware, 2026-07-16): full-screen video playback
+needs 4 vCPU — on 2 vCPU the VM's own video decode and the RDP encode
+saturate both cores and playback is choppy regardless of codec.
+
+### Cloud Brain power management (auto-deallocate / wake-on-connect)
+
+A cloud Brain that runs 24/7 bills 24/7. The `power` service
+(`brain/power/`, in docker-compose) closes that gap with no agent on the
+Windows VM and no Membrane-side configuration:
+
+- **Wake-on-connect** — before every RDP attempt, `connect.sh`
+  (`wake_brain()`) POSTs the Brain's host to
+  `http://10.10.0.1:7677/wake`. Unmanaged hosts return `{managed:false}`
+  instantly; hubs without the service refuse the connection — both fall
+  through to the normal connect path. For a managed, powered-off VM the
+  service issues an ARM start while the lock screen shows
+  "Waking up your Brain… (about a minute)", then
+  "Brain is up — starting the desktop…" while Windows boots
+  (wake-to-desktop is typically 1–2 minutes).
+- **Idle auto-deallocate** — the service shares the WireGuard container's
+  network namespace, so `/proc/net/nf_conntrack` there shows every
+  forwarded Membrane→Brain RDP flow. A watchdog deallocates the VM after
+  `POWER_IDLE_MINUTES` (default 20) with zero live flows. Conntrack
+  entries carry a decaying timeout refreshed by every packet, and the
+  watchdog ignores entries with no packets for over an hour — so a
+  Membrane that was hard-powered-off mid-session can't hold the VM
+  awake for the kernel's 5-day entry lifetime.
+- **Guest shutdown coverage** — a VM shut down from inside Windows stays
+  allocated (and billed) on Azure; the watchdog deallocates it.
+
+Security model: the listener binds the WireGuard interface address
+explicitly, so **being a tunnel peer is the authentication** — the same
+model as RDP itself. It is deliberately not exposed through Caddy (a
+public unauthenticated VM-start endpoint invites cost-griefing), and no
+stop/deallocate HTTP endpoint exists at all: a hostile peer could at
+worst keep the VM awake. Azure credentials are a service principal
+scoped to the single VM, living only in the hub's `.env`.
+
+Fail-safe posture: unreadable conntrack, an absent PowerState, ARM/token
+errors, or the service being down all mean "leave power alone" — the
+failure mode is a higher bill, never a killed session.
+
+⚠ Azure operational notes: deallocation **destroys the temporary disk
+(`D:\`)** — treat it as scratch space only; dynamic IPs are released
+(harmless here — the VM's WireGuard dials out and the NSG has zero
+inbound rules); the service principal's client secret expires (default
+1 year) — record the date, since an expired secret stops both wakes and
+auto-deallocation.
+
 ### Infrastructure files
 | File | Purpose |
 |---|---|
@@ -255,6 +304,7 @@ Internet
 | `brain/wireguard/provision-peer.sh` | Add a new device peer, prints WireGuard config + QR code |
 | `brain/wireguard/pair-peer.sh` | Same, plus stashes the config in Redis behind a single-use pairing code for self-enrollment |
 | `brain/enroll/` | `slimeos-enroll` — account-free HTTPS endpoint serving pairing codes to Membrane devices |
+| `brain/power/` | `slimeos-power` — cloud Brain auto-deallocate + wake-on-connect (tunnel-only, port 7677) |
 | `brain/xrdp/Dockerfile` | Ubuntu + xRDP + desktop image |
 | `brain/authelia/configuration.yml` | Zero-trust identity config |
 

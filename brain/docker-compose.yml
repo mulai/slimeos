@@ -6,6 +6,8 @@ name: slimeos-brain
 #   caddy       — TLS termination + reverse proxy
 #   authelia    — MFA / zero-trust identity gateway
 #   wireguard   — VPN gateway (UDP 51820); RDP never exposed directly
+#   power       — cloud Brain auto-deallocate / wake-on-connect (tunnel-only)
+#   enroll      — self-service WireGuard pairing endpoint
 #   desktop     — Ubuntu xRDP Linux cloud desktop VM (free path / BYOL fallback)
 #   redis       — Authelia session store
 #   postgres    — Authelia + Slime API persistent store
@@ -139,6 +141,34 @@ services:
       slimenet: {}
       vpnnet:
         ipv4_address: 10.11.0.2    # fixed — WireGuard bridges peer subnet to vpnnet
+
+  # ── Power — cloud Brain auto-deallocate / wake-on-connect ──────────────────────
+  # network_mode joins the WireGuard container's network namespace, doing
+  # double duty: (1) the service binds 10.10.0.1:7677 on wg0, so being a
+  # WireGuard peer IS the authentication — same model as RDP itself; it is
+  # deliberately NOT behind Caddy (a public unauthenticated VM-start
+  # endpoint is cost-griefing surface). (2) that namespace's
+  # /proc/net/nf_conntrack shows the forwarded Membrane→Brain RDP flows
+  # the idle watchdog counts. No cap_add needed: reading conntrack via
+  # procfs needs only root-in-namespace, not NET_ADMIN.
+  # NOTE: network_mode is mutually exclusive with networks:/ports:/
+  # hostname: — compose errors out if they're combined.
+  power:
+    build:
+      context: ./power
+      dockerfile: Dockerfile
+    image: slimeos/power:latest
+    container_name: slimeos-power
+    restart: unless-stopped
+    network_mode: service:wireguard
+    depends_on:
+      - wireguard
+    environment:
+      AZURE_TENANT_ID: "${AZURE_TENANT_ID:-}"
+      AZURE_CLIENT_ID: "${AZURE_CLIENT_ID:-}"
+      AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
+      POWER_VMS: "${POWER_VMS:-}"              # empty = service runs, manages nothing
+      POWER_IDLE_MINUTES: "${POWER_IDLE_MINUTES:-20}"
 
   # ── Enroll — self-service WireGuard pairing endpoint ───────────────────────────
   # Serves the one-time codes pair-peer.sh stashes in Redis. Deliberately

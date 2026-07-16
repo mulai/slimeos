@@ -34,6 +34,102 @@ usb_capture_card() {
     return 1
 }
 
+# Wake a managed cloud Brain before attempting RDP. The hub's power
+# service (brain/power, http://10.10.0.1:7677 — plain HTTP over the
+# tunnel, so Membrane clock drift can't break a TLS handshake here)
+# auto-deallocates idle cloud VMs to stop them billing 24/7; this is the
+# other half. Zero device config: unmanaged hosts answer {managed:false}
+# instantly, and hubs without the service refuse the connection outright
+# (an RST, not the 3s timeout) — both fall through to exactly the
+# behavior that existed before this feature.
+#
+# Polls POST /wake (idempotent), NOT a read-only status endpoint: if the
+# first call lands while the VM is still deallocating (user reconnecting
+# right after the idle watchdog fired), only a later /wake can issue the
+# start once deallocation completes.
+#
+# Returns 0 → proceed to the xfreerdp attempt (including on wake failure/
+# timeout — xfreerdp then fails fast into the existing error screen);
+# 1 → user backed out (cancel/back). Note an issued ARM start can't be
+# cancelled: the VM boots anyway and the hub's idle watchdog reaps it.
+wake_brain() {
+    local vm_host="$1" vm_port="$2" brain_name="$3"
+    # Overridable via /etc/slimeos/config for hubs on a different subnet
+    # (and for the local test harness).
+    local power_url="${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}"
+    local body response managed state rc line ev_type
+    body=$(jq -nc --arg h "$vm_host" '{host:$h}')
+
+    set +e
+    response=$(curl -fsS -m 3 -X POST -H 'Content-Type: application/json' \
+        -d "$body" "${power_url}/wake" 2>/dev/null)
+    rc=$?
+    set -e
+    (( rc != 0 )) && return 0
+    managed=$(jq -r '.managed // false' <<<"$response" 2>/dev/null || echo false)
+    [[ "$managed" != "true" ]] && return 0
+    state=$(jq -r '.state // "unknown"' <<<"$response" 2>/dev/null || echo unknown)
+    [[ "$state" == "running" ]] && return 0
+    log "Brain ${brain_name} is ${state} — waking it"
+
+    emit_state connecting "$(jq -nc --arg n "$brain_name" \
+        '{brainName:$n,stage:"Waking up your Brain… (about a minute)"}')"
+
+    local waited=0
+    while (( waited < 300 )); do
+        # 1s event-responsive slices, same shape as the reconnect-wait
+        # loop below: cancel/back/power events must work mid-wake.
+        if read -t 1 -r line <&0; then
+            ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
+            case "$ev_type" in
+                cancelConnect|back) return 1 ;;
+                *) try_handle_power_event "$ev_type" || : ;;
+            esac
+        else
+            rc=$?
+            if (( rc <= 128 )); then
+                log "stdin closed during wake wait — exiting"
+                exit 0
+            fi
+        fi
+        waited=$((waited + 1))
+        (( waited % 5 != 0 )) && continue
+
+        set +e
+        response=$(curl -fsS -m 3 -X POST -H 'Content-Type: application/json' \
+            -d "$body" "${power_url}/wake" 2>/dev/null)
+        rc=$?
+        set -e
+        (( rc != 0 )) && continue      # transient hub blip — keep waiting
+        state=$(jq -r '.state // "unknown"' <<<"$response" 2>/dev/null || echo unknown)
+        [[ "$state" == "failed" ]] && break
+        [[ "$state" != "running" ]] && continue
+
+        # ARM "running" ≠ RDP-ready: Windows still boots for a while.
+        # Probe the actual port; `timeout 2` caps the filtered/black-hole
+        # hang bash's /dev/tcp is otherwise capable of (refusal while
+        # booting returns instantly).
+        log "Brain ${brain_name} is up — waiting for the desktop to listen"
+        emit_state connecting "$(jq -nc --arg n "$brain_name" \
+            '{brainName:$n,stage:"Brain is up — starting the desktop…"}')"
+        while (( waited < 300 )); do
+            if timeout 2 bash -c "exec 3<>/dev/tcp/${vm_host}/${vm_port}" 2>/dev/null; then
+                return 0
+            fi
+            if read -t 1 -r line <&0; then
+                ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
+                case "$ev_type" in
+                    cancelConnect|back) return 1 ;;
+                    *) try_handle_power_event "$ev_type" || : ;;
+                esac
+            fi
+            waited=$((waited + 3))
+        done
+        break
+    done
+    return 0
+}
+
 do_connect() {
     local brain_id="$1"
     local brain_json
@@ -122,6 +218,18 @@ do_connect() {
         while true; do
             emit_state connecting "$(jq -nc --arg n "$brain_name" \
                 '{brainName:$n,stage:"Waking up your Brain…"}')"
+
+            # Wake-on-connect for managed cloud Brains (no-op for everything
+            # else — see wake_brain above). Placed before log_offset/SECONDS
+            # so wake time never counts toward MIN_SESSION_SECONDS. Runs on
+            # every attempt-loop iteration: error-screen retries and
+            # post-drop reconnects wake the VM too (a drop *because* Azure
+            # rebooted the VM heals itself here).
+            if ! wake_brain "$vm_host" "$vm_port" "$brain_name"; then
+                log "Connect cancelled during Brain wake"
+                return 0
+            fi
+
             log "Connecting to ${brain_name} (${vm_host}:${vm_port}) as ${slime_username}"
             # First-ever connect on a fresh install: nothing creates this file
             # ahead of time (it's only ever opened via the xfreerdp3 `>>`
