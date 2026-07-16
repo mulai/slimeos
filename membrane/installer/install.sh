@@ -95,7 +95,7 @@ log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
     sudo ufw apparmor apparmor-utils \
-    systemd-resolved \
+    systemd-resolved systemd-timesyncd \
     wireguard wireguard-tools \
     freerdp3-x11 \
     cage cog libwpewebkit-2.0-1 wayland-utils xwayland \
