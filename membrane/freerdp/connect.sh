@@ -278,6 +278,22 @@ do_connect() {
                 log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
             fi
 
+            # Webcam redirection (MS-RDPECAM, /dvc:rdpecam): a proper
+            # protocol-level channel — the camera appears as a native
+            # device in the Brain, unlike raw USB forwarding (urbdrc),
+            # which is unusable for cameras over a WAN tunnel. Compiled
+            # into Debian's freerdp3 since 3.12.0 (trixie ships newer);
+            # loaded only when a V4L2 device actually exists — the
+            # session user is in the `video` group (install.sh). Known
+            # upstream wrinkle: some cameras negotiate H264 poorly
+            # (FreeRDP#11198) — if the camera shows up in Windows but
+            # renders black, check connect.log for rdpecam format errors.
+            local cam_flag=""
+            if compgen -G "/dev/video*" >/dev/null; then
+                cam_flag="/dvc:rdpecam"
+                log "Camera device present — enabling webcam redirection (rdpecam)"
+            fi
+
             # Peripheral redirection (speaker/mic/USB storage):
             #   /sound, /microphone — explicit `sys:alsa` because the
             #     Membrane has no PulseAudio/PipeWire daemon installed;
@@ -302,6 +318,7 @@ do_connect() {
                 /dynamic-resolution \
                 /sound:sys:alsa \
                 ${mic_flag} \
+                ${cam_flag} \
                 /drive:usb,"/media/$(id -un)" \
                 /log-level:WARN \
                 ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 &

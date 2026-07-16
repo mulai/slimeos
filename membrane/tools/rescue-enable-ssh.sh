@@ -19,9 +19,11 @@
 #   * openssh-server installed
 #   * ssh.service enabled via a direct symlink (a rescue chroot has no live
 #     systemd to `enable --now` with — see the 2026-07-12 bring-up notes)
-#   * a self-disabling oneshot unit opens ufw port 22 to the WireGuard
-#     subnet ONLY (ufw itself cannot run inside the chroot: it needs the
-#     real target kernel, same reason install.sh defers firewall setup).
+#   * a `ufw allow` for port 22 from the WireGuard subnet ONLY, appended
+#     into /etc/slimeos/firewall-setup.sh itself — that script re-runs
+#     `ufw --force reset` on every boot, so the rule must live inside it
+#     to survive reboots. (ufw can't run inside the chroot: it needs the
+#     real target kernel, same reason install.sh defers firewall setup.)
 #     The LAN still sees nothing — ufw's default deny incoming stands; only
 #     Brain-hub-side WireGuard peers (10.10.0.0/24) can reach sshd.
 set -euo pipefail
@@ -42,25 +44,20 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
 ln -sf /lib/systemd/system/ssh.service \
     /etc/systemd/system/multi-user.target.wants/ssh.service
 
-cat > /etc/systemd/system/slimeos-allow-wg-ssh.service <<'UNIT'
-[Unit]
-Description=Slime OS — one-time ufw allow: SSH from the WireGuard subnet
-# After the firewall oneshot so `ufw allow` lands on the reset ruleset
-# rather than being wiped by it.
-After=network.target slimeos-firewall.service
+# The ufw allow must live INSIDE /etc/slimeos/firewall-setup.sh, not as a
+# separate one-shot rule: firewall-setup.sh runs `ufw --force reset` on
+# EVERY boot (see install.sh section 9), so any rule added outside it is
+# silently wiped by the next reboot. Learned the hard way: the first
+# version of this tool used a self-disabling oneshot unit, and support
+# access died on the device's first restart.
+if ! grep -q 'port 22 proto tcp' /etc/slimeos/firewall-setup.sh; then
+    sed -i '/^ufw --force enable$/i # Support SSH over the WireGuard tunnel only (added by rescue-enable-ssh.sh)\nufw allow from 10.10.0.0/24 to any port 22 proto tcp' \
+        /etc/slimeos/firewall-setup.sh
+fi
 
-[Service]
-Type=oneshot
-ExecStart=/usr/sbin/ufw allow from 10.10.0.0/24 to any port 22 proto tcp
-# The rule persists in ufw's own config once added; this unit only needs
-# to succeed once, then takes itself out of future boots.
-ExecStartPost=/usr/bin/systemctl disable slimeos-allow-wg-ssh.service
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-ln -sf /etc/systemd/system/slimeos-allow-wg-ssh.service \
-    /etc/systemd/system/multi-user.target.wants/slimeos-allow-wg-ssh.service
+# Also open it for THIS boot cycle's next startup even if the firewall
+# already ran: the appended line takes effect from the next boot onward,
+# which is exactly when this chroot's changes become live anyway.
 
 echo ""
 echo "  ✓ SSH enabled for the next boot (WireGuard peers only, port 22)"
