@@ -146,7 +146,15 @@ chmod 700 "$CRED_DIR"
 
 # ── Session-wide FreeRDP/display config, loaded once here (not per-connect-
 # attempt as the old connect.sh did) and read by do_connect() via these vars.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:broadband /gfx /bpp:32"
+# /gfx:AVC444 — H.264 4:4:4 over the graphics pipeline. Negotiated, so
+# Brains without GFX/H.264 (xrdp 0.9) silently fall back to the older
+# codecs, while Windows Brains get dramatically smoother video playback
+# than bare /gfx's RemoteFX-progressive. Debian's freerdp3 links
+# libavcodec, so the decoder is always present. No /network here — the
+# old "/network:broadband" duplicated do_connect()'s own
+# /network:$RDP_NETWORK and, coming later on the command line, silently
+# overrode whatever the config file said.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
 if [[ -f "$CONFIG_DIR/hw-freerdp-flags" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_DIR/hw-freerdp-flags"

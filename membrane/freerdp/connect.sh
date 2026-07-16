@@ -16,6 +16,24 @@
 # always shows the Brain picker next — exactly what every one of those old
 # `exec brain-select.sh` calls did.
 
+# First ALSA card that is both USB and capture-capable. USB microphones
+# enumerate as their own ALSA card, but ALSA's *default* capture device
+# stays pointed at the onboard input (typically an empty rear mic jack) --
+# so without this, a plugged-in USB mic reaches the Brain as pure silence
+# while Windows shows a perfectly healthy "Remote Audio" recording device.
+# /proc/asound needs no alsa-utils and is authoritative; "pcm*c" nodes are
+# capture streams (a USB DAC/speaker without a mic exposes only pcm*p).
+usb_capture_card() {
+    local idx name
+    while read -r idx name; do
+        if compgen -G "/proc/asound/card${idx}/pcm*c" >/dev/null; then
+            printf '%s' "$name"
+            return 0
+        fi
+    done < <(awk '/USB-Audio/ {gsub(/\[/, "", $2); print $1, $2}' /proc/asound/cards 2>/dev/null)
+    return 1
+}
+
 do_connect() {
     local brain_id="$1"
     local brain_json
@@ -138,6 +156,20 @@ do_connect() {
             export DISPLAY="${x11_socket:+:${x11_socket#X}}"
             export DISPLAY="${DISPLAY:-:0}"
 
+            # Prefer a USB microphone when one is present (see
+            # usb_capture_card above). Re-checked every attempt like the
+            # DISPLAY discovery, so a mic plugged in mid-retry-loop is
+            # picked up without restarting anything. Card NAME, not
+            # index — replug/boot reordering can't silently break the
+            # pick; plughw so FreeRDP's requested sample format needn't
+            # match the mic's native one. Confirmed live: USB PnP mic →
+            # Azure Windows Brain, 2026-07-16.
+            local mic_flag="/microphone:sys:alsa" usb_mic
+            if usb_mic=$(usb_capture_card); then
+                mic_flag="/microphone:sys:alsa,dev:plughw:CARD=${usb_mic}"
+                log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
+            fi
+
             # Peripheral redirection (speaker/mic/USB storage):
             #   /sound, /microphone — explicit `sys:alsa` because the
             #     Membrane has no PulseAudio/PipeWire daemon installed;
@@ -157,11 +189,11 @@ do_connect() {
                 /p:"${rdp_pass}" \
                 /sec:rdp:off \
                 /cert:tofu \
-                /network:"${RDP_NETWORK:-lan}" \
+                /network:"${RDP_NETWORK:-auto}" \
                 ${RES_FLAGS} \
                 /dynamic-resolution \
                 /sound:sys:alsa \
-                /microphone:sys:alsa \
+                ${mic_flag} \
                 /drive:usb,"/media/$(id -un)" \
                 /log-level:WARN \
                 ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 &

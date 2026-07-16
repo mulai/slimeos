@@ -323,8 +323,11 @@ if [[ ! -f "$CONFIG_DIR/config" ]]; then
 RDP_WIDTH=""
 RDP_HEIGHT=""
 
-# Connection quality profile: lan | broadband | wan
-RDP_NETWORK="lan"
+# Connection quality profile: auto | lan | broadband | wan
+# "auto" lets FreeRDP measure the real path; "lan" (the old default) told
+# it to assume LAN-grade bandwidth, which oversends badly on a real
+# internet path to a cloud Brain and shows up as choppy video/audio.
+RDP_NETWORK="auto"
 
 # Auto-reconnect on disconnect (seconds, 0 = disabled)
 RECONNECT_DELAY="5"
