@@ -61,11 +61,21 @@ hardware into the Brain session:
 - **Speaker/mic** — `/sound:sys:alsa` + `/microphone:sys:alsa`. ALSA
   talks to the kernel driver directly; the Membrane has no PulseAudio/
   PipeWire daemon installed, and none is needed — `freerdp3-x11` already
-  pulls in `libasound2`/`libpulse0` transitively.
+  pulls in `libasound2`/`libpulse0` transitively. One consequence of
+  having no sound server: nothing would ever unmute the kernel's
+  default-muted mixer, so `slimeos-audio-init.service` (oneshot,
+  first boot only) runs `alsactl init` + `store`; alsa-utils' stock
+  `alsa-restore.service` maintains the state on every boot after.
+  Playback and capture use ALSA's *default* device — a USB microphone
+  (its own separate ALSA card) needs an `/etc/asound.conf` routing
+  default capture to it by card name (see the repo's issue history for
+  a working `type asym` example); making that automatic is an open item.
 - **USB storage** — `/drive:usb,/media/<user>`, one dynamic network
   drive covering whatever `udiskie` (`slimeos-automount.service`) has
   auto-mounted under `/media/<user>` at the moment, including drives
-  plugged in mid-session. Encrypted (LUKS) volumes aren't supported —
+  plugged in mid-session (refresh the Explorer window to see them).
+  `ntfs-3g`/`exfatprogs` are installed so NTFS/exFAT external drives
+  mount too, not just FAT32. Encrypted (LUKS) volumes aren't supported —
   there's no unlock-prompt UI on this kiosk.
 - **Other USB devices** (webcams, printers, generic HID/serial) — not
   yet wired up. FreeRDP's `urbdrc` channel (`/usb:id,dev:<vid>:<pid>`)

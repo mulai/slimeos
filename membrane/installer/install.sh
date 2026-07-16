@@ -78,9 +78,19 @@ fi
 # it only exposes a D-Bus API; nothing mounts a plugged-in drive on its own
 # without a client listening for its signals. udiskie is that client (does
 # NOT need a desktop/tray -- see slimeos-automount.service below, which
-# runs it headless with --no-tray --no-notify). No new audio packages are
-# needed for /sound and /microphone in connect.sh: freerdp3-x11 already
-# depends on libasound2/libpulse0 transitively via libfreerdp-client3-3.
+# runs it headless with --no-tray --no-notify).
+#
+# ntfs-3g + exfatprogs: udisks2 can only automount filesystems it has
+# tooling for -- without these, NTFS/exFAT drives (i.e. most external HDDs
+# and large sticks) silently fail to mount and never appear in the Brain's
+# "usb on <hostname>" share, while FAT32 works. Confirmed live 2026-07-16.
+#
+# alsa-utils: the /sound and /microphone redirection in connect.sh needs no
+# extra libraries (freerdp3-x11 already depends on libasound2 transitively)
+# -- but a fresh kernel leaves the mixer's Master channel MUTED at 0%, and
+# with no sound server installed, nothing ever unmutes it. alsa-utils
+# provides alsactl for the first-boot init below (slimeos-audio-init) plus
+# its own alsa-restore.service for every boot after.
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -92,6 +102,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     polkitd pkexec dbus dbus-user-session \
     network-manager wpasupplicant \
     udisks2 udiskie \
+    ntfs-3g exfatprogs \
+    alsa-utils \
     ${MICROCODE_PKGS} \
     ethtool \
     qrencode \
@@ -122,6 +134,22 @@ usermod -aG audio,video,render,netdev,sudo "$SESSION_USER"
 mkdir -p /var/log/slimeos
 chown "$SESSION_USER:$SESSION_USER" /var/log/slimeos
 chmod 750 /var/log/slimeos
+
+# ── 2b. Hostname ──────────────────────────────────────────────────────────────
+# Both preseeds set netcfg/get_hostname to "slimeos", but on a real
+# network-fetched install d-i asks the hostname question BEFORE it can
+# download the preseed (it needs the network up first), so the preseeded
+# answer never applies and the box ends up with d-i's own "debian" default.
+# The hostname is user-visible product surface — the Brain's RDP session
+# shows the USB share as "usb on <hostname>" — so honor the preseed's
+# intent here instead. Only the known d-i fallback is replaced: anything
+# else was deliberately chosen by whoever ran the installer.
+if [[ "$(cat /etc/hostname 2>/dev/null)" == "debian" ]]; then
+    log "Renaming default 'debian' hostname to 'slimeos'..."
+    echo "slimeos" > /etc/hostname
+    sed -i 's/\bdebian\b/slimeos/g' /etc/hosts
+    ok "Hostname set to 'slimeos' (takes effect on first real boot)"
+fi
 
 # ── 3. Install Slime OS files ─────────────────────────────────────────────────
 log "Installing Slime OS system files..."
@@ -436,6 +464,41 @@ WantedBy=multi-user.target
 SERVICE
 systemctl enable slimeos-automount.service
 ok "slimeos-automount.service enabled"
+
+# ── 6d. Systemd service: slimeos-audio-init (first-boot mixer unmute) ─────────
+# A fresh HDA kernel driver initializes the mixer with Master MUTED at 0%,
+# and this kiosk deliberately runs no sound server (PulseAudio/PipeWire)
+# that would otherwise unmute it -- so every fresh install is born silent:
+# the Brain's RDP audio arrives (Windows-side level meters move) and dies
+# at the last inch. Confirmed live on real hardware 2026-07-16.
+#
+# `alsactl init` applies ALSA's own per-driver sane defaults (unmutes
+# Master/PCM, moderate volumes); `alsactl store` persists them so
+# alsa-utils' stock alsa-restore.service takes over on every later boot.
+# Gated on the state file so user-adjusted levels are never clobbered:
+# this runs meaningfully once, then no-ops forever.
+#
+# Runs at boot (not from this installer): install.sh executes under the
+# installer kernel in a chroot, where the target's sound modules aren't
+# loaded -- same reason firewall-setup.sh (section 9) is deferred to a
+# boot-time oneshot instead of running here.
+log "Installing slimeos-audio-init service..."
+cat > "$SYSTEMD_DIR/slimeos-audio-init.service" <<'SERVICE'
+[Unit]
+Description=Slime OS — one-time ALSA mixer init (unmute) on first boot
+ConditionPathExists=!/var/lib/alsa/asound.state
+
+[Service]
+Type=oneshot
+# alsactl init exits 99 for cards it deems "nothing worth initializing"
+# (e.g. HDMI-only codecs) — harmless, don't let it fail the unit.
+ExecStart=/bin/sh -c '/usr/sbin/alsactl init || true; /usr/sbin/alsactl store'
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-audio-init.service
+ok "slimeos-audio-init.service enabled"
 
 # ── 7. Systemd service: NIC tuning (Profile 001 only if present) ───────────────
 if [[ -f "$CONFIG_DIR/nic-tune.sh" ]]; then
