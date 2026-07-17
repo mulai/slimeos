@@ -115,16 +115,28 @@ ok "Dependencies installed"
 # Debian trixie's freerdp3 archive binaries ship WITHOUT the rdpecam
 # camera channel even though debian/rules enables it — the plugin
 # compiles fine from the very same deb13u3 source (verified 2026-07-16),
-# it just never made it into the archive build. Until Debian ships a
-# fixed build, install our unmodified rebuild of that exact source
-# (version-bumped +slimeos1 so apt prefers it), checksum-pinned below.
+# it just never made it into the archive build. On top of that, the
+# archive source itself has camera bugs, so this is a patched rebuild
+# (version-bumped +slimeos5 so apt prefers it), checksum-pinned below.
+# It carries three changes over deb13u3 (details in
+# membrane/freerdp/camera-patches/README.md):
+#   1. sample response buffer grows to the frame size (large raw frames
+#      aborted the whole client),
+#   2. built with RDPECAM_INPUT_FORMAT_H264=OFF — cameras with a native
+#      H264 stream (e.g. Logitech C920) negotiated a passthrough the
+#      Windows side never renders (black screen, upstream #11198); MJPG
+#      is preferred instead and re-encoded,
+#   3. fixes a first-frame libswscale deadlock introduced by the
+#      CVE-2026-24677 backport that silently dropped EVERY frame.
 # connect.sh's /dvc:rdpecam webcam redirection is inert without this.
+# libwinpr3-3 is included because the full rebuild emits an
+# exact-version dependency on it.
 #
 # ⚠ A future Debian point release (deb13u4+) sorts HIGHER than
-# +slimeos1: an apt upgrade would replace these and silently drop camera
+# +slimeos5: an apt upgrade would replace these and silently drop camera
 # support again. When that happens, rebuild from the new source and bump
 # (procedure in the release notes at $FREERDP_REL below).
-FREERDP_REL="https://github.com/mulai/slimeos/releases/download/freerdp3-camera-slimeos1"
+FREERDP_REL="https://github.com/mulai/slimeos/releases/download/freerdp3-camera-slimeos5"
 if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
     log "Installing FreeRDP camera-channel rebuild..."
     FREERDP_TMP=$(mktemp -d)
@@ -132,13 +144,14 @@ if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
         curl -fsSL -o "$FREERDP_TMP/$deb" "$FREERDP_REL/$deb"
         echo "$sum  $FREERDP_TMP/$deb" | sha256sum -c - >/dev/null
     done <<'DEBSUMS'
-004c858957e1a36efcea439f00cde79198f72b2941edd927d039753b0bffa02f  freerdp3-x11_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
-f316b47218257d0149ac48c33a0b3a8cb5f8043785bb68d8479c3b508c238672  libfreerdp-client3-3_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
-be8c252b2fee85e5014d34a92e314c49cadba521b5b5952ca4123b5e9e51b51b  libfreerdp3-3_3.15.0+dfsg-2.1+deb13u3+slimeos1_amd64.deb
+b1c05896c39480ded13f0c9f81144b51f1b216547cf302b07588534df13639a0  freerdp3-x11_3.15.0+dfsg-2.1+deb13u3+slimeos5_amd64.deb
+1ce97519203699b66d38efceb7f7056985be3bf87fb6f35740cb313269c13092  libfreerdp-client3-3_3.15.0+dfsg-2.1+deb13u3+slimeos5_amd64.deb
+ae76abc25b5d0a5b238336093528531be861f4bfb87f0bac34183ccdb87b2544  libfreerdp3-3_3.15.0+dfsg-2.1+deb13u3+slimeos5_amd64.deb
+1669a99a86b9f064630d6bc023d95594f4bbee28bc4fca2cc16039e5cb493f43  libwinpr3-3_3.15.0+dfsg-2.1+deb13u3+slimeos5_amd64.deb
 DEBSUMS
     dpkg -i "$FREERDP_TMP"/*.deb
     rm -rf "$FREERDP_TMP"
-    ok "FreeRDP camera-channel rebuild installed (+slimeos1)"
+    ok "FreeRDP camera-channel rebuild installed (+slimeos5)"
 else
     log "Non-amd64 architecture — skipping camera rebuild (no prebuilt debs); webcam redirection unavailable"
 fi

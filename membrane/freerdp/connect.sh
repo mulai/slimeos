@@ -278,22 +278,22 @@ do_connect() {
                 log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
             fi
 
-            # Webcam redirection (MS-RDPECAM, /dvc:rdpecam) — OPT-IN,
-            # default OFF. The channel works (Windows sees the camera and
-            # requests frames), but FreeRDP 3.15's rdpecam sample path has
-            # a bug that SIGABRTs the whole client seconds after streaming
-            # starts (Stream write out of bounds in
-            # ecam_dev_send_sample_response; confirmed live 2026-07-16,
-            # matches the still-churning upstream rdpecam fixes — e.g.
-            # FreeRDP#11198/#11990). A crash here kills the entire RDP
-            # session, so it must never be on by default: a plugged-in
-            # webcam would otherwise crash-loop every connection. Enable
-            # per-device once the stream path is stable by setting
-            # SLIMEOS_ENABLE_CAMERA=1 in /etc/slimeos/config.
+            # Webcam redirection (MS-RDPECAM, /dvc:rdpecam) — ON by
+            # default when a /dev/video* device exists; set
+            # SLIMEOS_ENABLE_CAMERA=0 in /etc/slimeos/config to opt out.
+            # Requires the +slimeos5 FreeRDP rebuild install.sh pins
+            # (Debian's archive build lacks the channel entirely, and its
+            # source has three camera bugs we patch — see
+            # membrane/freerdp/camera-patches/README.md). Confirmed
+            # working end-to-end 2026-07-17: Logitech C920 → Azure
+            # Windows Brain, live picture in the Camera app. The camera
+            # frames are MJPG-decoded and H264-re-encoded in software on
+            # the Membrane, so expect CPU cost and some lag on weak
+            # hardware while an app is actively capturing.
             local cam_flag=""
-            if [[ "${SLIMEOS_ENABLE_CAMERA:-0}" == "1" ]] && compgen -G "/dev/video*" >/dev/null; then
+            if [[ "${SLIMEOS_ENABLE_CAMERA:-1}" == "1" ]] && compgen -G "/dev/video*" >/dev/null; then
                 cam_flag="/dvc:rdpecam"
-                log "Camera device present and SLIMEOS_ENABLE_CAMERA=1 — enabling webcam redirection (experimental)"
+                log "Camera device present — enabling webcam redirection (SLIMEOS_ENABLE_CAMERA=0 to disable)"
             fi
 
             # Peripheral redirection (speaker/mic/USB storage):

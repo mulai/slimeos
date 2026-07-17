@@ -1,0 +1,42 @@
+Description: Fix rdpecam camera never producing frames (first-frame sws deadlock)
+ The CVE-2026-24677 fix (upstream d2d4f449, backported to this Debian source as
+ channels-rdpecam-ensure-sws-context-size-matches-CVE-2026-24677.patch) added a
+ guard at the very top of ecam_encoder_compress_h264():
+ .
+     if (!ecam_sws_valid(stream))
+         return FALSE;
+ .
+ but stream->sws is created lazily by the only caller of
+ ecam_init_sws_context(), which sits *later in this same function*. On the first
+ captured frame stream->sws is always NULL, so ecam_sws_valid() returns FALSE and
+ the function bails out before it can reach the line that would create the sws
+ context. sws therefore stays NULL forever and every frame is dropped
+ ("Frame drop or error in ecam_encoder_compress"): the camera enumerates into the
+ server and streaming starts, but no SampleResponse is ever sent, so the remote
+ side shows a permanently black image and times out.
+ .
+ This breaks every camera whose frames need libswscale conversion (MJPG and all
+ raw YUV/RGB formats) on FreeRDP builds carrying the CVE fix but predating the
+ upstream freerdp_video_context encoder rewrite. Upstream only escaped the
+ deadlock via that rewrite, which is far too large to backport onto 3.15.0.
+ .
+ Remove the premature top guard. The genuine security property it was meant to
+ add — the sws context must match the current media-type dimensions before
+ sws_scale runs — is already enforced by ecam_init_sws_context(), which is called
+ immediately before sws_scale() and recreates the context on any dimension
+ change (that is the actual substance of the CVE fix and is left untouched).
+Author: Slime OS <dev@mulai.com>
+Forwarded: not-needed
+Last-Update: 2026-07-17
+--- a/channels/rdpecam/client/encoding.c
++++ b/channels/rdpecam/client/encoding.c
+@@ -328,9 +328,6 @@ static BOOL ecam_encoder_compress_h264(C
+ 	CAM_MEDIA_FORMAT inputFormat = streamInputFormat(stream);
+ 	enum AVPixelFormat pixFormat = AV_PIX_FMT_NONE;
+
+-	if (!ecam_sws_valid(stream))
+-		return FALSE;
+-
+ #if defined(WITH_INPUT_FORMAT_H264)
+ 	if (inputFormat == CAM_MEDIA_FORMAT_MJPG_H264)
+ 	{

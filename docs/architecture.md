@@ -77,16 +77,21 @@ hardware into the Brain session:
   `ntfs-3g`/`exfatprogs` are installed so NTFS/exFAT external drives
   mount too, not just FAT32. Encrypted (LUKS) volumes aren't supported —
   there's no unlock-prompt UI on this kiosk.
-- **Webcam** — `/dvc:rdpecam` (MS-RDPECAM), **experimental, off by
-  default** (opt in with `SLIMEOS_ENABLE_CAMERA=1` in
-  `/etc/slimeos/config`). Debian's stock `freerdp3` ships without the
-  camera channel compiled in (a packaging bug — the code builds but
-  never lands in a binary package), so `install.sh` installs a
-  checksum-pinned rebuild that includes it. The channel loads and the
-  Brain sees the camera, but FreeRDP's rdpecam stream path still crashes
-  the client a few seconds into streaming (a young upstream feature with
-  several overflow bugs — see `membrane/freerdp/camera-patches/`). Left
-  wired but disabled until the upstream path stabilizes.
+- **Webcam** — `/dvc:rdpecam` (MS-RDPECAM), **on by default** when a
+  `/dev/video*` device exists (opt out with `SLIMEOS_ENABLE_CAMERA=0`
+  in `/etc/slimeos/config`). Debian's stock `freerdp3` ships without
+  the camera channel compiled in (a packaging bug — the code builds but
+  never lands in a binary package), and its source carries three camera
+  bugs besides, so `install.sh` installs a checksum-pinned patched
+  rebuild (`+slimeos5`): sample-response buffer growth, MJPG preferred
+  over broken H264 passthrough (upstream #11198), and a fix for a
+  first-frame libswscale deadlock introduced by the CVE-2026-24677
+  backport that dropped every frame. Details in
+  `membrane/freerdp/camera-patches/README.md`. Confirmed working
+  end-to-end 2026-07-17 (Logitech C920 → Azure Windows Brain, live
+  picture in the Camera app). Frames are MJPG-decoded and
+  H264-re-encoded in software on the Membrane — expect CPU load and
+  some lag on weak hardware while an app is actively capturing.
 - **Other USB devices** (printers, generic HID/serial) — not
   yet wired up. FreeRDP's `urbdrc` channel (`/usb:id,dev:<vid>:<pid>`)
   supports this but needs per-device vendor/product IDs, unlike the
