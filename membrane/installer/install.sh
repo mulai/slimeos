@@ -202,7 +202,7 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles" "$INSTALL
 
 # Download hardware detection and profiles
 # NOTE: add new profile files here as they're validated (see membrane/hardware-profiles/)
-for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh 008-gigabyte-78lmt-s2p.sh; do
+for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh 008-gigabyte-78lmt-s2p.sh 009-vmware-guest.sh; do
     curl -fsSL "$REPO_BASE/membrane/hardware-profiles/$f" \
          -o "$INSTALL_DIR/hardware-profiles/$f"
     chmod +x "$INSTALL_DIR/hardware-profiles/$f"

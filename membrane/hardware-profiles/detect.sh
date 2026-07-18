@@ -64,6 +64,12 @@ select_profile() {
     elif echo "$DMI_BOARD" | grep -qi "78LMT"; then
         echo "008-gigabyte-78lmt-s2p.sh"
 
+    # DMI vendor is "VMware, Inc." on Workstation/Fusion/ESXi guests. Must
+    # match before the generic fallback: vmwgfx needs the pixman renderer
+    # (dmabuf import is broken), which generic deliberately doesn't force.
+    elif echo "$DMI_VENDOR" | grep -qi "VMware"; then
+        echo "009-vmware-guest.sh"
+
     else
         # Fallback: generic — works on most machines, conservative settings
         echo "000-generic.sh"
