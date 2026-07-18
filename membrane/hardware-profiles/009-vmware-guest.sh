@@ -13,6 +13,17 @@
 # HERE precisely because it is scoped to vmwgfx: the same pixman pin broke
 # output negotiation on virtio-gpu-gl (see 000-generic.sh).
 
+# Audio (host-side VM config — nothing this profile can set): Workstation's
+# default virtual sound card is an ES1371 that plays guest audio into a void
+# on at least some Windows hosts (guest speaker-test fine, vmware-vmx never
+# appears in the host mixer), and a stale device pin in the .vmx
+# (sound.fileName naming a host device that no longer exists) fails the same
+# silent way. Fix in the VM's .vmx:
+#   sound.virtualDev = "hdaudio"
+#   sound.autodetect = "TRUE"
+#   sound.fileName = "-1"
+# Validated: RDP audio redirection to a Windows Brain works after this.
+
 log() { echo "[slimeos/hw-profile:vmware-guest] $*"; }
 
 log "Applying VMware guest profile..."

@@ -125,6 +125,7 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 |---|---|---|---|
 | Gigabyte H97-Gaming 3 / i7-4790 / 16 GB (Win 10) | 001 | UEFI | ✅ Reference device — full install → kiosk → WireGuard tunnel → RDP connect confirmed |
 | Gigabyte GA-78LMT-S2P / AMD FX-6100 / 8 GB (Win 10) | 008 | Legacy BIOS | ✅ Full install → kiosk → tunnel → RDP connect confirmed; mouse input, WiFi onboarding, WireGuard self-pairing (persists across reboot), and power off/restart all confirmed on real hardware |
+| VMware Workstation Pro guest (Windows host) | 009 | Legacy BIOS | ✅ Fresh install auto-detects the profile → kiosk → pairing → RDP to a Windows Brain with audio. Needs "Accelerate 3D graphics" enabled; see the profile header for VM audio-device notes |
 | Generic (any arch) | 000 | — | ✅ Fallback — any uncatalogued machine |
 | Huawei Mate 30 Pro (Android) | — | — | 🔄 Phase 2 |
 
