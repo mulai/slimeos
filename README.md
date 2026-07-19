@@ -119,13 +119,26 @@ See [`docs/brain-hosting.md`](docs/brain-hosting.md) for platform-specific setup
 
 ---
 
+## Documentation
+
+All guides live in [`docs/`](docs/) and stay versioned alongside the code they document:
+
+| Guide | What it covers |
+|---|---|
+| [Install on VMware](docs/install-vmware.md) | Running the Membrane as a VMware Workstation/Fusion guest |
+| [Architecture](docs/architecture.md) | How the Membrane, Brain, and hardware profiles fit together |
+| [Brain hosting](docs/brain-hosting.md) | Deploying the cloud Brain on AWS, GCP, a VPS, etc. |
+| [Windows cloud desktop](docs/windows-cloud-desktop.md) | Setting up a Windows 11 cloud Brain on Azure |
+
+---
+
 ## Hardware Tested
 
 | Device | Profile | Boot mode | Status |
 |---|---|---|---|
 | Gigabyte H97-Gaming 3 / i7-4790 / 16 GB (Win 10) | 001 | UEFI | ✅ Reference device — full install → kiosk → WireGuard tunnel → RDP connect confirmed |
 | Gigabyte GA-78LMT-S2P / AMD FX-6100 / 8 GB (Win 10) | 008 | Legacy BIOS | ✅ Full install → kiosk → tunnel → RDP connect confirmed; mouse input, WiFi onboarding, WireGuard self-pairing (persists across reboot), and power off/restart all confirmed on real hardware |
-| VMware Workstation Pro guest (Windows host) | 009 | Legacy BIOS | ✅ Fresh install auto-detects the profile → kiosk → pairing → RDP to a Windows Brain with audio. Needs "Accelerate 3D graphics" enabled; see the profile header for VM audio-device notes |
+| VMware Workstation Pro guest (Windows host) | 009 | Legacy BIOS | ✅ Fresh install auto-detects the profile → kiosk → pairing → RDP to a Windows Brain with audio. Needs "Accelerate 3D graphics" enabled — see the [install guide](docs/install-vmware.md) |
 | Generic (any arch) | 000 | — | ✅ Fallback — any uncatalogued machine |
 | Huawei Mate 30 Pro (Android) | — | — | 🔄 Phase 2 |
 
