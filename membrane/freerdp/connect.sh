@@ -82,7 +82,7 @@ wake_brain() {
         if read -t 1 -r line <&0; then
             ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
             case "$ev_type" in
-                cancelConnect|back) return 1 ;;
+                cancelConnect|back|forceBack) return 1 ;;
                 *) try_handle_power_event "$ev_type" || : ;;
             esac
         else
@@ -119,7 +119,7 @@ wake_brain() {
             if read -t 1 -r line <&0; then
                 ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
                 case "$ev_type" in
-                    cancelConnect|back) return 1 ;;
+                    cancelConnect|back|forceBack) return 1 ;;
                     *) try_handle_power_event "$ev_type" || : ;;
                 esac
             fi
@@ -197,7 +197,7 @@ do_connect() {
                             chmod 600 "$cred_file"
                             got_creds=true
                             ;;
-                        back) return 0 ;;
+                        back|forceBack) return 0 ;;
                         *) try_handle_power_event "$ev_type" || : ;; # ignore anything else while waiting for credentials
                     esac
                 done
@@ -330,7 +330,7 @@ do_connect() {
                 if read -t 1 -r line <&0; then
                     local ev_type
                     ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
-                    if [[ "$ev_type" == "cancelConnect" ]]; then
+                    if [[ "$ev_type" == "cancelConnect" || "$ev_type" == "forceBack" ]]; then
                         kill "$xpid" 2>/dev/null || true
                         cancelled=true
                         break
@@ -404,7 +404,7 @@ do_connect() {
                     if read -t 1 -r line <&0; then
                         local ev_type
                         ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
-                        if [[ "$ev_type" == "back" ]]; then
+                        if [[ "$ev_type" == "back" || "$ev_type" == "forceBack" ]]; then
                             backed_out=true
                             break
                         else
@@ -457,7 +457,7 @@ do_connect() {
                         phase="credentials"
                         continue 3
                         ;;
-                    back) return 0 ;;
+                    back|forceBack) return 0 ;;
                     *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done

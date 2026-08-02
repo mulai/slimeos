@@ -63,6 +63,7 @@ func main() {
 
 	b := &bridge{coordinatorPath: *coordinatorPath, logPath: *logPath}
 	go b.runCoordinatorLoop()
+	go startHotkeyWatcher(b)
 
 	log.Printf("slimeos-bridge listening on %s (coordinator=%s)", *listen, *coordinatorPath)
 	if err := http.ListenAndServe(*listen, http.HandlerFunc(b.handleWS)); err != nil {
@@ -277,6 +278,163 @@ func (b *bridge) runCoordinatorOnce() {
 	b.stdinMu.Lock()
 	b.stdin = nil
 	b.stdinMu.Unlock()
+}
+
+// ── Global force-disconnect hotkey (Ctrl+Alt+Backspace, held 3s) ────────────
+//
+// Once xfreerdp3 owns the Wayland surface there is no window chrome, no
+// VT-switching (cage runs without -s), and the lock screen page -- which is
+// what every other event in this protocol goes through -- has no input
+// focus to receive anything on. This reads raw evdev events directly,
+// below whatever currently has focus, so a stuck RDP session (or any other
+// wedged screen) can always be escaped back to the picker. See
+// coordinator.sh's header comment for the "forceBack" protocol entry this
+// feeds.
+//
+// Pure stdlib, matching this binary's zero-dependency rule (see the header
+// comment above): finds keyboard-class device nodes by parsing
+// /proc/bus/input/devices (plain text, no ioctls), then decodes raw
+// input_event records by hand rather than via a cgo/unsafe struct cast.
+
+const (
+	evKey        = 1 // struct input_event .type for key press/release
+	keyLeftCtrl  = 29
+	keyRightCtrl = 97
+	keyLeftAlt   = 56
+	keyRightAlt  = 100
+	keyBackspace = 14
+
+	// struct input_event on 64-bit platforms: timeval (2x8-byte long) +
+	// u16 type + u16 code + s32 value = 24 bytes. Read as raw offsets
+	// rather than an unsafe-cast struct -- simpler and layout-proof.
+	inputEventSize = 24
+	typeOffset     = 16
+	codeOffset     = 18
+	valueOffset    = 20
+)
+
+// hotkeyState tracks chord state across every open keyboard device --
+// deliberately global rather than per-device, so e.g. a Bluetooth
+// keyboard's Ctrl plus a USB keyboard's Alt still counts. Cheap edge case
+// to get right.
+type hotkeyState struct {
+	mu                   sync.Mutex
+	ctrl, alt, backspace bool
+	timer                *time.Timer
+}
+
+func startHotkeyWatcher(b *bridge) {
+	opened := map[string]bool{}
+	hs := &hotkeyState{}
+	for {
+		devices, err := findKeyboardDevices()
+		if err != nil {
+			log.Printf("hotkey: device scan failed: %v", err)
+		}
+		for _, path := range devices {
+			if opened[path] {
+				continue
+			}
+			opened[path] = true
+			go watchKeyboardDevice(path, hs, b)
+		}
+		time.Sleep(10 * time.Second) // re-scan for hotplugged keyboards
+	}
+}
+
+// findKeyboardDevices parses /proc/bus/input/devices for blocks whose
+// Handlers= line includes the "kbd" token -- Linux's own signal that a
+// device is keyboard-class (as opposed to a mouse, touchpad, etc), rather
+// than guessing from the device name.
+func findKeyboardDevices() ([]string, error) {
+	f, err := os.Open("/proc/bus/input/devices")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var found []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "H: Handlers=") {
+			continue
+		}
+		isKbd, event := false, ""
+		for _, field := range strings.Fields(strings.TrimPrefix(line, "H: Handlers=")) {
+			if field == "kbd" {
+				isKbd = true
+			}
+			if strings.HasPrefix(field, "event") {
+				event = field
+			}
+		}
+		if isKbd && event != "" {
+			found = append(found, "/dev/input/"+event)
+		}
+	}
+	return found, scanner.Err()
+}
+
+// watchKeyboardDevice opens one evdev node read-only (no EVIOCGRAB -- evdev
+// nodes support multiple concurrent readers without it, which is exactly
+// why this doesn't interfere with cage/libinput's own consumption of the
+// same device) and feeds every key press/release into the shared chord
+// tracker until the device goes away (unplugged).
+func watchKeyboardDevice(path string, hs *hotkeyState, b *bridge) {
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("hotkey: cannot open %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	log.Printf("hotkey: watching %s for the force-disconnect chord", path)
+
+	buf := make([]byte, inputEventSize)
+	for {
+		if _, err := io.ReadFull(f, buf); err != nil {
+			log.Printf("hotkey: %s closed: %v", path, err)
+			return
+		}
+		if binary.NativeEndian.Uint16(buf[typeOffset:]) != evKey {
+			continue
+		}
+		code := binary.NativeEndian.Uint16(buf[codeOffset:])
+		value := int32(binary.NativeEndian.Uint32(buf[valueOffset:]))
+		hs.update(code, value != 0, b)
+	}
+}
+
+// update folds one key event into the shared chord state. On the
+// false->true transition it arms a one-shot 3s timer (so a stray tap can
+// never fire it, and holding past 3s can't re-fire it either); any release
+// before it fires cancels the timer.
+func (hs *hotkeyState) update(code uint16, down bool, b *bridge) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+
+	switch code {
+	case keyLeftCtrl, keyRightCtrl:
+		hs.ctrl = down
+	case keyLeftAlt, keyRightAlt:
+		hs.alt = down
+	case keyBackspace:
+		hs.backspace = down
+	default:
+		return
+	}
+
+	chord := hs.ctrl && hs.alt && hs.backspace
+	switch {
+	case chord && hs.timer == nil:
+		hs.timer = time.AfterFunc(3*time.Second, func() {
+			log.Printf("hotkey: Ctrl+Alt+Backspace held 3s -- forcing back to the picker")
+			b.writeToCoordinator(`{"type":"forceBack"}`)
+		})
+	case !chord && hs.timer != nil:
+		hs.timer.Stop()
+		hs.timer = nil
+	}
 }
 
 // ── Minimal RFC 6455 framing (text frames only; enough for JSON-line IPC) ──

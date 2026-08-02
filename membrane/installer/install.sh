@@ -162,16 +162,20 @@ fi
 # `video` ownership. Without it, wlroots/cog fail outright ("Permission
 # denied" on renderD128 -> EGL init failure -> cage never starts), not just
 # fall back to software rendering.
+# `input` grants slimeos-bridge (which runs as this user) read access to
+# /dev/input/eventN for the global force-disconnect hotkey watcher (see
+# main.go) -- Debian's own udev already ships root:input 0660 ownership on
+# those nodes, no custom udev rule needed, just this group membership.
 # The preseed's own d-i passwd/user-default-groups already creates this user
 # before install.sh ever runs, so the `useradd` branch below is frequently
 # skipped -- `usermod -aG` runs unconditionally so required groups are always
 # guaranteed regardless of which path created the user.
 if ! id "$SESSION_USER" &>/dev/null; then
     log "Creating session user '$SESSION_USER'..."
-    useradd -m -s /bin/bash -G audio,video,render,netdev,sudo "$SESSION_USER"
+    useradd -m -s /bin/bash -G audio,video,render,netdev,sudo,input "$SESSION_USER"
     ok "User '$SESSION_USER' created"
 fi
-usermod -aG audio,video,render,netdev,sudo "$SESSION_USER"
+usermod -aG audio,video,render,netdev,sudo,input "$SESSION_USER"
 
 # slimeos-session.sh runs as $SESSION_USER (unprivileged) and logs to a file
 # for on-device troubleshooting without journalctl -- /var/log itself isn't

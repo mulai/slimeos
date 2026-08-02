@@ -126,6 +126,23 @@ itself has no product logic — it's a dumb relay between one WebSocket
 client and one persistent `coordinator.sh` subprocess, restarting the
 latter on crash and resyncing whatever client is attached.
 
+### Session recovery hotkey (force-disconnect)
+Once `xfreerdp3` owns the Wayland surface there's no window chrome, no
+VT-switching (`cage` deliberately runs without `-s`), and the lock screen
+page — the only thing the JSON-Lines protocol above normally reaches — has
+no input focus. `slimeos-bridge` runs a second goroutine alongside the
+coordinator relay that reads raw evdev events directly from
+`/dev/input/eventN` (below whatever currently has focus, stdlib-only, no
+`EVIOCGRAB` so it never steals input from cage/libinput's own reads): on
+**Ctrl+Alt+Backspace held 3 seconds**, it injects a synthesized
+`{"type":"forceBack"}` line onto the coordinator's stdin the same way it
+already does for `_clientConnected`/`_clientDisconnected`. Every
+blocking-read site in `coordinator.sh`/`connect.sh`/`network-setup.sh`/
+`pair.sh` recognizes it as an unconditional "give up, return to the picker
+now" — killing an in-flight `xfreerdp3` child first if one is running.
+Needs the session user in the `input` group (`install.sh`, same pattern as
+the `render` group grant for `/dev/dri/renderD128`).
+
 ### Network setup (WiFi + Ethernet onboarding)
 The whole Connect flow above assumes a working network already exists.
 `coordinator.sh` checks that assumption once per process, on the first

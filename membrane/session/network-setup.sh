@@ -150,6 +150,7 @@ do_network_setup() {
                     back)
                         [[ "$mode" == "settings" ]] && return 0
                         ;;
+                    forceBack) return 0 ;;
                     *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done
@@ -171,6 +172,7 @@ do_network_setup() {
                         phase="list"
                         continue 2
                         ;;
+                    forceBack) return 0 ;;
                     *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done
@@ -221,6 +223,7 @@ do_network_setup() {
                         continue 2
                         ;;
                     back) phase="list"; continue 2 ;;
+                    forceBack) return 0 ;;
                     *) try_handle_power_event "$ev_type" || : ;;
                 esac
             done

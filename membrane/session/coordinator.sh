@@ -17,6 +17,12 @@
 #   {"type":"removeBrain","id":..}
 #   {"type":"credentials","username":?,"password":..}     (only consumed by do_connect, see connect.sh)
 #   {"type":"retry"} | {"type":"reenterPassword"} | {"type":"back"} | {"type":"cancelConnect"}
+#   {"type":"forceBack"}                                   bridge-synthesized (see main.go's hotkey watcher) on a
+#     held Ctrl+Alt+Backspace; recognized at every blocking-read site in this
+#     file/connect.sh/network-setup.sh/pair.sh as an unconditional "give up,
+#     return to the picker now" -- unlike plain `back`, never mode-conditional
+#     or a partial step-back. Kills an in-flight xfreerdp3 session first if
+#     one is running (see connect.sh's xfreerdp3-monitor loop).
 #   {"type":"networkSettings"}                             dispatched here; hands off to do_network_setup (see network-setup.sh)
 #   {"type":"wifiConnect","ssid":..} | {"type":"wifiPassword","password":..} | {"type":"wifiRescan"} | {"type":"wifiSkip"}
 #     (wifiConnect/wifiPassword/wifiRescan/wifiSkip only consumed by do_network_setup, see network-setup.sh —
@@ -319,7 +325,7 @@ while true; do
             send_status
             show_picker_or_empty
             ;;
-        back)
+        back|forceBack)
             send_status
             show_picker_or_empty
             ;;
