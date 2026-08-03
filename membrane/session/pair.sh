@@ -9,8 +9,11 @@
 # do_pair(mode) takes over the event-reading loop the same way
 # do_network_setup() does. `mode` is "boot" (no WireGuard tunnel configured
 # yet, shown automatically before the picker -- Skip button, no Back) or
-# "settings" (opened deliberately via the pairing icon -- Back button, no
-# Skip; lets a device add/replace its tunnel later).
+# "settings" (opened deliberately via the Settings panel's Pairing tab --
+# Back button, no Skip; lets a device add/replace its tunnel later;
+# coordinator.sh's openSettings case can also re-enter this function on a
+# `settingsTab` event without the panel ever closing -- see this file's
+# "entry" phase).
 #
 # This is part of the open-source, account-free Connect path: it talks to a
 # Brain's enrollment endpoint (brain/enroll/) over plain HTTPS, never to
@@ -87,6 +90,15 @@ do_pair() {
                         ;;
                     pairSkip)
                         [[ "$mode" == "boot" ]] && return 0
+                        ;;
+                    settingsTab)
+                        # Only reachable in `settings` mode -- same reasoning
+                        # as network-setup.sh's identical case: the frontend
+                        # only shows a tab bar on this flow's top-level
+                        # screen, which is this "entry" phase.
+                        [[ "$mode" == "settings" ]] || continue
+                        SETTINGS_NEXT_TAB=$(jq -r '.tab // empty' <<<"$line")
+                        [[ -n "$SETTINGS_NEXT_TAB" ]] && return 0
                         ;;
                     back)
                         [[ "$mode" == "settings" ]] && return 0

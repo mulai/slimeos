@@ -23,24 +23,30 @@
 #     return to the picker now" -- unlike plain `back`, never mode-conditional
 #     or a partial step-back. Kills an in-flight xfreerdp3 session first if
 #     one is running (see connect.sh's xfreerdp3-monitor loop).
-#   {"type":"networkSettings"}                             dispatched here; hands off to do_network_setup (see network-setup.sh)
+#   {"type":"openSettings"}                                dispatched here; opens the tabbed Settings panel (see the
+#     openSettings case below) defaulting to its Internet tab
 #   {"type":"wifiConnect","ssid":..} | {"type":"wifiPassword","password":..} | {"type":"wifiRescan"} | {"type":"wifiSkip"}
 #     (wifiConnect/wifiPassword/wifiRescan/wifiSkip only consumed by do_network_setup, see network-setup.sh —
 #      retry/reenterPassword/back are reused there too, same as do_connect does)
-#   {"type":"pairSettings"}                                  dispatched here; hands off to do_pair (see pair.sh)
 #   {"type":"pairSubmit","host":..,"code":..} | {"type":"pairSkip"}
 #     (pairSubmit/pairSkip only consumed by do_pair, see pair.sh — retry/back are reused there too)
+#   {"type":"supportToggle","enabled":..}                  only consumed by do_support, see support.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"support"}  only consumed by whichever of do_network_setup/
+#     do_pair/do_support is currently running in `settings` mode — switches
+#     the Settings panel to a different tab without leaving it (see the
+#     openSettings case's SETTINGS_NEXT_TAB loop below)
 #   {"type":"powerShutdown"} | {"type":"powerRestart"}      already confirmed client-side (see index.html); no response emitted, the machine powers off/reboots
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
-# wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError.
+# wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
+# supportSettings.
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -183,6 +189,8 @@ source "$INSTALL_DIR/connect.sh" # defines do_connect()
 source "$INSTALL_DIR/network-setup.sh" # defines do_network_setup()
 # shellcheck source=pair.sh
 source "$INSTALL_DIR/pair.sh" # defines do_pair()
+# shellcheck source=support.sh
+source "$INSTALL_DIR/support.sh" # defines do_support()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -191,6 +199,16 @@ source "$INSTALL_DIR/pair.sh" # defines do_pair()
 # have_default_route wait) on every client reattach.
 network_checked=false
 wg_checked=false
+
+# Set by do_network_setup()/do_pair()/do_support() (see each of their
+# `settingsTab` cases) when the Settings panel's tab bar is clicked while
+# one of them is running -- read by the openSettings case's dispatch loop
+# below, immediately after that function returns, to decide whether to
+# re-enter the panel on a different tab or actually close it. Global (not a
+# local passed by reference) because these three functions are `source`d
+# into this same process and already share every other coordinator.sh
+# helper the same way.
+SETTINGS_NEXT_TAB=""
 
 add_brain() {
     local name="$1" host="$2" port="$3"
@@ -329,13 +347,27 @@ while true; do
             send_status
             show_picker_or_empty
             ;;
-        networkSettings)
-            do_network_setup settings
-            send_status
-            show_picker_or_empty
-            ;;
-        pairSettings)
-            do_pair settings
+        openSettings)
+            # Gear icon: opens the tabbed Settings panel, always starting on
+            # its Internet tab. Each do_* function returns 0 either because
+            # the user closed the panel entirely (back/forceBack, or a
+            # completed action like a successful WiFi reconnect -- see
+            # network-setup.sh's unconditional `return 0` on connect
+            # success) or because a tab click interrupted it, in which case
+            # it sets SETTINGS_NEXT_TAB before returning. Only the latter
+            # case loops back around; anything else falls through to the
+            # normal post-flow resync below, same as every other case here.
+            settings_tab="internet"
+            while true; do
+                SETTINGS_NEXT_TAB=""
+                case "$settings_tab" in
+                    internet) do_network_setup settings ;;
+                    pair)     do_pair settings ;;
+                    support)  do_support settings ;;
+                esac
+                [[ -n "$SETTINGS_NEXT_TAB" ]] || break
+                settings_tab="$SETTINGS_NEXT_TAB"
+            done
             send_status
             show_picker_or_empty
             ;;

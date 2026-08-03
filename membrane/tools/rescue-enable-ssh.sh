@@ -7,6 +7,13 @@
 # needs sshd reachable through the Brain hub. This script sets that up from
 # the only shell always available on a real device: Rescue mode.
 #
+# FALLBACK ONLY as of the Settings panel's Support tab (see
+# membrane/session/support.sh / remote-support-toggle.sh): a working kiosk
+# can now enable the exact same access live, from the gear icon, with no USB
+# stick and a fresh password shown on screen instead of one typed here by
+# hand. Reach for THIS script only when the kiosk itself is unreachable
+# (cage/cog crashed, black screen, etc) and Rescue mode is the only way in.
+#
 # Usage — boot the installer USB → Advanced options → Rescue mode → pick the
 # root partition → "Execute a shell" (you are root; no sudo). Then:
 #

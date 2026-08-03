@@ -155,10 +155,12 @@ new lock-screen states (`wifiList` → `wifiPassword` for secured networks →
 `wifiConnecting`) via `nmcli`, with a `wifiError` recovery screen that
 reuses the existing `slime:retry`/`slime:reenter-password`/`slime:back`
 events (same semantics as the Brain-connect error screen, no new events
-needed there). A gear icon in the status strip (`slime:network-settings`)
-reaches the same function in `settings` mode — non-blocking, reachable any
-time a network already works, for switching WiFi networks — the only
-difference from `boot` mode is a Back button instead of a Skip button.
+needed there). A single gear icon in the status strip (`slime:open-settings`)
+opens the tabbed Settings panel described below, defaulting to its Internet
+tab, which reaches the same function in `settings` mode — non-blocking,
+reachable any time a network already works, for switching WiFi networks —
+the only difference from `boot` mode is a Back button instead of a Skip
+button.
 
 `nmcli` needs `wpasupplicant` (its actual WiFi backend) and NetworkManager
 itself enabled unconditionally in `install.sh` (previously only the
@@ -187,9 +189,9 @@ first `_clientConnected` event, the same way it checks for a default route:
 `ip link show wg0` — link state is transient and already reported
 separately by the tunnel status indicator) gates an automatic `do_pair
 boot` call — defined in `membrane/session/pair.sh`, `source`d the same way
-`network-setup.sh` is. A dedicated pairing icon in the status strip
-(`slime:pair-settings`) reaches the same function in `settings` mode any
-time, for re-pairing or adding a second Brain network.
+`network-setup.sh` is. The Settings panel's Pairing tab reaches the same
+function in `settings` mode any time, for re-pairing or adding a second
+Brain network.
 
 `do_pair()` takes a host (an enrollment endpoint, e.g. `enroll.slimeos.com`)
 and a short-lived code, entered on the new `pairEntry` screen. It POSTs the
@@ -212,8 +214,44 @@ Writing `wg0.conf` itself is a plain filesystem write, not a D-Bus action,
 so `install.sh` instead just hands `/etc/wireguard` to `$SESSION_USER`
 (same pattern as `brains.json`/`brains/`).
 
+### Settings panel (gear icon) and Remote Support
+A single gear icon in the status strip (`slime:open-settings`) opens a
+tabbed Settings panel instead of a separate screen per concern — Internet,
+Pairing, and Support tabs, all sharing one modal-style panel with a Back/×
+that closes it. Clicking a different tab (`slime:settings-tab`, `{tab:
+'internet'|'pair'|'support'}`) doesn't close the panel: `coordinator.sh`'s
+`openSettings` case loops, re-entering whichever of `do_network_setup
+settings` / `do_pair settings` / `do_support settings` the tab bar picked,
+using a shared `SETTINGS_NEXT_TAB` variable each of those three functions
+sets right before returning when a tab click (rather than Back/forceBack/a
+completed action) is what interrupted them. Deeper sub-screens within a tab
+(`wifiPassword`, `pairError`, etc.) don't show the tab bar at all — their
+existing Back button already returns to that tab's own top screen, same as
+it always has; only the three top-level screens (`wifiList`, `pairEntry`,
+`supportSettings`) render it.
+
+**Remote Support** (`membrane/session/support.sh`'s `do_support()`, the
+Support tab) lets a user opt a device in to SSH access for the Slime OS
+support team — off by default, and reachable only over the WireGuard
+subnet, mirroring `membrane/tools/rescue-enable-ssh.sh`'s manual Rescue-mode
+version of the same idea (same `slime` account, same `ufw allow from
+10.10.0.0/24 to any port 22` rule) so on-device docs describe one access
+path, not two. Ticking the checkbox (`slime:support-toggle`, `{enabled}`)
+calls `sudo -n remote-support-toggle.sh on|off` — a root-owned helper
+scoped by a NOPASSWD sudoers entry to exactly that one script, since
+rotating the SSH password (`chpasswd`) and editing the firewall rule are
+plain root operations with no D-Bus action for polkit to authorize, unlike
+the NetworkManager/power/WireGuard cases above. Nothing it does survives a
+reboot on purpose: `on` only *starts* `ssh.service` (never `enable`s it) and
+adds a live `ufw` rule (never touches the persisted
+`/etc/slimeos/firewall-setup.sh`); the password itself is re-randomized on
+every `on`, so an old screenshot of it is worthless. `install.sh` also
+enables `slimeos-remote-support-reset.service`, an unconditional
+`remote-support-toggle.sh off` on every boot, as a belt-and-braces reset
+independent of whatever state the machine was in when it last powered off.
+
 ### Power off / restart
-A power icon in the status strip (next to the network-settings gear)
+A power icon in the status strip (next to the Settings gear)
 opens a confirm modal (Restart / Shut Down / Cancel) — the same
 `showRemoveConfirm`-style modal pattern used for removing a saved Brain.
 Once confirmed, the page immediately shows a local, client-only "Shutting

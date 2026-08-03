@@ -148,8 +148,8 @@ All guides live in [`docs/`](docs/) and stay versioned alongside the code they d
 UEFI and Legacy BIOS variants), the cog/WPE kiosk lock screen driving a
 real WireGuard tunnel to a cloud Brain, RDP connect through to both a
 Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding (including
-switching from Ethernet to WiFi with the network-settings screen correctly
-naming which network is active), account-free WireGuard self-pairing (real
+switching from Ethernet to WiFi with the Settings panel's Internet tab
+correctly naming which network is active), account-free WireGuard self-pairing (real
 pairing code → real Brain, tunnel persists across reboot), the
 on-screen power off/restart controls, peripheral redirection into a
 Windows Brain (local speakers, a USB microphone, and hot-plugged USB

@@ -14,7 +14,7 @@
      state: 'empty' | 'picker' | 'addBrain' | 'credentials' |
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
-            'pairEntry' | 'pairConnecting' | 'pairError'
+            'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings'
      data per state:
        picker:       { brains: [{ id, name, host, lastConnected }] }
        credentials:  { brainName, needUsername: bool }   // false => password-only
@@ -35,22 +35,44 @@
                        // connectionSsid is only meaningful when connectionType
                        // is 'wifi'.
                        // mode 'boot' = shown automatically, no working network
-                       // yet (Skip button, no Back). mode 'settings' = opened
-                       // deliberately from the picker's gear icon while a
-                       // network already works (Back button, no Skip).
+                       // yet (Skip button, no Back), full-screen. mode
+                       // 'settings' = opened deliberately from the gear icon's
+                       // Settings panel while a network already works (Back
+                       // button, no Skip; rendered inside the panel's
+                       // Internet tab, with the tab bar shown alongside it).
        wifiPassword:   { ssid, mode }
        wifiConnecting: { ssid, stage }
        wifiError:      { ssid, message, detail, mode, secured: bool }
                        // secured governs whether "Re-enter password" shows —
-                       // meaningless for an open network.
+                       // meaningless for an open network. wifiPassword/
+                       // wifiConnecting/wifiError render inside the Settings
+                       // panel in `settings` mode same as wifiList, but
+                       // without the tab bar (Back already returns to
+                       // wifiList, same as it does in `boot` mode).
        pairEntry:      { mode: 'boot'|'settings', skippable: bool }
                        // WireGuard self-pairing (see brain/enroll/): host +
                        // code entry. mode/skippable follow the same
-                       // boot-vs-settings convention as wifiList.
+                       // boot-vs-settings convention as wifiList -- `settings`
+                       // renders inside the panel's Pairing tab.
        pairConnecting: { stage }
        pairError:      { message, detail, mode }
                        // No secured/re-enter-password concept here (one
                        // secret field, not two) — just Try again / Back.
+       supportSettings: { mode: 'settings', enabled: bool,
+                          connection: {host, port, username, password} | null,
+                          error: string | null }
+                       // Settings panel's Support tab -- lets a user opt a
+                       // device in to SSH access for the Slime OS support
+                       // team, reachable only over the WireGuard subnet (see
+                       // membrane/session/remote-support-toggle.sh). No
+                       // `boot` mode -- this screen only ever exists inside
+                       // the Settings panel. `connection` is the one
+                       // deliberate exception to "never echo a secret to the
+                       // browser except slime:credentials" — here the
+                       // backend GENERATES the secret and the whole point is
+                       // showing it on screen so the user can read it off to
+                       // support; it's re-randomized every time `enabled`
+                       // flips true, so an old screenshot of it is useless.
 
      Examples:
        SlimeUI.setState('picker', { brains: [
@@ -84,7 +106,8 @@
    'slime:back'            {}                            // back to picker, or cancel
    'slime:cancel-connect'  {}
 
-   'slime:network-settings' {}                           // gear icon: open Wi-Fi settings
+   'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
+   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -93,9 +116,10 @@
    'slime:power-shutdown'  {}                             // power icon, confirmed -- no response expected, the machine powers off
    'slime:power-restart'   {}                             // power icon, confirmed -- no response expected, the machine reboots
 
-   'slime:pair-settings'   {}                             // pairing icon: open "Pair with a Brain"
    'slime:pair-submit'     { host, code }
    'slime:pair-skip'       {}                             // boot mode only
+
+   'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -103,6 +127,11 @@
    back) as the Brain-connect flow, so no separate wifi-specific names exist
    for those three. Pairing reuses 'slime:retry' / 'slime:back' the same way
    (no re-enter-password equivalent — pairError has only one secret field).
+   'slime:back' from a Settings panel top-level tab (wifiList/pairEntry/
+   supportSettings, all in `settings` mode) closes the whole panel, same as
+   clicking its × — 'slime:settings-tab' instead switches to a different tab
+   without closing it. Pairing/network-setup/support boot-mode screens never
+   emit 'slime:settings-tab' — there's no tab bar outside the panel.
 
  All form state (typed name/host/password, toggles) lives only in this page.
  The password is never stored or echoed anywhere except the single
@@ -285,6 +314,35 @@
   .modal-overlay{position:fixed;inset:0;background:rgba(4,6,8,0.6);display:flex;align-items:center;justify-content:center;z-index:80;}
   .modal-card{width:100%;max-width:360px;background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:28px;}
 
+  /* -------- settings panel (gear icon) -------- */
+  .settings-panel{
+    width:100%;max-width:640px;max-height:min(680px,86vh);
+    background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:20px;
+    display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 30px 60px -20px rgba(0,0,0,0.55);
+  }
+  .settings-panel-header{display:flex;align-items:center;justify-content:space-between;padding:22px 26px 0;flex-shrink:0;}
+  .settings-title{margin:0;font-family:var(--font-display);font-weight:700;font-size:19px;color:#F2F6FB;}
+  .settings-close{background:none;border:none;color:var(--text-muted);font-size:20px;line-height:1;padding:6px 10px;border-radius:8px;}
+  .settings-close:hover{color:#fff;background:rgba(255,255,255,0.08);}
+  .settings-tabs{display:flex;gap:4px;padding:16px 26px 0;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;}
+  .settings-tab{background:none;border:none;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:10px 10px 0 0;position:relative;top:1px;border-bottom:2px solid transparent;}
+  .settings-tab:hover{color:#C9D3DF;}
+  .settings-tab.active{color:var(--mint);border-bottom-color:var(--mint);}
+  .settings-body{flex:1;overflow-y:auto;padding:6px 8px 8px;}
+  /* wifiList/pairEntry/supportSettings render their normal full-page
+     `.screen` markup unchanged (see render()'s isSettingsPanel wrapping) --
+     this reclaims that layout to fit inside the panel body instead of
+     assuming the full viewport. */
+  .settings-body .screen{min-height:0;height:auto;padding:18px 18px 26px;justify-content:flex-start;animation:none;}
+
+  .support-toggle-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:14px 16px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;}
+  .support-toggle-row input{width:18px;height:18px;accent-color:var(--teal);}
+  .support-connection{margin-top:20px;background:#0d1217;border:1px solid rgba(0,194,168,0.25);border-radius:12px;padding:18px;}
+  .support-connection dl{margin:0;font-family:var(--font-mono);font-size:13px;color:var(--text);display:grid;grid-template-columns:auto 1fr;gap:6px 14px;}
+  .support-connection dt{color:var(--text-dim);}
+  .support-connection dd{margin:0;color:var(--mint);word-break:break-all;}
+
   .hidden{display:none !important;}
 
   @media (max-width:1400px){
@@ -302,8 +360,7 @@
     </div>
     <div class="right">
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
-      <span class="settings-gear" id="btnNetworkSettings" tabindex="0" role="button" title="Network settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
-      <span class="settings-gear" id="btnPairSettings" tabindex="0" role="button" title="Pair with a Brain"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0Z"></path><path d="M4 12h2"></path><path d="M18 12h2"></path></svg></span>
+      <span class="settings-gear" id="btnOpenSettings" tabindex="0" role="button" title="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
       <span class="bars"><span style="height:4px;"></span><span style="height:7px;"></span><span style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
@@ -453,6 +510,62 @@
 
   /* ===================== rendering ===================== */
 
+  // States that can render inside the tabbed Settings panel (gear icon) --
+  // always exactly the states whose `data.mode === 'settings'` (supportSettings
+  // has no other mode). SETTINGS_TOP_STATES additionally marks which of
+  // those show the tab bar: the top-level screen of each tab, matching
+  // exactly the states whose `back` handling (see each do_*() in the
+  // coordinator) closes the panel entirely rather than stepping back one
+  // level within the same tab.
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1 };
+  var SETTINGS_TABS = [
+    { id: 'internet', label: 'Internet' },
+    { id: 'pair', label: 'Pairing' },
+    { id: 'support', label: 'Support' }
+  ];
+
+  function settingsTabForState(state){
+    if (state === 'pairEntry' || state === 'pairConnecting' || state === 'pairError') return 'pair';
+    if (state === 'supportSettings') return 'support';
+    return 'internet';
+  }
+
+  function renderSettingsShell(state, innerHtml){
+    var activeTab = settingsTabForState(state);
+    var showTabs = !!SETTINGS_TOP_STATES[state];
+    // wifiConnecting/pairConnecting are transient, no-button screens by
+    // design (see their own render*() comments) -- no close affordance
+    // there either, same reasoning.
+    var showClose = state !== 'wifiConnecting' && state !== 'pairConnecting';
+    var tabsHtml = SETTINGS_TABS.map(function(t){
+      return '<button type="button" class="settings-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '">' + t.label + '</button>';
+    }).join('');
+    return (
+      '<div class="screen" data-screen="settings">' +
+        '<div class="settings-panel">' +
+          '<div class="settings-panel-header">' +
+            '<h2 class="settings-title">Settings</h2>' +
+            (showClose ? '<button type="button" class="settings-close" id="btnSettingsClose" title="Close" aria-label="Close">&times;</button>' : '') +
+          '</div>' +
+          (showTabs ? '<div class="settings-tabs" role="tablist">' + tabsHtml + '</div>' : '') +
+          '<div class="settings-body">' + innerHtml + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function bindSettingsShell(state){
+    var close = document.getElementById('btnSettingsClose');
+    if (close) close.addEventListener('click', function(){ emit('slime:back'); });
+    Array.prototype.forEach.call(document.querySelectorAll('.settings-tab'), function(btn){
+      btn.addEventListener('click', function(){
+        var tab = btn.getAttribute('data-tab');
+        if (tab !== settingsTabForState(state)) emit('slime:settings-tab', { tab: tab });
+      });
+    });
+  }
+
   function render(){
     var state = current.state, data = current.data || {};
     var html = '';
@@ -471,8 +584,14 @@
     else if (state === 'pairEntry') html = renderPairEntry(data);
     else if (state === 'pairConnecting') html = renderPairConnecting(data);
     else if (state === 'pairError') html = renderPairError(data);
+    else if (state === 'supportSettings') html = renderSupportSettings(data);
+
+    var isSettingsPanel = SETTINGS_STATES[state] && data.mode === 'settings';
+    if (isSettingsPanel) html = renderSettingsShell(state, html);
+
     screenRoot.innerHTML = html;
     bindScreen(state, data);
+    if (isSettingsPanel) bindSettingsShell(state);
     autofocus(state);
   }
 
@@ -783,6 +902,37 @@
     );
   }
 
+  function renderSupportSettings(data){
+    var enabled = !!data.enabled;
+    var conn = data.connection;
+    var error = data.error;
+    return (
+      '<div class="screen" data-screen="supportSettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Remote Support</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Let the Slime OS support team connect to this device over SSH to help troubleshoot. Off by default, and reachable only over the WireGuard tunnel — the access details below change every time you switch this on.</p>' +
+          '<label class="support-toggle-row">' +
+            '<input type="checkbox" id="fieldSupportToggle" data-autofocus' + (enabled ? ' checked' : '') + '>' +
+            '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Remote Support is ' + (enabled ? 'on' : 'off') + '</span>' +
+          '</label>' +
+          (error ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
+          (enabled && conn ? (
+            '<div class="support-connection">' +
+              '<div class="field-label" style="margin-bottom:12px;">Share with support</div>' +
+              '<dl>' +
+                '<dt>Host</dt><dd>' + escapeHtml(conn.host || 'unknown') + '</dd>' +
+                '<dt>Port</dt><dd>' + escapeHtml(conn.port || 22) + '</dd>' +
+                '<dt>User</dt><dd>' + escapeHtml(conn.username || '') + '</dd>' +
+                '<dt>Password</dt><dd>' + escapeHtml(conn.password || '') + '</dd>' +
+              '</dl>' +
+              '<p style="margin:14px 0 0;font-size:11.5px;color:var(--text-faint);">This password stops working the moment Remote Support is turned off — or back on, which replaces it with a new one.</p>' +
+            '</div>'
+          ) : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   /* ===================== event binding ===================== */
 
   function bindScreen(state, data){
@@ -955,6 +1105,11 @@
       document.getElementById('btnPairTryAgain').addEventListener('click', function(){ emit('slime:retry'); });
       document.getElementById('btnBackFromPairError').addEventListener('click', function(){ emit('slime:back'); });
     }
+    else if (state === 'supportSettings'){
+      document.getElementById('fieldSupportToggle').addEventListener('change', function(e){
+        emit('slime:support-toggle', { enabled: e.target.checked });
+      });
+    }
   }
 
   function autofocus(state){
@@ -1052,17 +1207,14 @@
     else if (s === 'wifiList' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'pairError') emit('slime:back');
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
+    else if (s === 'supportSettings') emit('slime:back');
   });
 
   /* Gear icon lives in the always-present status strip, outside #screenRoot,
      so it's bound once here rather than per-render in bindScreen(). */
-  var btnNetworkSettings = document.getElementById('btnNetworkSettings');
-  btnNetworkSettings.addEventListener('click', function(){ emit('slime:network-settings'); });
-  btnNetworkSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:network-settings'); });
-
-  var btnPairSettings = document.getElementById('btnPairSettings');
-  btnPairSettings.addEventListener('click', function(){ emit('slime:pair-settings'); });
-  btnPairSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:pair-settings'); });
+  var btnOpenSettings = document.getElementById('btnOpenSettings');
+  btnOpenSettings.addEventListener('click', function(){ emit('slime:open-settings'); });
+  btnOpenSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:open-settings'); });
 
   var btnPower = document.getElementById('btnPower');
   btnPower.addEventListener('click', showPowerConfirm);
@@ -1094,7 +1246,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:network-settings','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-settings','slime:pair-submit','slime:pair-skip'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1113,10 +1265,34 @@
                               // below know whether to route to the Wi-Fi flow
                               // or the Brain-connect flow.
     var demoWifiMode = 'settings';
+    var demoSupportEnabled = false;
+    var demoSupportConnection = null;
 
-    document.addEventListener('slime:network-settings', function(){
+    document.addEventListener('slime:open-settings', function(){
       demoWifiMode = 'settings';
       window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: 'settings', connectionType: 'ethernet', connectionSsid: '', skippable: false });
+    });
+
+    document.addEventListener('slime:settings-tab', function(e){
+      var tab = e.detail.tab;
+      if (tab === 'internet'){
+        window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: 'settings', connectionType: 'ethernet', connectionSsid: '', skippable: false });
+      } else if (tab === 'pair'){
+        window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
+      } else if (tab === 'support'){
+        window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null });
+      }
+    });
+
+    document.addEventListener('slime:support-toggle', function(e){
+      demoSupportEnabled = !!e.detail.enabled;
+      demoSupportConnection = demoSupportEnabled ? {
+        host: '10.10.0.99',
+        port: 22,
+        username: 'slime',
+        password: Math.random().toString(36).slice(2, 10)
+      } : null;
+      window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null });
     });
 
     document.addEventListener('slime:wifi-rescan', function(){
@@ -1157,10 +1333,6 @@
 
     document.addEventListener('slime:reenter-password', function(){
       if (demoWifiSsid) window.SlimeUI.setState('wifiPassword', { ssid: demoWifiSsid, mode: demoWifiMode });
-    });
-
-    document.addEventListener('slime:pair-settings', function(){
-      window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
     });
 
     document.addEventListener('slime:pair-submit', function(){
@@ -1267,16 +1439,17 @@
       'slime:reenter-password': 'reenterPassword',
       'slime:back': 'back',
       'slime:cancel-connect': 'cancelConnect',
-      'slime:network-settings': 'networkSettings',
+      'slime:open-settings': 'openSettings',
+      'slime:settings-tab': 'settingsTab',
       'slime:wifi-connect': 'wifiConnect',
       'slime:wifi-password': 'wifiPassword',
       'slime:wifi-rescan': 'wifiRescan',
       'slime:wifi-skip': 'wifiSkip',
       'slime:power-shutdown': 'powerShutdown',
       'slime:power-restart': 'powerRestart',
-      'slime:pair-settings': 'pairSettings',
       'slime:pair-submit': 'pairSubmit',
-      'slime:pair-skip': 'pairSkip'
+      'slime:pair-skip': 'pairSkip',
+      'slime:support-toggle': 'supportToggle'
     };
 
     function sendEvent(type, detail){

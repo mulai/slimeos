@@ -104,12 +104,21 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     udisks2 udiskie \
     ntfs-3g exfatprogs \
     alsa-utils \
+    openssh-server \
     ${MICROCODE_PKGS} \
     ethtool \
     qrencode \
     jq \
     2>/dev/null
 ok "Dependencies installed"
+
+# openssh-server's own postinst enables and starts ssh.service unconditionally
+# -- undo both right away so a fresh install boots with Remote Support fully
+# off (see membrane/session/remote-support-toggle.sh, wired up in section 3
+# below) until a user explicitly opts in from the Settings panel's Support
+# tab. Installing the package here rather than at toggle-time means that
+# toggle never depends on apt/network being reachable in the moment.
+systemctl disable --now ssh.service 2>/dev/null || true
 
 # ── 1b. FreeRDP camera-channel rebuild (rdpecam) ──────────────────────────────
 # Debian trixie's freerdp3 archive binaries ship WITHOUT the rdpecam
@@ -227,7 +236,11 @@ curl -fsSL "$REPO_BASE/membrane/session/network-setup.sh" \
      -o "$INSTALL_DIR/network-setup.sh"
 curl -fsSL "$REPO_BASE/membrane/session/pair.sh" \
      -o "$INSTALL_DIR/pair.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh"
+curl -fsSL "$REPO_BASE/membrane/session/support.sh" \
+     -o "$INSTALL_DIR/support.sh"
+curl -fsSL "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
+     -o "$INSTALL_DIR/remote-support-toggle.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -353,6 +366,23 @@ polkit.addRule(function(action, subject) {
 });
 POLKIT
 ok "USB storage automount enabled for the kiosk UI"
+
+# ── 3f. Sudoers: Remote Support toggle from the kiosk UI ─────────────────────
+# support.sh's do_support() calls `sudo -n remote-support-toggle.sh on|off`
+# as $SESSION_USER in response to the Settings panel's Support tab checkbox.
+# Unlike the four polkit rules above, this isn't a D-Bus action polkit can
+# authorize -- rotating the SSH password (chpasswd) and opening the
+# WireGuard-only ufw rule are plain root operations with no action.id to
+# hook. Sudo, scoped to exactly this one script (never a shell, never
+# arbitrary root commands), is the equivalent mechanism here. See
+# remote-support-toggle.sh's own header for what it actually does and why
+# none of it survives a reboot.
+cat > /etc/sudoers.d/slimeos-remote-support <<SUDOERS
+${SESSION_USER} ALL=(root) NOPASSWD: ${INSTALL_DIR}/remote-support-toggle.sh
+SUDOERS
+chmod 440 /etc/sudoers.d/slimeos-remote-support
+visudo -cf /etc/sudoers.d/slimeos-remote-support || die "generated sudoers file failed validation"
+ok "Remote Support sudo grant installed"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
@@ -616,6 +646,29 @@ WantedBy=multi-user.target
 SERVICE
 systemctl enable slimeos-firewall.service
 ok "Firewall service installed (applies on first real boot)"
+
+# ── 9b. Remote Support: forced-off reset on every boot ────────────────────────
+# Belt-and-braces on top of remote-support-toggle.sh's own "off" behavior:
+# runs unconditionally on every boot (not just the first), independent of
+# whatever state the machine was in when it last shut down (crash mid-toggle,
+# a user leaving it on, etc). Doesn't need network-pre.target the way the
+# firewall unit does -- it only touches ssh.service, the WireGuard-subnet ufw
+# rule, and the local password/lock state, all of which are meaningful before
+# networking comes up.
+cat > "$SYSTEMD_DIR/slimeos-remote-support-reset.service" <<SERVICE
+[Unit]
+Description=Slime OS — Remote Support off-by-default reset
+
+[Service]
+Type=oneshot
+ExecStart=${INSTALL_DIR}/remote-support-toggle.sh off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-remote-support-reset.service
+ok "Remote Support reset-on-boot service installed"
 
 # ── 10. AppArmor ──────────────────────────────────────────────────────────────
 log "Enabling AppArmor..."

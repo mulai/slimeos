@@ -10,8 +10,10 @@
 # do_connect() does -- coordinator.sh's outer dispatch is not read from
 # again until this function returns. `mode` is "boot" (no working network
 # yet, shown automatically before the picker -- Skip button, no Back) or
-# "settings" (opened deliberately via the picker's gear icon while a network
-# already works -- Back button, no Skip).
+# "settings" (opened deliberately via the Settings panel's Internet tab
+# while a network already works -- Back button, no Skip; coordinator.sh's
+# openSettings case can also re-enter this function on a `settingsTab`
+# event without the panel ever closing -- see this file's "list" phase).
 #
 # Phases, dispatched via a `phase` local. Unlike do_connect() (which nests
 # three loop levels deep in its "connect" phase), every phase here is
@@ -146,6 +148,15 @@ do_network_setup() {
                         ;;
                     wifiSkip)
                         [[ "$mode" == "boot" ]] && return 0
+                        ;;
+                    settingsTab)
+                        # Only reachable in `settings` mode -- the frontend
+                        # only shows a tab bar (and so only ever emits this)
+                        # on the Settings panel's top-level screens, which
+                        # for this flow is exactly this "list" phase.
+                        [[ "$mode" == "settings" ]] || continue
+                        SETTINGS_NEXT_TAB=$(jq -r '.tab // empty' <<<"$line")
+                        [[ -n "$SETTINGS_NEXT_TAB" ]] && return 0
                         ;;
                     back)
                         [[ "$mode" == "settings" ]] && return 0
