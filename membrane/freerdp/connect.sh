@@ -244,7 +244,26 @@ do_connect() {
             #                  NLA, xrdp Brains only offer TLS (no
             #                  CredSSP/NLA support at all) — forcing either
             #                  one breaks the other.
-            #   /cert:tofu   — trust on first use, then pin.
+            #   /cert:ignore — was /cert:tofu (trust on first use, then pin)
+            #                  until 2026-08-03: a managed cloud Brain's
+            #                  self-signed cert can regenerate across an
+            #                  idle-deallocate/wake-on-connect cycle (Azure
+            #                  Windows confirmed doing this live), and TOFU
+            #                  treats a changed-but-still-self-signed cert
+            #                  as possible tampering, prompting interactively
+            #                  ("Do you trust the above certificate? Y/T/N").
+            #                  xfreerdp3 here is a background child of
+            #                  coordinator.sh with no terminal to answer
+            #                  that on, so it hangs forever with the lock
+            #                  screen still showing "Waking up your
+            #                  Brain…" (no stage update exists between wake
+            #                  and this xfreerdp3 call to say otherwise).
+            #                  TLS identity verification is redundant here
+            #                  anyway, not this project's trust boundary —
+            #                  see architecture.md's "zero-trust stack":
+            #                  WireGuard already authenticates and encrypts
+            #                  the whole path to a known peer IP before any
+            #                  of this runs.
             # No /tls:seclevel: FreeRDP 3.15's /tls sub-option parser
             # rejects even its own documented values (non-fatal ERROR,
             # option ignored) — the server side enforces the TLS floor.
@@ -314,7 +333,7 @@ do_connect() {
                 /u:"${slime_username}" \
                 /p:"${rdp_pass}" \
                 /sec:rdp:off \
-                /cert:tofu \
+                /cert:ignore \
                 /network:"${RDP_NETWORK:-auto}" \
                 ${RES_FLAGS} \
                 /dynamic-resolution \

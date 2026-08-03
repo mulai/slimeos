@@ -401,7 +401,11 @@ xfreerdp3 \
   /sec:rdp:off \      # negotiate NLA (Windows) or TLS (xRDP), never legacy
                       # RDP security. xRDP has no NLA/CredSSP support, Windows
                       # requires NLA — forcing either breaks the other.
-  /cert:tofu \        # Trust on first use, pin thereafter
+  /cert:ignore \      # WireGuard is the trust boundary, not TLS identity --
+                      # a managed cloud Brain's self-signed cert can
+                      # regenerate across an idle-deallocate/wake cycle,
+                      # and TOFU's "certificate changed" prompt has no
+                      # terminal to answer on here, so it hangs forever
   /network:lan \      # Bandwidth optimization
   /gfx \             # GFX pipeline for efficient streaming
   /rfx \             # RemoteFX codec
