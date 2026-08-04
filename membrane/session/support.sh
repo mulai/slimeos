@@ -26,6 +26,13 @@
 
 REMOTE_SUPPORT_TOGGLE="$INSTALL_DIR/remote-support-toggle.sh"
 
+# Written by install.sh at install time (see its "On-device version record"
+# step). Purely informational -- shown read-only in this tab, doesn't drive
+# any update mechanism. Read once here (not per-loop-turn like `enabled`
+# below): unlike ssh.service's live state, it can't change during a session.
+MEMBRANE_VERSION="unknown"
+[[ -f "$CONFIG_DIR/version" ]] && MEMBRANE_VERSION=$(cat "$CONFIG_DIR/version")
+
 support_is_active() {
     systemctl is-active --quiet ssh.service
 }
@@ -45,8 +52,8 @@ do_support() {
         [[ "$enabled" == "true" ]] || connection="null"
 
         emit_state supportSettings "$(jq -nc --arg mode "$mode" --argjson enabled "$enabled" \
-            --argjson connection "$connection" --arg error "$error" \
-            '{mode:$mode, enabled:$enabled, connection:$connection, error:(if $error == "" then null else $error end)}')"
+            --argjson connection "$connection" --arg error "$error" --arg version "$MEMBRANE_VERSION" \
+            '{mode:$mode, enabled:$enabled, connection:$connection, error:(if $error == "" then null else $error end), version:$version}')"
         error=""
 
         local line ev_type

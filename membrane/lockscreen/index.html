@@ -60,7 +60,7 @@
                        // secret field, not two) — just Try again / Back.
        supportSettings: { mode: 'settings', enabled: bool,
                           connection: {host, port, username, password} | null,
-                          error: string | null }
+                          error: string | null, version: string }
                        // Settings panel's Support tab -- lets a user opt a
                        // device in to SSH access for the Slime OS support
                        // team, reachable only over the WireGuard subnet (see
@@ -73,6 +73,9 @@
                        // showing it on screen so the user can read it off to
                        // support; it's re-randomized every time `enabled`
                        // flips true, so an old screenshot of it is useless.
+                       // `version` is the installed Membrane version, written
+                       // once by install.sh and read verbatim -- purely
+                       // informational, display-only, no update affordance.
 
      Examples:
        SlimeUI.setState('picker', { brains: [
@@ -928,6 +931,7 @@
               '<p style="margin:14px 0 0;font-size:11.5px;color:var(--text-faint);">This password stops working the moment Remote Support is turned off — or back on, which replaces it with a new one.</p>' +
             '</div>'
           ) : '') +
+          '<p style="margin:24px 0 0;font-size:11.5px;color:var(--text-faint);">Membrane v' + escapeHtml(data.version || 'unknown') + '</p>' +
         '</div>' +
       '</div>'
     );
@@ -1280,7 +1284,7 @@
       } else if (tab === 'pair'){
         window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
       } else if (tab === 'support'){
-        window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null });
+        window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
       }
     });
 

@@ -384,6 +384,16 @@ chmod 440 /etc/sudoers.d/slimeos-remote-support
 visudo -cf /etc/sudoers.d/slimeos-remote-support || die "generated sudoers file failed validation"
 ok "Remote Support sudo grant installed"
 
+# ── 3g. On-device version record ──────────────────────────────────────────────
+# Lets a device report what it's running without SSHing in and checking git
+# log -- surfaced read-only in the Settings panel's Support tab (see
+# support.sh's do_support()). Reinstall remains the only supported upgrade
+# path (see README) -- this file is purely informational, not an update
+# mechanism.
+echo "$SLIMEOS_VERSION" > "$CONFIG_DIR/version"
+chmod 644 "$CONFIG_DIR/version"
+ok "Version recorded ($SLIMEOS_VERSION)"
+
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
 bash "$INSTALL_DIR/hardware-profiles/detect.sh"
