@@ -242,7 +242,9 @@ curl -fsSL "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
      -o "$INSTALL_DIR/remote-support-toggle.sh"
 curl -fsSL "$REPO_BASE/membrane/session/crash-reporting.sh" \
      -o "$INSTALL_DIR/crash-reporting.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh"
+curl -fsSL "$REPO_BASE/membrane/session/slime-id.sh" \
+     -o "$INSTALL_DIR/slime-id.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -445,13 +447,22 @@ if [[ ! -f "$CONFIG_DIR/crash-reporting-consent" ]]; then
     echo 'unset' > "$CONFIG_DIR/crash-reporting-consent"
     chmod 600 "$CONFIG_DIR/crash-reporting-consent"
 fi
+# do_slime_id_login() (slime-id.sh) writes this directly as $SESSION_USER
+# on a successful sign-in -- same "must pre-exist, unprivileged code can
+# only overwrite it, never create it in this root-owned dir" reasoning as
+# crash-reporting-consent above. Empty (not "unset" -- there's no
+# three-state distinction here, just signed-in-or-not) until then.
+if [[ ! -f "$CONFIG_DIR/slime-id-session" ]]; then
+    : > "$CONFIG_DIR/slime-id-session"
+    chmod 600 "$CONFIG_DIR/slime-id-session"
+fi
 # The Connect screen (brain-select.sh) runs as $SESSION_USER and owns this
 # data: it reads/rewrites brains.json and creates per-Brain .cred files in
 # brains/. Left owned by root (this script runs as root), brain-select.sh
 # dies on its first chmod/read and the session crash-loops with a black
 # screen. /etc/slimeos itself stays root-owned -- the session user gets
 # exactly these entries, nothing else.
-chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent"
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent" "$CONFIG_DIR/slime-id-session"
 
 # pair.sh's do_pair() writes /etc/wireguard/wg0.conf directly as
 # $SESSION_USER once it fetches a config from the enrollment endpoint --

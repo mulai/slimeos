@@ -44,9 +44,14 @@
 #     try_handle_crash_report() in crash-reporting.sh and its call sites in every
 #     do_*'s catch-all
 #   {"type":"powerShutdown"} | {"type":"powerRestart"}      already confirmed client-side (see index.html); no response emitted, the machine powers off/reboots
+#   {"type":"slimeIdStart"}                                handled directly here — a direct user-initiated action from
+#     the empty/picker screen's "Sign in with Slime ID" button, NOT boot-gated and NOT part of the
+#     tabbed Settings panel (no settingsTab involvement). Calls do_slime_id_login(), see slime-id.sh —
+#     deliberately scoped to just the login handshake (proves identity, stores a session token), no
+#     brain listing or auto-provisioning yet.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
 #   {"type":"showCrashConsent"}                            one-shot, not a setState — see index.html's doc comment
 #
@@ -55,7 +60,9 @@
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
-# supportSettings/crashReportSettings.
+# supportSettings/crashReportSettings/slimeIdConnecting/slimeIdEntry/slimeIdError.
+# `empty`/`picker` both additionally carry `signedInEmail` (null unless
+# do_slime_id_login() has ever successfully signed this device in).
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -202,6 +209,8 @@ source "$INSTALL_DIR/pair.sh" # defines do_pair()
 source "$INSTALL_DIR/support.sh" # defines do_support()
 # shellcheck source=crash-reporting.sh
 source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
+# shellcheck source=slime-id.sh
+source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -277,11 +286,30 @@ relative_time() {
     fi
 }
 
+# Purely a local-state read, no live validation against the backend --
+# see slime-id.sh's own header comment on why this pass stops at "prove
+# the handshake works." A stale/expired token still shows as signed in
+# here; nothing yet depends on it being valid.
+#
+# Always returns 0 regardless of whether a session exists -- every caller
+# assigns this via `email=$(signed_in_email)`, and under set -e a
+# non-zero exit from the RIGHT side of an assignment kills the whole
+# coordinator, not just this function. (Bit exactly this on the first
+# on-device test: every _clientConnected call show_picker_or_empty() ->
+# signed_in_email() on a device with no session yet -- i.e. nearly always
+# -- crash-looped the coordinator every ~2s.) The explicit `return 0` as
+# the last line is load-bearing, not decorative -- don't remove it.
+signed_in_email() {
+    [[ -s "$SLIME_ID_SESSION_FILE" ]] && jq -r '.email // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null
+    return 0
+}
+
 show_picker_or_empty() {
-    local count
+    local count email
     count=$(jq 'length' "$BRAINS_FILE")
+    email=$(signed_in_email)
     if [[ "$count" -eq 0 ]]; then
-        emit_state empty '{}'
+        emit_state empty "$(jq -nc --arg e "$email" '{signedInEmail:(if $e == "" then null else $e end)}')"
         return
     fi
 
@@ -295,7 +323,8 @@ show_picker_or_empty() {
 
     local brains_json
     brains_json=$(printf '%s\n' "${entries[@]}" | jq -sc '.')
-    emit_state picker "$(jq -nc --argjson b "$brains_json" '{brains:$b}')"
+    emit_state picker "$(jq -nc --argjson b "$brains_json" --arg e "$email" \
+        '{brains:$b, signedInEmail:(if $e == "" then null else $e end)}')"
 }
 
 log "Coordinator starting, waiting for first client..."
@@ -387,6 +416,11 @@ while true; do
                 stamp_last_connected "$id"
                 do_connect "$id"
             fi
+            send_status
+            show_picker_or_empty
+            ;;
+        slimeIdStart)
+            do_slime_id_login
             send_status
             show_picker_or_empty
             ;;

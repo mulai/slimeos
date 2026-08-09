@@ -15,9 +15,18 @@
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
-            'crashReportSettings'
+            'crashReportSettings' | 'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
-       picker:       { brains: [{ id, name, host, lastConnected }] }
+       empty:        { signedInEmail: string | null }
+       picker:       { brains: [{ id, name, host, lastConnected }], signedInEmail: string | null }
+                       // signedInEmail is set once do_slime_id_login() has ever
+                       // completed successfully on this device (see
+                       // membrane/session/slime-id.sh) -- a purely local-state
+                       // read, not live-revalidated against the backend (this
+                       // pass stops at "prove the handshake works," see
+                       // slimeIdEntry below). null shows the "Sign in with
+                       // Slime ID" button; set shows a plain "Signed in as
+                       // {email}" line instead, no sign-out affordance yet.
        credentials:  { brainName, needUsername: bool }   // false => password-only
        connecting:   { brainName, stage }                // stage: free-text microcopy
        error:        { brainName, message, detail }      // detail = raw code (collapsed)
@@ -85,6 +94,28 @@
                        // decision is instead made via the one-shot
                        // 'showCrashConsent' message below, before the user
                        // has ever opened Settings at all.
+       slimeIdConnecting: { stage }
+                       // "Sign in with Slime ID" (see
+                       // membrane/session/slime-id.sh) -- reached directly
+                       // from the empty/picker screen's button, not the
+                       // Settings panel, and has no `mode` at all (no
+                       // boot/settings distinction, unlike every other
+                       // multi-mode screen above). Brief transitional
+                       // screen while POSTing /api/device/start.
+       slimeIdEntry:   { userCode, verificationUri, qrDataUrl }
+                       // qrDataUrl is a data:image/gif;base64,... URL, used
+                       // as a plain <img src>. Started as raw inline SVG
+                       // markup instead -- confirmed live on a real WPE
+                       // WebKit kiosk 2026-08-09 that foreign-content SVG
+                       // via innerHTML rendered wrong (empty box, then a
+                       // squashed shape instead of a square) even with an
+                       // explicit pixel size baked into the tag. A real
+                       // raster image sidesteps that whole class of
+                       // embedded-engine quirk. Shown while the backend
+                       // polls in the background; Back cancels.
+       slimeIdError:   { message, detail }
+                       // Same visual convention as pairError -- Try again
+                       // (fetches a fresh code) / Back.
 
      Examples:
        SlimeUI.setState('picker', { brains: [
@@ -149,6 +180,11 @@
      is whatever `current.state` was when the error happened, for context.
    'slime:crash-consent'   { granted }                     // answer to the one-shot consent modal (OK/Cancel)
    'slime:crash-report-toggle' { enabled }                 // Settings panel's Privacy tab checkbox
+
+   'slime:slime-id-start'  {}                              // "Sign in with Slime ID" button on empty/picker.
+     slimeIdEntry reuses 'slime:back' (cancels while waiting) and slimeIdError
+     reuses 'slime:retry' (fresh code) / 'slime:back' -- same as pairError,
+     no new names needed for those two.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -672,7 +708,7 @@
   function renderImpl(){
     var state = current.state, data = current.data || {};
     var html = '';
-    if (state === 'empty') html = renderEmpty();
+    if (state === 'empty') html = renderEmpty(data);
     else if (state === 'picker') html = renderPicker(data);
     else if (state === 'addBrain') html = renderAddBrain();
     else if (state === 'credentials') html = renderCredentials(data);
@@ -689,6 +725,9 @@
     else if (state === 'pairError') html = renderPairError(data);
     else if (state === 'supportSettings') html = renderSupportSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
+    else if (state === 'slimeIdConnecting') html = renderSlimeIdConnecting(data);
+    else if (state === 'slimeIdEntry') html = renderSlimeIdEntry(data);
+    else if (state === 'slimeIdError') html = renderSlimeIdError(data);
 
     var isSettingsPanel = SETTINGS_STATES[state] && data.mode === 'settings';
     if (isSettingsPanel) html = renderSettingsShell(state, html);
@@ -699,14 +738,16 @@
     autofocus(state);
   }
 
-  function renderEmpty(){
+  function renderEmpty(data){
     return (
       '<div class="screen" data-screen="empty">' +
         '<span style="display:inline-block;animation:blobFloat 6s ease-in-out infinite;">' + slimeBlobSVG(96, 'color', true) + '</span>' +
         '<h1 class="title">Welcome to Slime OS</h1>' +
         '<p class="subtitle">Your Brain is a computer in the cloud that does the heavy lifting. Add one so this machine can connect to it.</p>' +
         '<button class="btn-primary" style="margin-top:36px;" id="btnAddBrain" data-autofocus>Add a Brain</button>' +
-        '<button class="btn-ghost" style="margin-top:22px;" id="btnSlimeId">Sign in with Slime ID &middot; Coming soon</button>' +
+        (data.signedInEmail
+          ? '<p class="btn-ghost" style="margin-top:22px;cursor:default;">Signed in as ' + escapeHtml(data.signedInEmail) + '</p>'
+          : '<button class="btn-ghost" style="margin-top:22px;" id="btnSlimeId">Sign in with Slime ID</button>') +
       '</div>'
     );
   }
@@ -747,7 +788,9 @@
             '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;">Add a Brain</span>' +
           '</div>' +
         '</div>' +
-        '<button class="btn-ghost" style="margin-top:38px;" id="btnSlimeId2">Sign in with Slime ID &middot; Coming soon</button>' +
+        (data.signedInEmail
+          ? '<p class="btn-ghost" style="margin-top:38px;cursor:default;">Signed in as ' + escapeHtml(data.signedInEmail) + '</p>'
+          : '<button class="btn-ghost" style="margin-top:38px;" id="btnSlimeId2">Sign in with Slime ID</button>') +
       '</div>'
     );
   }
@@ -1054,6 +1097,57 @@
     );
   }
 
+  function renderSlimeIdConnecting(data){
+    return (
+      '<div class="screen" data-screen="slimeIdConnecting">' +
+        '<div class="ring-wrap">' +
+          '<span class="ring"></span><span class="ring inner"></span>' +
+          slimeBlobSVG(66, 'color', false) +
+        '</div>' +
+        '<h2 style="margin:30px 0 0;font-family:var(--font-display);font-weight:700;font-size:21px;color:#F2F6FB;">Slime ID</h2>' +
+        '<p style="margin:12px 0 0;font-size:14.5px;color:var(--mint);font-family:var(--font-mono);">' + escapeHtml(data.stage || 'Preparing sign-in…') + '</p>' +
+      '</div>'
+    );
+  }
+
+  function renderSlimeIdEntry(data){
+    var userCode = data.userCode || '';
+    var displayCode = userCode.length === 8 ? (userCode.slice(0, 4) + '-' + userCode.slice(4)) : userCode;
+    return (
+      '<div class="screen" data-screen="slimeIdEntry">' +
+        '<div style="width:100%;max-width:380px;text-align:center;">' +
+          '<h2 class="title" style="font-size:22px;margin:0 0 8px;">Sign in with Slime ID</h2>' +
+          '<p style="margin:0 0 24px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Scan this code with your phone, or visit ' + escapeHtml(data.verificationUri || '') + ' and enter the code below.</p>' +
+          '<div style="background:#fff;border-radius:16px;padding:16px;display:inline-block;margin-bottom:22px;">' +
+            '<img src="' + escapeHtml(data.qrDataUrl || '') + '" alt="QR code" style="display:block;width:180px;height:180px;">' +
+          '</div>' +
+          '<p style="margin:0 0 22px;font-family:var(--font-mono);font-size:26px;font-weight:700;letter-spacing:3px;color:var(--mint);">' + escapeHtml(displayCode) + '</p>' +
+          '<div style="display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-dim);font-size:12.5px;">' +
+            '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span>' +
+            '<span>Waiting for approval…</span>' +
+          '</div>' +
+          '<button class="btn-tertiary" style="margin-top:26px;" id="btnSlimeIdBack" data-autofocus>Back</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderSlimeIdError(data){
+    return (
+      '<div class="screen" data-screen="slimeIdError">' +
+        '<div class="error-card">' +
+          '<span class="error-icon">!</span>' +
+          '<h2 style="margin:20px 0 0;font-family:var(--font-display);font-weight:700;font-size:19px;color:#F2F6FB;">' + escapeHtml(data.message || 'Sign-in failed.') + '</h2>' +
+          '<div class="error-actions">' +
+            '<button class="btn-primary" style="box-shadow:none;" id="btnSlimeIdTryAgain" data-autofocus>Try again</button>' +
+            '<button class="btn-tertiary" id="btnBackFromSlimeIdError">Back</button>' +
+          '</div>' +
+          '<details class="tech"><summary>+ Technical details</summary><div class="code">' + escapeHtml(data.detail || '') + '</div></details>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   /* ===================== event binding ===================== */
 
   // Wrapped like render(): setup-time errors (e.g. a missing element) get
@@ -1070,7 +1164,8 @@
   function bindScreenImpl(state, data){
     if (state === 'empty'){
       document.getElementById('btnAddBrain').onclick = guarded(showLocalAddBrain);
-      document.getElementById('btnSlimeId').onclick = guarded(showComingSoon);
+      var slimeIdBtn = document.getElementById('btnSlimeId');
+      if (slimeIdBtn) slimeIdBtn.onclick = guarded(function(){ emit('slime:slime-id-start'); });
     }
     else if (state === 'picker'){
       var list = document.getElementById('pickerList');
@@ -1099,7 +1194,8 @@
       });
       on(document.getElementById('btnAddBrainCard'), 'click', showLocalAddBrain);
       on(document.getElementById('btnAddBrainCard'), 'keydown', function(e){ if (e.key === 'Enter') showLocalAddBrain(); });
-      document.getElementById('btnSlimeId2').onclick = guarded(showComingSoon);
+      var slimeIdBtn2 = document.getElementById('btnSlimeId2');
+      if (slimeIdBtn2) slimeIdBtn2.onclick = guarded(function(){ emit('slime:slime-id-start'); });
     }
     else if (state === 'addBrain'){
       var form = document.getElementById('addBrainForm');
@@ -1247,6 +1343,15 @@
         emit('slime:crash-report-toggle', { enabled: e.target.checked });
       });
     }
+    /* slimeIdConnecting has no interactive elements -- same reasoning as
+       wifiConnecting/pairConnecting above. */
+    else if (state === 'slimeIdEntry'){
+      on(document.getElementById('btnSlimeIdBack'), 'click', function(){ emit('slime:back'); });
+    }
+    else if (state === 'slimeIdError'){
+      on(document.getElementById('btnSlimeIdTryAgain'), 'click', function(){ emit('slime:retry'); });
+      on(document.getElementById('btnBackFromSlimeIdError'), 'click', function(){ emit('slime:back'); });
+    }
   }
 
   function autofocus(state){
@@ -1262,13 +1367,6 @@
     render();
   }
 
-  function showComingSoon(){
-    var toast = document.createElement('div');
-    toast.textContent = 'Slime ID is coming soon';
-    toast.style.cssText = 'position:fixed;bottom:36px;left:50%;transform:translateX(-50%);background:#1C2530;border:1px solid rgba(0,194,168,0.3);border-radius:999px;padding:10px 18px;font-family:var(--font-mono);font-size:11.5px;color:#5FE6D2;z-index:90;';
-    document.body.appendChild(toast);
-    setTimeout(function(){ toast.remove(); }, 1800);
-  }
 
   function showRemoveConfirm(brain){
     modalRoot.innerHTML =
@@ -1372,6 +1470,8 @@
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'supportSettings') emit('slime:back');
     else if (s === 'crashReportSettings') emit('slime:back');
+    else if (s === 'slimeIdEntry') emit('slime:back');
+    else if (s === 'slimeIdError') emit('slime:back');
   });
 
   /* Gear icon lives in the always-present status strip, outside #screenRoot,
@@ -1410,7 +1510,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1466,6 +1566,26 @@
       demoCrashReportEnabled = !!e.detail.enabled;
       window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
     });
+
+    function startDemoSlimeId(){
+      window.SlimeUI.setState('slimeIdConnecting', { stage: 'Preparing sign-in…' });
+      setTimeout(function(){
+        window.SlimeUI.setState('slimeIdEntry', {
+          userCode: 'DEMO1234',
+          verificationUri: 'https://www.slimeos.com/device',
+          qrDataUrl: 'data:image/gif;base64,R0lGODdh5gDmAIAAAAAAAP///ywAAAAA5gDmAAAC/4yPqcvtD6OctNqLs968+w+G4kiW5omm6sq27gvH8kzX9o3n+s73/g8MCofEovGITCqXzKbzCY1Kp9Sq9YrNtgDcrvcLDovBinEXQk6Y12P0t/x+sOf086iOX8PNbu8+zycXh5DmAHg4GIK4CPAn1mdHyBgGyeXYKDiZR6IJeFnYAGrQmcggGnD6Sdp2t0qn6pcZeeBqKWsrGWtYy8bJq6cGvKtLW1uJmTtr+hsokrrxPFxn0RtMPCo8EZ2xrdF98Q3LSlGdjFvcrF3aEQ6+ztFuPkedjX2NWh8Rr37vsS/xDx8eeunsKRM4jt9BeO/YNfT2MNSmCuXQHawIMCKGgP8Z+0HTuMATxXynMOoDSXChw3si5aU8t8yjy1vIJMq0eXHiTGfrWlqEefKmQaCXjhkdyVLnz5ogSiodyjSoyp04iVqbuvRlVJ9QfSUdeNWqNLFZaR4dG/XsUpMcpQLlipBsTKxdzdpFq1Xco7BpV+YES7Uj3bh9A4cEGdAp4LI8v07jW1QRyckFCauFyhalO8evIHtuSjkh5p6ISS+u2/jvY8Nt0SoWTfi1XMt8MwvlZno1493+Qu+VJ7sw79i+hUPkPO/zcIaVbcP+Ftz57I25O7PWTK549OrGaQMv7lW19eGa9Hbnddn7WvCtkEvfOsn8sfJ3yT9VD9o9+++nid//Rl8faus1hx1S4iV3HSPy0UQfXsqNRuBt1OkX4YFwmWQeXJElqJuA+Vm434Ad+jcYgA5yOJ6HH7RWFXwSBnhYhbMFt+GKBWb3Io4HMldiiHO9xV1q0202WF4PEjmjjzHueCSPQxr5IZA5tjhfkDDSKNmUOj6pkJRFwrigYTWqyOKP3U345ZYupkklg1aeaJ+Wbp2JJDNvxskkimt6yeeedsop2J/IjYlfoVjqSaiglLSnaJ549pnonWRyp2h4jfoZ6aBHHvqon5Uyemmmjk6qKaKbXsqmmp+aymqnokJam6BUQFeaK1X2pwUKtP5njJu45mrCrj3a6uuIwAZb67Cr/9xq7LGWnpcsKcym6GwJwiZJrGv3OZEYpfEZiC2Iv/K3SHq9ybmdguBCS2Gz5CJirl9ckrrsuuk12CK+Zj4LpYjw2nvlt9qqC2eUdOqp75z3Cpwvw/uCenCnCceL8LaxEtymrveVOWe6o9ZJ6LSLunDhjXV6DOtxH4vMMZrUtlxsn5y6jOm6GKZQMqA2e1sqbj0HiuAWG5usFco1q5xyl0GzkHOqJ/O8MsBixjzyCRpe7PTNBRfKMtThJo3suP5GDGHWknasXbRHW23xu2STOK+hJjf9W8bLQaz12EXPfXbX7X69dtju6r0zun1TbfTCOu9dWZhKd/sz2jJW/fDUTP9MjLisVAtJeRKYD4yqyJzDTMPnDaPKLmxOdo6E6WaiDjjphF/usOShb56l6ke4viTsytZ9ru6cZzg06or/njrgPBhNd6PHKw9mkzUwX/ztW1+bfPbLe30I8dnarWLI0ls+A/X9+f689tGTL4P5I6IfMK/yI7/94j4jj/3McP/iePtEfzQ/4PWuc+6TFtbixi+hBZB1Bwzc/kw0u/L9D2nZy9/Z4Oc2G8gOaKLDXcX+1L8YbFBhHjzdxzAYQf8tMG+vO5zb3gPBsoFtBRZsXAnD10AY9iqD42PbCvPRQfY9MG3fk6EDVVBD4Zlwht57juZ4KMQEgk6AQbzbC4lYLyj/WtGH+APiDbmWQywaUIs41EESmcG4chUuarT7IQjX+C9VuXAJZ+QfHLt3R/G1sYtvlCPGgKY/bqltVY+rXRXLSMdBPrGQf7QdE6fwHr+dUIwEvKDaWqekJs5Qh5N7lfqMEMnMRY6TThzlJXeXyTCacnKhbFXlitDKJVbyb55SUiB76INYtrCTDdSkA28ZRbwZUmqMVCMZ97c6Flprh/eLWwyR2UsADk5wY2zm255JSgSq0mnBqybN0hjHFEKTgsp8Fu8oJsvmJU6a1EIiM795R3VyL5le1FjkPKnMdbpygAkDJhcf+UEl0kuA/jRi8/T4zyOeSmwDnSUbx3ZQXC7z/54LnabceClEbM6RmgoNKBUrStCNDvF8IpXiFhuaz3mCtIK1K6iNDAfTh74Sntcb5hTfxkFi5jSYPAXfAH0JOYFas187PelP2flJiNZTliYtqlPBuDWiHvWKNrxpU0moJoTOFGTxM2YxtYnOraZPqmRd6dWs+oJsOhR6+9QqVMWJzwkitYAddZVEsXfIqcIVZ5R0qf7wur69ehSn8lrr0t7aULcCFq01rWpC6apYSy4wrOP0aTmFSUu/SpZ+gTVi+kaIyKe6Na9ApeRnl2qw1VGWtNt8GWovatFuEjajcvWsKN/3Wsjy1X6hRawjWdrIlGa2tkpTbWd/K0nXOhalr/+VrXGjmsfbKleougWCPou70tOuUlycta5Ks5rdroZ0ux/tqQq568zNslWcf80tcd1JS6lqNr7hPeZop/dd7LbVrOqt5WSDcN2nzhe9v8yvWNNqYH7ybbjL9W0IL1u6BIdQuxYN6niFqkEJRxO8VKXugkuJYfzSl7H6VWqDLWxY0EJswhsusUHdG9MLlzcHAVZwjP1b4Q/LmIEka+5xUVzjIC/yvDMWrUQfbMu+2lSBIYaueStr28GWlqE09LGTjYpkjLJ3yCK0sk/ve0xdQnmkXiUyj12sV0AmWMh9rFaYuSdmcF5Tw1IQcz+JC2GJvRfASQ4unr3MXN4Owc4t/XP/g+MqaCEQ2s+CznOguYlKLb9Y0k+7MYtHx+U6tteNIN5kKjHd5t5GlLYkJa9h4Ws9o45a1dXzNKXNmWlFUlrT/c0ypOWsUU7vOLKlnuSrMWsnXuOWoh12NYHBjNTh/bjPWfzysg/N1dQ+u9M4DueBrxzl3IHV2aSm9pQ9bOkvOlfbSd2lr5t9bW4LNtnkpuyi0Z1mrDJ1xe2e9q5be1hkixrQaF51b3tM7HQumWlwrjWNS4rvszJZZsze9lWB/M4uM/jcDqf3kwlpZl960owILzYeIzxxY1dc2RfnMgyqy2pdn9reZ560t3dL4AHH7tMpB3eZHVxYjd9V1i/H9pi//w3Qentc2DP/dbeLTOZ72zPmIqV1wPd94kInWt4uDzrUh93ded80zhY3sUzjTfSPYznheya5160O9p0z2myNzHDI65ruq1sb5x5X8XPPDve0H13s/yb71M1e9byHPbkr92NsEfx2ffvW6T3/ar5FfGt1Z7vvjc3x3w9+ebkXfqj4Xm2kIx/3MXMM5aHHZOYXT3MBt23soCx7zZXO+aEf1/Sg1/uWG13w/9YZdrbescwP69KNAxuNLZ686HkOe8rbFdTBLv7xjY534XOY9fGMuFp7D9zGKz+xw7fjm1nZ9FYLvr7kxvjzqf37d6f36W5uv/vfD//4y3/+9K+//e+P/yD863///O+///8PgAEogANIgAVogAeIgAmogAvIgAlYAAA7'
+        });
+        // Auto-"approve" after a few seconds, purely so the demo click-through
+        // has an ending -- the real flow polls the backend instead of a timer.
+        setTimeout(function(){
+          if (current.state !== 'slimeIdEntry') return; // user already backed out
+          setStatus({ tunnel: 'down' });
+          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: 'demo@slimeos.com' });
+        }, 4000);
+      }, 600);
+    }
+
+    document.addEventListener('slime:slime-id-start', startDemoSlimeId);
 
     document.addEventListener('slime:wifi-rescan', function(){
       window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: true, mode: demoWifiMode, connectionType: (demoWifiMode === 'settings' ? 'ethernet' : ''), connectionSsid: '', skippable: demoWifiMode === 'boot' });
@@ -1537,6 +1657,10 @@
     });
 
     document.addEventListener('slime:retry', function(){
+      if (current.state === 'slimeIdError'){
+        startDemoSlimeId();
+        return;
+      }
       if (current.state === 'pairError'){
         window.SlimeUI.setState('pairConnecting', { stage: 'Fetching your Brain’s configuration…' });
         setTimeout(function(){
@@ -1624,7 +1748,8 @@
       'slime:support-toggle': 'supportToggle',
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
-      'slime:crash-report-toggle': 'crashReportToggle'
+      'slime:crash-report-toggle': 'crashReportToggle',
+      'slime:slime-id-start': 'slimeIdStart'
     };
 
     function sendEvent(type, detail){
