@@ -49,6 +49,10 @@
 #     tabbed Settings panel (no settingsTab involvement). Calls do_slime_id_login(), see slime-id.sh —
 #     deliberately scoped to just the login handshake (proves identity, stores a session token), no
 #     brain listing or auto-provisioning yet.
+#   {"type":"slimeIdLogout"}                               handled directly here — the "Sign out" link next to
+#     "Signed in as ..." on empty/picker. Calls slime_id_logout() (slime-id.sh): best-effort revoke
+#     call to /api/device/logout, then clears $CONFIG_DIR/slime-id-session regardless of whether
+#     that call succeeded.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
 #   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
@@ -210,7 +214,7 @@ source "$INSTALL_DIR/support.sh" # defines do_support()
 # shellcheck source=crash-reporting.sh
 source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
 # shellcheck source=slime-id.sh
-source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login()
+source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -421,6 +425,11 @@ while true; do
             ;;
         slimeIdStart)
             do_slime_id_login
+            send_status
+            show_picker_or_empty
+            ;;
+        slimeIdLogout)
+            slime_id_logout
             send_status
             show_picker_or_empty
             ;;

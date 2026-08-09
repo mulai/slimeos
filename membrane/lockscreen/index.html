@@ -25,8 +25,12 @@
                        // read, not live-revalidated against the backend (this
                        // pass stops at "prove the handshake works," see
                        // slimeIdEntry below). null shows the "Sign in with
-                       // Slime ID" button; set shows a plain "Signed in as
-                       // {email}" line instead, no sign-out affordance yet.
+                       // Slime ID" button; set shows a "Signed in as
+                       // {email}" line (masked client-side via
+                       // maskEmail() -- this is on-screen indefinitely on
+                       // a kiosk, never send the full address to the
+                       // display layer expecting it to stay private) plus
+                       // a Sign out button.
        credentials:  { brainName, needUsername: bool }   // false => password-only
        connecting:   { brainName, stage }                // stage: free-text microcopy
        error:        { brainName, message, detail }      // detail = raw code (collapsed)
@@ -185,6 +189,8 @@
      slimeIdEntry reuses 'slime:back' (cancels while waiting) and slimeIdError
      reuses 'slime:retry' (fresh code) / 'slime:back' -- same as pairError,
      no new names needed for those two.
+   'slime:slime-id-logout' {}                              // "Sign out" button, shown instead of the sign-in
+     button once signedInEmail is set.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -500,6 +506,18 @@
     });
   }
 
+  // The "Signed in as ..." line on empty/picker is on-screen indefinitely
+  // on a kiosk anyone walking by can see -- mask most of the local part
+  // (where a real name usually lives) but keep the domain visible, e.g.
+  // "tommy@gmail.com" -> "t***y@gmail.com".
+  function maskEmail(email){
+    var parts = String(email || '').split('@');
+    if (parts.length !== 2 || !parts[0]) return String(email || '');
+    var local = parts[0], domain = parts[1];
+    var masked = local.length <= 2 ? (local.charAt(0) + '*') : (local.charAt(0) + '***' + local.charAt(local.length - 1));
+    return masked + '@' + domain;
+  }
+
   /* ===================== crash reporting =====================
      Always fires on any uncaught error/rejection, regardless of the user's
      reporting choice -- this page never checks consent itself (see
@@ -746,7 +764,10 @@
         '<p class="subtitle">Your Brain is a computer in the cloud that does the heavy lifting. Add one so this machine can connect to it.</p>' +
         '<button class="btn-primary" style="margin-top:36px;" id="btnAddBrain" data-autofocus>Add a Brain</button>' +
         (data.signedInEmail
-          ? '<p class="btn-ghost" style="margin-top:22px;cursor:default;">Signed in as ' + escapeHtml(data.signedInEmail) + '</p>'
+          ? (
+              '<p class="btn-ghost" style="margin-top:22px;margin-bottom:0;cursor:default;">Signed in as ' + escapeHtml(maskEmail(data.signedInEmail)) + '</p>' +
+              '<button class="btn-ghost" style="padding:4px 8px;" id="btnSlimeIdLogout">Sign out</button>'
+            )
           : '<button class="btn-ghost" style="margin-top:22px;" id="btnSlimeId">Sign in with Slime ID</button>') +
       '</div>'
     );
@@ -789,7 +810,10 @@
           '</div>' +
         '</div>' +
         (data.signedInEmail
-          ? '<p class="btn-ghost" style="margin-top:38px;cursor:default;">Signed in as ' + escapeHtml(data.signedInEmail) + '</p>'
+          ? (
+              '<p class="btn-ghost" style="margin-top:38px;margin-bottom:0;cursor:default;">Signed in as ' + escapeHtml(maskEmail(data.signedInEmail)) + '</p>' +
+              '<button class="btn-ghost" style="padding:4px 8px;" id="btnSlimeIdLogout2">Sign out</button>'
+            )
           : '<button class="btn-ghost" style="margin-top:38px;" id="btnSlimeId2">Sign in with Slime ID</button>') +
       '</div>'
     );
@@ -1166,6 +1190,8 @@
       document.getElementById('btnAddBrain').onclick = guarded(showLocalAddBrain);
       var slimeIdBtn = document.getElementById('btnSlimeId');
       if (slimeIdBtn) slimeIdBtn.onclick = guarded(function(){ emit('slime:slime-id-start'); });
+      var slimeIdLogoutBtn = document.getElementById('btnSlimeIdLogout');
+      if (slimeIdLogoutBtn) slimeIdLogoutBtn.onclick = guarded(function(){ emit('slime:slime-id-logout'); });
     }
     else if (state === 'picker'){
       var list = document.getElementById('pickerList');
@@ -1196,6 +1222,8 @@
       on(document.getElementById('btnAddBrainCard'), 'keydown', function(e){ if (e.key === 'Enter') showLocalAddBrain(); });
       var slimeIdBtn2 = document.getElementById('btnSlimeId2');
       if (slimeIdBtn2) slimeIdBtn2.onclick = guarded(function(){ emit('slime:slime-id-start'); });
+      var slimeIdLogoutBtn2 = document.getElementById('btnSlimeIdLogout2');
+      if (slimeIdLogoutBtn2) slimeIdLogoutBtn2.onclick = guarded(function(){ emit('slime:slime-id-logout'); });
     }
     else if (state === 'addBrain'){
       var form = document.getElementById('addBrainForm');
@@ -1510,7 +1538,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1532,6 +1560,7 @@
     var demoSupportEnabled = false;
     var demoSupportConnection = null;
     var demoCrashReportEnabled = false;
+    var demoSignedInEmail = null;
 
     document.addEventListener('slime:open-settings', function(){
       demoWifiMode = 'settings';
@@ -1580,12 +1609,18 @@
         setTimeout(function(){
           if (current.state !== 'slimeIdEntry') return; // user already backed out
           setStatus({ tunnel: 'down' });
-          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: 'demo@slimeos.com' });
+          demoSignedInEmail = 'demo@slimeos.com';
+          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
         }, 4000);
       }, 600);
     }
 
     document.addEventListener('slime:slime-id-start', startDemoSlimeId);
+
+    document.addEventListener('slime:slime-id-logout', function(){
+      demoSignedInEmail = null;
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
+    });
 
     document.addEventListener('slime:wifi-rescan', function(){
       window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: true, mode: demoWifiMode, connectionType: (demoWifiMode === 'settings' ? 'ethernet' : ''), connectionSsid: '', skippable: demoWifiMode === 'boot' });
@@ -1597,7 +1632,7 @@
     document.addEventListener('slime:wifi-skip', function(){
       demoWifiSsid = null;
       setStatus({ tunnel: 'down' });
-      window.SlimeUI.setState('picker', { brains: demoBrains });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
     document.addEventListener('slime:wifi-connect', function(e){
@@ -1611,7 +1646,7 @@
         setTimeout(function(){
           demoWifiSsid = null;
           setStatus({ tunnel: 'up' });
-          window.SlimeUI.setState('picker', { brains: demoBrains });
+          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
         }, 1200);
       }
     });
@@ -1636,11 +1671,11 @@
     });
 
     document.addEventListener('slime:pair-skip', function(){
-      window.SlimeUI.setState('picker', { brains: demoBrains });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
     setStatus({ clock: '14:32', tunnel: 'down' });
-    window.SlimeUI.setState('picker', { brains: demoBrains });
+    window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
 
     document.addEventListener('slime:connect', function(e){
       var b = demoBrains.filter(function(x){ return String(x.id) === String(e.detail.id); })[0];
@@ -1665,7 +1700,7 @@
         window.SlimeUI.setState('pairConnecting', { stage: 'Fetching your Brain’s configuration…' });
         setTimeout(function(){
           setStatus({ tunnel: 'up' });
-          window.SlimeUI.setState('picker', { brains: demoBrains });
+          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
         }, 1200);
         return;
       }
@@ -1674,7 +1709,7 @@
         setTimeout(function(){
           demoWifiSsid = null;
           setStatus({ tunnel: 'up' });
-          window.SlimeUI.setState('picker', { brains: demoBrains });
+          window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
         }, 1200);
         return;
       }
@@ -1704,17 +1739,17 @@
         return;
       }
       setStatus({ tunnel: 'down' });
-      window.SlimeUI.setState('picker', { brains: demoBrains });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
     document.addEventListener('slime:add-brain', function(e){
       demoBrains.push({ id: 'b' + (demoBrains.length + 1), name: e.detail.name, host: e.detail.host, lastConnected: 'never' });
-      window.SlimeUI.setState('picker', { brains: demoBrains });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
     document.addEventListener('slime:remove-brain', function(e){
       demoBrains = demoBrains.filter(function(x){ return String(x.id) !== String(e.detail.id); });
-      window.SlimeUI.setState('picker', { brains: demoBrains });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
   } else {
     /* ===================== bridge glue (real backend) ===================== */
@@ -1749,7 +1784,8 @@
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',
-      'slime:slime-id-start': 'slimeIdStart'
+      'slime:slime-id-start': 'slimeIdStart',
+      'slime:slime-id-logout': 'slimeIdLogout'
     };
 
     function sendEvent(type, detail){

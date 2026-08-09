@@ -149,3 +149,26 @@ do_slime_id_login() {
         done
     done
 }
+
+# Called directly from coordinator.sh's outer dispatch on a one-shot
+# 'slimeIdLogout' event -- no loop-owning function needed, same shape as
+# the crashConsent case handling itself inline. Best-effort: a failed
+# revoke call still clears the local file (the device stops SHOWING as
+# signed in either way; the worst case is a session token that just sits
+# unused server-side until its normal 30-day expiry, not a security hole
+# -- same non-fatal posture as every other outbound call in this codebase
+# that isn't the one thing the user is waiting on).
+slime_id_logout() {
+    local token
+    token=$(jq -r '.token // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null)
+
+    if [[ -n "$token" ]]; then
+        set +e
+        curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg t "$token" '{session_token:$t}')" \
+            "$SLIME_ID_API/device/logout" >/dev/null 2>&1
+        set -e
+    fi
+
+    : > "$SLIME_ID_SESSION_FILE" || log "Failed to clear slime-id-session"
+}
