@@ -150,6 +150,18 @@ have_saved_wifi_profile() {
 # administratively down.
 have_wg_tunnel() { [[ -f /etc/wireguard/wg0.conf ]]; }
 
+# Quick, dependency-free reachability probe over whatever tunnel is
+# already up -- bash's own /dev/tcp redirection, no `nc` required (some
+# kiosk images don't have it, confirmed 2026-08-09). Used only once, right
+# when a Slime ID bookmark card is tapped (see the `connect` case), not in
+# any hot/polling path, so a few seconds' timeout here is fine. Exit
+# status is meant to be tested directly in an `if`/`&&` -- safe under
+# set -e (both are standard exemptions), never called bare.
+brain_reachable() {
+    local host="$1" port="$2"
+    timeout 3 bash -c "echo > /dev/tcp/${host}/${port}" 2>/dev/null
+}
+
 read_event() {
     local line
     IFS= read -r line <&0 || return 1
@@ -245,6 +257,12 @@ consent_checked=false
 # "no bookmarks shown", never blocks the picker.
 REMOTE_BRAINS_JSON="[]"
 
+# Set by add_brain() (below) to the id it just generated -- read by the
+# `connect` case's bookmark-reachable fast path right after calling
+# add_brain(), same side-channel-global pattern as PAIR_HINT/
+# SETTINGS_NEXT_TAB, since add_brain() otherwise has no return value.
+LAST_ADDED_BRAIN_ID=""
+
 # Set by do_network_setup()/do_pair()/do_support() (see each of their
 # `settingsTab` cases) when the Settings panel's tab bar is clicked while
 # one of them is running -- read by the openSettings case's dispatch loop
@@ -257,16 +275,20 @@ SETTINGS_NEXT_TAB=""
 
 add_brain() {
     local name="$1" host="$2" port="$3"
-    local id tmp
-    id=$(cat /proc/sys/kernel/random/uuid)
+    local tmp
+    # Sets the file-scope LAST_ADDED_BRAIN_ID (not `local`) so callers that
+    # need the new id back (the `connect` case's bookmark-reachable fast
+    # path) can read it right after this returns -- add_brain() otherwise
+    # has no return value.
+    LAST_ADDED_BRAIN_ID=$(cat /proc/sys/kernel/random/uuid)
     tmp=$(mktemp)
     # Write-through, not `mv`: /etc/slimeos is root-owned; we only own
     # brains.json itself, not rename() rights inside its parent directory.
-    jq --arg id "$id" --arg name "$name" --arg host "$host" --arg port "$port" \
+    jq --arg id "$LAST_ADDED_BRAIN_ID" --arg name "$name" --arg host "$host" --arg port "$port" \
         '. += [{id:$id, name:$name, host:$host, port:$port, username:"", lastConnected:null}]' \
         "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
     rm -f "$tmp"
-    log "Added brain '$name' ($host:$port) id=$id"
+    log "Added brain '$name' ($host:$port) id=$LAST_ADDED_BRAIN_ID"
 }
 
 remove_brain() {
@@ -541,20 +563,45 @@ while true; do
         connect)
             id=$(jq -r '.id // empty' <<<"$line")
             if [[ "$id" == remote:* ]]; then
-                # A Slime ID bookmark, not yet paired on this device --
-                # Slime ID never holds the WireGuard credential for a free
-                # Brain (see pair.sh's own doc comment), so this routes
-                # into the normal pairing form instead of connecting
-                # directly. PAIR_HINT (read by pair.sh's do_pair) just
-                # carries the remembered name/host through as context; it
-                # doesn't skip the fresh pairing-code entry.
+                # A Slime ID bookmark. Slime ID never holds the WireGuard
+                # credential for a free Brain (see pair.sh's own doc
+                # comment) -- but this device might already be tunneled
+                # into the exact same network as the bookmark (e.g. it was
+                # paired to this same hub for a DIFFERENT brain, or the
+                # bookmark's own brain was already paired once before). In
+                # that case a fresh pairing code isn't just unnecessary,
+                # it's actively harmful: pair_install_config() (pair.sh)
+                # fully REPLACES /etc/wireguard/wg0.conf rather than
+                # adding to it, tearing down a working tunnel to mint a
+                # throwaway one. Confirmed live 2026-08-09: a device
+                # already on the right network kept getting sent back to
+                # "Pair with a Brain" every time the bookmark was tapped.
+                #
+                # So: probe reachability first. If it's already there,
+                # add it as an ordinary local brain and connect straight
+                # away -- show_picker_or_empty()'s existing host+port
+                # dedup then hides the bookmark card on the next render
+                # (a real local entry now matches it), no duplicate.
+                # Only fall through to pairing if the probe fails (no
+                # tunnel yet, or this bookmark's Brain is on a different
+                # network than whatever's currently paired).
                 rid="${id#remote:}"
                 rname=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .name // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 rhost=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .host // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
-                log "Reconnecting to bookmarked brain '$rname' ($rhost) — needs a fresh pairing code"
-                PAIR_HINT="Reconnecting to \"${rname:-a saved Brain}\"${rhost:+ ($rhost)} — enter a fresh pairing code from its enroll screen."
-                do_pair settings
-                PAIR_HINT=""
+                rport=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .port // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
+                [[ -n "$rport" ]] || rport="3389"
+
+                if have_wg_tunnel && [[ -n "$rhost" ]] && brain_reachable "$rhost" "$rport"; then
+                    log "Bookmarked brain '$rname' ($rhost:$rport) is already reachable over this device's existing tunnel — adding locally, no pairing needed"
+                    add_brain "${rname:-Untitled Brain}" "$rhost" "$rport"
+                    stamp_last_connected "$LAST_ADDED_BRAIN_ID"
+                    do_connect "$LAST_ADDED_BRAIN_ID"
+                else
+                    log "Reconnecting to bookmarked brain '$rname' ($rhost) — needs a fresh pairing code"
+                    PAIR_HINT="Reconnecting to \"${rname:-a saved Brain}\"${rhost:+ ($rhost)} — enter a fresh pairing code from its enroll screen."
+                    do_pair settings
+                    PAIR_HINT=""
+                fi
                 refresh_remote_brains
             elif [[ -n "$id" ]]; then
                 log "Connecting to brain id=$id"
