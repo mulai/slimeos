@@ -8,6 +8,7 @@ name: slimeos-brain
 #   wireguard   — VPN gateway (UDP 51820); RDP never exposed directly
 #   power       — cloud Brain auto-deallocate / wake-on-connect (tunnel-only)
 #   enroll      — self-service WireGuard pairing endpoint
+#   pairgen     — pairing-code generator for slimeos.com's dashboard (purchased resources)
 #   desktop     — Ubuntu xRDP Linux cloud desktop VM (free path / BYOL fallback)
 #   redis       — Authelia session store
 #   postgres    — Authelia + Slime API persistent store
@@ -177,6 +178,42 @@ services:
       AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
       POWER_VMS: "${POWER_VMS:-}"              # empty = service runs, manages nothing
       POWER_IDLE_MINUTES: "${POWER_IDLE_MINUTES:-20}"
+
+  # ── Pairgen — self-service pairing-code generation for purchased resources ────
+  # slimeos.com's Cloudflare Worker cannot SSH into this host, so this gives
+  # it an HTTPS API to do what an admin previously had to do by hand: run
+  # pair-peer.sh and hand the resulting code to a customer. Unlike `power`,
+  # this MUST be reachable from outside the WireGuard network (a Worker is
+  # not a WireGuard peer), so it's fronted by Caddy and auth is a bearer
+  # token (PAIRGEN_SHARED_SECRET), not network position. network_mode
+  # joining `wireguard`'s namespace is still required for the same reason
+  # `power` needs it: pair-peer.sh runs `wg`/`wg-quick` against the live
+  # wg0 interface. That shared namespace also means Caddy reaches this
+  # service as `wireguard:8090`, not `pairgen:8090` — this container has no
+  # independent network identity of its own (see brain/pairgen/main.go).
+  # NOTE: network_mode is mutually exclusive with networks:/ports:/hostname:.
+  pairgen:
+    build:
+      context: ./pairgen
+      dockerfile: Dockerfile
+    image: slimeos/pairgen:latest
+    container_name: slimeos-pairgen
+    restart: unless-stopped
+    network_mode: service:wireguard
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - wireguard
+      - redis
+    environment:
+      PAIRGEN_SHARED_SECRET: "${PAIRGEN_SHARED_SECRET}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"        # pair-peer.sh's redis-cli calls
+      SERVERURL: "${WG_SERVER_URL}"              # provision-peer.sh's Endpoint line
+      SERVERPORT: "${WG_PORT:-51820}"
+    volumes:
+      - wireguard_config:/config                 # same volume `wireguard` writes wg0.conf/peer files into
+      - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
+      - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
 
   # ── Enroll — self-service WireGuard pairing endpoint ───────────────────────────
   # Serves the one-time codes pair-peer.sh stashes in Redis. Deliberately

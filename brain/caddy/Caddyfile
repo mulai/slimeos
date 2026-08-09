@@ -32,5 +32,27 @@ enroll.slimeos.com {
     reverse_proxy enroll:8080
 }
 
+# ── Pairgen — self-service pairing codes for purchased resources ─────────────
+# Called only by slimeos.com's Cloudflare Worker (never by a browser
+# directly) to mint a fresh pairing code for a customer's own paid,
+# fulfilled resource. Auth is a bearer token checked by pairgen itself
+# (brain/pairgen/main.go), not Authelia -- this is a machine-to-machine
+# API, not a human-facing page. The remote_ip matcher is defense-in-depth
+# on top of that token: only Cloudflare's own edge IPs can even attempt a
+# request, narrowing who could try to brute the secret. Reaches pairgen at
+# `wireguard:8090`, not `pairgen:8090` -- see docker-compose.yml's comment
+# on pairgen's network_mode.
+pairgen.slimeos.com {
+    @cloudflare {
+        remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22
+    }
+    handle @cloudflare {
+        reverse_proxy wireguard:8090
+    }
+    handle {
+        respond 403
+    }
+}
+
 # ── WireGuard status (internal only, not exposed publicly) ────────────────────
 # Access via: curl http://wireguard:51821 from inside slimenet
