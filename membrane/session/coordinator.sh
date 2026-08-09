@@ -53,11 +53,18 @@
 #     "Signed in as ..." on empty/picker. Calls slime_id_logout() (slime-id.sh): best-effort revoke
 #     call to /api/device/logout, then clears $CONFIG_DIR/slime-id-session regardless of whether
 #     that call succeeded.
+#   {"type":"saveBrainConsent","save":..,"name":..,"host":..,"port":..}  one-shot answer to the
+#     'showSaveBrainPrompt' overlay below (same shape as crashConsent) -- if save=true, best-effort
+#     POSTs the brain to /api/device/brains-save so it shows up in this account's Slime ID dashboard
+#     and on any other signed-in device. Opt-in, never automatic -- see brains-save.ts's own comment.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
 #   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
 #   {"type":"showCrashConsent"}                            one-shot, not a setState — see index.html's doc comment
+#   {"type":"showSaveBrainPrompt","data":{"name":..,"host":..,"port":..}}  one-shot, not a setState,
+#     same shape as showCrashConsent -- shown right after a brain is added locally (addBrain case
+#     below) while signed in to Slime ID. Answered via `saveBrainConsent`, see above.
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
@@ -67,6 +74,10 @@
 # supportSettings/crashReportSettings/slimeIdConnecting/slimeIdEntry/slimeIdError.
 # `empty`/`picker` both additionally carry `signedInEmail` (null unless
 # do_slime_id_login() has ever successfully signed this device in).
+# `picker`'s brain entries additionally carry `remote` (true for a Slime
+# ID bookmark not yet paired on this device -- see REMOTE_BRAINS_JSON
+# below and pair.sh's PAIR_HINT); `pairEntry` additionally carries an
+# optional `hint` string, set only when entered via such a bookmark.
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -225,6 +236,15 @@ network_checked=false
 wg_checked=false
 consent_checked=false
 
+# Cache of this account's Slime ID-bookmarked brains (see brains-list.ts),
+# refreshed explicitly at a few entry points (refresh_remote_brains, below)
+# rather than on every show_picker_or_empty call -- that function runs on
+# nearly every screen transition (back, settings close, post-connect...),
+# and a network round trip on each of those would make routine navigation
+# feel laggy. "[]" (not signed in, or last fetch failed) always degrades to
+# "no bookmarks shown", never blocks the picker.
+REMOTE_BRAINS_JSON="[]"
+
 # Set by do_network_setup()/do_pair()/do_support() (see each of their
 # `settingsTab` cases) when the Settings panel's tab bar is clicked while
 # one of them is running -- read by the openSettings case's dispatch loop
@@ -255,6 +275,66 @@ remove_brain() {
     jq --arg id "$id" 'map(select(.id != $id))' "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
     rm -f "$tmp" "$CRED_DIR/${id}.cred"
     log "Removed brain id=$id"
+}
+
+# Best-effort POST to /api/device/brains-list -- same non-fatal posture as
+# slime_id_logout's revoke call (SLIME_ID_API/SLIME_ID_SESSION_FILE are
+# defined in slime-id.sh, sourced before this is ever called). Any failure
+# (offline, expired token, server error) just yields "[]", same as "signed
+# out" -- never blocks or errors the picker.
+fetch_remote_brains() {
+    local token
+    token=$(jq -r '.token // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null)
+    if [[ -z "$token" ]]; then
+        echo '[]'
+        return
+    fi
+
+    set +e
+    local response
+    response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+        -d "$(jq -nc --arg t "$token" '{session_token:$t}')" \
+        "$SLIME_ID_API/device/brains-list" 2>/dev/null)
+    set -e
+
+    jq -c '.brains // []' <<<"$response" 2>/dev/null || echo '[]'
+}
+
+# Refreshes REMOTE_BRAINS_JSON. Called at real entry points (client
+# reconnect, right after a Slime ID login/logout, after a bookmark
+# reconnect) rather than on every picker render -- see REMOTE_BRAINS_JSON's
+# own comment above.
+refresh_remote_brains() {
+    if [[ -z "$(signed_in_email)" ]]; then
+        REMOTE_BRAINS_JSON='[]'
+        return
+    fi
+    REMOTE_BRAINS_JSON=$(fetch_remote_brains)
+}
+
+# Best-effort POST to /api/device/brains-save -- only ever called after the
+# user explicitly answers "yes" to the showSaveBrainPrompt overlay
+# (saveBrainConsent case below), never automatically. A failure here just
+# means the bookmark isn't saved this time; the brain itself was already
+# added locally by add_brain() regardless, so there's nothing to roll back.
+save_remote_brain() {
+    local name="$1" host="$2" port="$3" token
+    token=$(jq -r '.token // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null)
+    [[ -z "$token" ]] && return 0
+
+    set +e
+    curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+        -d "$(jq -nc --arg t "$token" --arg n "$name" --arg h "$host" --arg p "$port" \
+            '{session_token:$t, name:$n, host:$h, port:$p}')" \
+        "$SLIME_ID_API/device/brains-save" >/dev/null 2>&1
+    local rc=$?
+    set -e
+
+    if [[ $rc -eq 0 ]]; then
+        log "Saved brain '$name' to Slime ID"
+    else
+        log "Failed to save brain '$name' to Slime ID (non-fatal)"
+    fi
 }
 
 stamp_last_connected() {
@@ -309,10 +389,11 @@ signed_in_email() {
 }
 
 show_picker_or_empty() {
-    local count email
+    local count remote_count email
     count=$(jq 'length' "$BRAINS_FILE")
+    remote_count=$(jq 'length' <<<"$REMOTE_BRAINS_JSON" 2>/dev/null || echo 0)
     email=$(signed_in_email)
-    if [[ "$count" -eq 0 ]]; then
+    if [[ "$count" -eq 0 && "$remote_count" -eq 0 ]]; then
         emit_state empty "$(jq -nc --arg e "$email" '{signedInEmail:(if $e == "" then null else $e end)}')"
         return
     fi
@@ -322,8 +403,23 @@ show_picker_or_empty() {
         local rel
         rel=$(relative_time "$last")
         entries+=("$(jq -nc --arg id "$id" --arg name "$name" --arg host "$host" --arg rel "$rel" \
-            '{id:$id, name:$name, host:$host, lastConnected:$rel}')")
+            '{id:$id, name:$name, host:$host, lastConnected:$rel, remote:false}')")
     done < <(jq -r '.[] | [.id, .name, .host, (.lastConnected // "")] | @tsv' "$BRAINS_FILE")
+
+    # Slime ID bookmarks not already paired on this device (matched by
+    # host+port against the local brains.json) -- rendered as distinct
+    # "tap to reconnect" cards. Skipping ones already paired here avoids
+    # showing the same brain twice once it's been both saved AND paired
+    # on this particular kiosk.
+    while IFS=$'\t' read -r rid rname rhost rport; do
+        [[ -z "$rid" ]] && continue
+        if jq -e --arg h "$rhost" --arg p "$rport" \
+            'any(.[]; .host == $h and ((.port // "") == $p))' "$BRAINS_FILE" >/dev/null 2>&1; then
+            continue
+        fi
+        entries+=("$(jq -nc --arg id "remote:$rid" --arg name "$rname" --arg host "$rhost" \
+            '{id:$id, name:$name, host:$host, lastConnected:"Tap to reconnect", remote:true}')")
+    done < <(jq -r '.[] | [.id, .name, (.host // ""), (.port // "")] | @tsv' <<<"$REMOTE_BRAINS_JSON")
 
     local brains_json
     brains_json=$(printf '%s\n' "${entries[@]}" | jq -sc '.')
@@ -360,6 +456,7 @@ while true; do
                     do_pair boot
                 fi
             fi
+            refresh_remote_brains
             send_status
             show_picker_or_empty
             # Once only, ever, per device. install.sh seeds this file with
@@ -392,6 +489,21 @@ while true; do
             port=$(jq -r '.port // "3389"' <<<"$line")
             [[ -n "$host" ]] && add_brain "${name:-Untitled Brain}" "$host" "$port"
             show_picker_or_empty
+            # Opt-in, never automatic (see brains-save.ts) -- only offered
+            # when a brain was actually added and the device is signed in.
+            if [[ -n "$host" && -n "$(signed_in_email)" ]]; then
+                jq -nc --arg n "${name:-Untitled Brain}" --arg h "$host" --arg p "$port" \
+                    '{type:"showSaveBrainPrompt", data:{name:$n, host:$h, port:$p}}'
+            fi
+            ;;
+        saveBrainConsent)
+            save=$(jq -r '.save // false' <<<"$line")
+            if [[ "$save" == "true" ]]; then
+                sname=$(jq -r '.name // empty' <<<"$line")
+                shost=$(jq -r '.host // empty' <<<"$line")
+                sport=$(jq -r '.port // empty' <<<"$line")
+                [[ -n "$shost" ]] && save_remote_brain "${sname:-Untitled Brain}" "$shost" "$sport"
+            fi
             ;;
         removeBrain)
             id=$(jq -r '.id // empty' <<<"$line")
@@ -415,7 +527,23 @@ while true; do
             ;;
         connect)
             id=$(jq -r '.id // empty' <<<"$line")
-            if [[ -n "$id" ]]; then
+            if [[ "$id" == remote:* ]]; then
+                # A Slime ID bookmark, not yet paired on this device --
+                # Slime ID never holds the WireGuard credential for a free
+                # Brain (see pair.sh's own doc comment), so this routes
+                # into the normal pairing form instead of connecting
+                # directly. PAIR_HINT (read by pair.sh's do_pair) just
+                # carries the remembered name/host through as context; it
+                # doesn't skip the fresh pairing-code entry.
+                rid="${id#remote:}"
+                rname=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .name // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
+                rhost=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .host // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
+                log "Reconnecting to bookmarked brain '$rname' ($rhost) — needs a fresh pairing code"
+                PAIR_HINT="Reconnecting to \"${rname:-a saved Brain}\"${rhost:+ ($rhost)} — enter a fresh pairing code from its enroll screen."
+                do_pair settings
+                PAIR_HINT=""
+                refresh_remote_brains
+            elif [[ -n "$id" ]]; then
                 log "Connecting to brain id=$id"
                 stamp_last_connected "$id"
                 do_connect "$id"
@@ -425,11 +553,13 @@ while true; do
             ;;
         slimeIdStart)
             do_slime_id_login
+            refresh_remote_brains
             send_status
             show_picker_or_empty
             ;;
         slimeIdLogout)
             slime_id_logout
+            refresh_remote_brains
             send_status
             show_picker_or_empty
             ;;

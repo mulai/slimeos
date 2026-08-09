@@ -74,7 +74,12 @@ do_pair() {
 
     while true; do
         if [[ "$phase" == "entry" ]]; then
-            emit_state pairEntry "$(jq -nc --arg mode "$mode" '{mode:$mode, skippable:($mode=="boot")}')"
+            # PAIR_HINT (global, set by coordinator.sh's `connect` case just
+            # before calling do_pair) carries a remembered Slime ID
+            # bookmark's name/host through as context when reconnecting a
+            # brain on a new device -- empty/unset for every other caller.
+            emit_state pairEntry "$(jq -nc --arg mode "$mode" --arg hint "${PAIR_HINT:-}" \
+                '{mode:$mode, skippable:($mode=="boot"), hint:(if $hint == "" then null else $hint end)}')"
 
             while true; do
                 local line ev_type

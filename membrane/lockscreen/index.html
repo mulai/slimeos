@@ -18,7 +18,7 @@
             'crashReportSettings' | 'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
        empty:        { signedInEmail: string | null }
-       picker:       { brains: [{ id, name, host, lastConnected }], signedInEmail: string | null }
+       picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null }
                        // signedInEmail is set once do_slime_id_login() has ever
                        // completed successfully on this device (see
                        // membrane/session/slime-id.sh) -- a purely local-state
@@ -31,6 +31,16 @@
                        // a kiosk, never send the full address to the
                        // display layer expecting it to stay private) plus
                        // a Sign out button.
+                       // remote:true marks a brain bookmarked to this Slime
+                       // ID account but not yet paired on THIS device (see
+                       // coordinator.sh's REMOTE_BRAINS_JSON) -- rendered as
+                       // a distinct "tap to reconnect" card with no remove
+                       // (×) button (removing a bookmark is dashboard-only).
+                       // Clicking it still fires the same 'slime:connect'
+                       // event; the backend recognizes the id and routes to
+                       // pairEntry instead of connecting directly, since
+                       // Slime ID never holds the WireGuard credential for a
+                       // free Brain. Omitted/false for an ordinary local card.
        credentials:  { brainName, needUsername: bool }   // false => password-only
        connecting:   { brainName, stage }                // stage: free-text microcopy
        error:        { brainName, message, detail }      // detail = raw code (collapsed)
@@ -63,11 +73,15 @@
                        // panel in `settings` mode same as wifiList, but
                        // without the tab bar (Back already returns to
                        // wifiList, same as it does in `boot` mode).
-       pairEntry:      { mode: 'boot'|'settings', skippable: bool }
+       pairEntry:      { mode: 'boot'|'settings', skippable: bool, hint?: string | null }
                        // WireGuard self-pairing (see brain/enroll/): host +
                        // code entry. mode/skippable follow the same
                        // boot-vs-settings convention as wifiList -- `settings`
-                       // renders inside the panel's Pairing tab.
+                       // renders inside the panel's Pairing tab. `hint`, when
+                       // set, is shown as a subtitle above the form -- only
+                       // set when entered by tapping a remote/bookmark picker
+                       // card (see pair.sh's PAIR_HINT), null/absent for every
+                       // other entry point (boot pairing, Settings > Pair).
        pairConnecting: { stage }
        pairError:      { message, detail, mode }
                        // No secured/re-enter-password concept here (one
@@ -147,6 +161,14 @@
      touches `current.state`, so closing it just reveals whatever was
      already rendered underneath.
 
+   {"type":"showSaveBrainPrompt","data":{name,host,port}} (raw WS message, not a SlimeUI call)
+     Same one-shot-overlay shape as showCrashConsent, sent right after a
+     brain is successfully added locally (see the addBrain case in
+     coordinator.sh) while the device is signed in to Slime ID. Asks
+     whether to also save the brain to the account so it appears as a
+     bookmark on other signed-in devices -- opt-in, never automatic.
+     Answered via 'slime:save-brain-consent'.
+
  The page never calls a backend directly — it only fires DOM CustomEvents on
  `document`, payload in `event.detail`. The backend listens and responds with
  setState/setStatus calls:
@@ -191,6 +213,9 @@
      no new names needed for those two.
    'slime:slime-id-logout' {}                              // "Sign out" button, shown instead of the sign-in
      button once signedInEmail is set.
+   'slime:save-brain-consent' { save, name, host, port }   // answer to the one-shot showSaveBrainPrompt
+     overlay (Save / Not now) -- echoes back the same name/host/port it was shown, so the backend
+     doesn't need to remember any state between the prompt and the answer.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -357,6 +382,10 @@
   .brain-meta{margin-top:16px;display:flex;align-items:center;justify-content:space-between;}
   .brain-meta .last{font-size:11.5px;color:var(--text-faint);}
   .brain-meta .connect{font-family:var(--font-display);font-weight:600;font-size:12.5px;color:var(--mint);}
+  /* A Slime ID bookmark not yet paired on this device -- dashed border
+     distinguishes it from an ordinary, already-connectable card. */
+  .brain-card-bookmark{border-style:dashed;border-color:rgba(0,194,168,0.3);}
+  .brain-bookmark-badge{display:inline-block;font-family:var(--font-sans, inherit);font-weight:600;font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;color:var(--mint);background:rgba(0,194,168,0.12);border-radius:5px;padding:2px 6px;margin-left:4px;vertical-align:middle;}
   .add-card{width:280px;background:transparent;border:1px dashed rgba(255,255,255,0.16);border-radius:16px;padding:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;min-height:96px;outline:none;color:var(--text-muted);}
   .add-card:hover{border-color:rgba(0,194,168,0.5);color:var(--mint);}
 
@@ -778,21 +807,24 @@
     var cards = brains.map(function(b, i){
       var accent = ACCENTS[i % ACCENTS.length];
       var initial = (b.name || '?').trim().charAt(0).toUpperCase() || '?';
+      var isRemote = !!b.remote;
       return (
-        '<div class="brain-card" tabindex="0" role="listitem" data-brain-id="' + escapeHtml(b.id) + '"' + (i === 0 ? ' data-autofocus="1"' : '') + '>' +
+        '<div class="brain-card' + (isRemote ? ' brain-card-bookmark' : '') + '" tabindex="0" role="listitem" data-brain-id="' + escapeHtml(b.id) + '"' + (i === 0 ? ' data-autofocus="1"' : '') + '>' +
           '<div class="brain-row">' +
             '<div class="brain-id">' +
               '<span class="brain-avatar" style="background:' + accent + ';">' + escapeHtml(initial) + '</span>' +
               '<div style="min-width:0;">' +
-                '<div class="brain-name">' + escapeHtml(b.name) + '</div>' +
+                '<div class="brain-name">' + escapeHtml(b.name) + (isRemote ? ' <span class="brain-bookmark-badge">Slime ID</span>' : '') + '</div>' +
                 '<div class="brain-host">' + escapeHtml(b.host) + '</div>' +
               '</div>' +
             '</div>' +
-            '<button class="brain-remove" title="Remove" data-remove-id="' + escapeHtml(b.id) + '">&times;</button>' +
+            (isRemote ? '' : '<button class="brain-remove" title="Remove" data-remove-id="' + escapeHtml(b.id) + '">&times;</button>') +
           '</div>' +
           '<div class="brain-meta">' +
-            '<span class="last">Last connected ' + escapeHtml(b.lastConnected || 'never') + '</span>' +
-            '<span class="connect">Connect &rarr;</span>' +
+            (isRemote
+              ? '<span class="last">Not paired on this device</span>'
+              : '<span class="last">Last connected ' + escapeHtml(b.lastConnected || 'never') + '</span>') +
+            '<span class="connect">' + (isRemote ? 'Tap to reconnect &rarr;' : 'Connect &rarr;') + '</span>' +
           '</div>' +
         '</div>'
       );
@@ -1024,10 +1056,14 @@
   function renderPairEntry(data){
     var skippable = !!data.skippable;
     var mode = data.mode || 'boot';
+    var hint = data.hint || '';
     return (
       '<div class="screen" data-screen="pairEntry">' +
         '<form class="card" id="pairEntryForm" novalidate>' +
           '<h2 class="title">Pair with a Brain</h2>' +
+          (hint
+            ? '<p style="margin:0 0 12px;font-size:13px;color:var(--mint);">' + escapeHtml(hint) + '</p>'
+            : '') +
           '<p style="margin:0 0 26px;font-size:13.5px;color:var(--text-muted);">Enter the enrollment address and the code your admin gave you.</p>' +
           '<label class="field-label">Enrollment host</label>' +
           '<input class="field" id="fieldPairHost" placeholder="e.g. enroll.slimeos.com" data-autofocus>' +
@@ -1471,6 +1507,35 @@
     modalRoot.querySelector('#btnCrashConsentOk').focus();
   }
 
+  // Sent by the coordinator right after a brain is added locally, while
+  // signed in to Slime ID (see the header comment's 'showSaveBrainPrompt'
+  // entry) -- pure client overlay, same shape as showCrashConsentModal.
+  // Echoes name/host/port back on both answers so the backend doesn't need
+  // to track any state between the prompt and the reply.
+  function showSaveBrainPromptModal(data){
+    data = data || {};
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Save to your Slime ID?</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">"' + escapeHtml(data.name || 'This brain') + '" will show up as a bookmark on any other device you sign in to. Reconnecting there will still need a fresh pairing code.</p>' +
+          '<div style="display:flex;gap:10px;margin-top:22px;">' +
+            '<button class="btn-secondary" style="flex:1;" id="btnSaveBrainCancel">Not now</button>' +
+            '<button class="btn-primary" style="flex:1;padding:11px;box-shadow:none;" id="btnSaveBrainOk">Save</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnSaveBrainCancel').onclick = guarded(function(){
+      emit('slime:save-brain-consent', { save: false, name: data.name, host: data.host, port: data.port });
+      closeModal();
+    });
+    document.getElementById('btnSaveBrainOk').onclick = guarded(function(){
+      emit('slime:save-brain-consent', { save: true, name: data.name, host: data.host, port: data.port });
+      closeModal();
+    });
+    modalRoot.querySelector('#btnSaveBrainOk').focus();
+  }
+
   // Client-only, non-interactive: once confirmed, the real machine is
   // about to power off/reboot regardless of anything the backend does
   // next, so there's nothing left to route an event to.
@@ -1538,7 +1603,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1785,7 +1850,8 @@
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',
       'slime:slime-id-start': 'slimeIdStart',
-      'slime:slime-id-logout': 'slimeIdLogout'
+      'slime:slime-id-logout': 'slimeIdLogout',
+      'slime:save-brain-consent': 'saveBrainConsent'
     };
 
     function sendEvent(type, detail){
@@ -1813,6 +1879,7 @@
         if (msg.type === 'setState') window.SlimeUI.setState(msg.state, msg.data);
         else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel });
         else if (msg.type === 'showCrashConsent') showCrashConsentModal();
+        else if (msg.type === 'showSaveBrainPrompt') showSaveBrainPromptModal(msg.data);
       };
       ws.onclose = function(){
         window.SlimeUI.setState('disconnected', {});

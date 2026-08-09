@@ -8,11 +8,18 @@
 # the empty/picker screen's button, not boot-gated and not part of the
 # tabbed Settings panel.
 #
-# This is deliberately scoped to JUST the login handshake (agreed with
-# Tommy 2026-08-09) -- it proves identity and stores a session token, full
-# stop. No brain listing, no WireGuard peer auto-provisioning: that's the
-# separate, explicitly-deferred managed-provisioning work docs/
-# architecture.md and the project backlog both flag as "not yet built."
+# Originally scoped to JUST the login handshake (agreed with Tommy
+# 2026-08-09): proves identity and stores a session token, full stop. Since
+# then (same day) that scope grew to also cover brain *listing* --
+# coordinator.sh's slimeIdStart/slimeIdLogout cases call its own
+# refresh_remote_brains() right after do_slime_id_login()/slime_id_logout()
+# below return, so the picker's bookmarks stay in sync with sign-in state.
+# Still explicitly NOT
+# in scope here or anywhere in this pass: WireGuard peer auto-provisioning
+# -- a bookmark still needs one fresh pairing code to actually connect on a
+# new device (see pair.sh's PAIR_HINT), because Slime ID never holds the
+# WireGuard credential for a free Brain. That remains the separate,
+# explicitly-deferred managed-provisioning work.
 #
 # Shape: an OAuth-device-grant-style flow (RFC 8628), closely modeled on
 # the existing WireGuard pairing flow (pair.sh + brain/enroll/) but
