@@ -267,7 +267,8 @@ scoped to the `$SESSION_USER` directly) authorizing it.
 ### Key files
 | File | Purpose |
 |---|---|
-| `membrane/preseed/slimeos.preseed.cfg` | Debian automated installer config |
+| `membrane/preseed/slimeos.preseed.cfg` | Debian automated installer config (UEFI) |
+| `membrane/preseed/slimeos-bios.preseed.cfg` | Same, for Legacy BIOS boards (`grub-pc`, no ESP) |
 | `membrane/installer/install.sh` | Post-install setup script |
 | `membrane/installer/extract-windows-license.ps1` | Windows key extractor — run on Windows before install, saves to USB |
 | `membrane/session/slimeos-session.sh` | cage session startup (launches cog) |

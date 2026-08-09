@@ -40,11 +40,19 @@ slimeos/
 # Flash Debian 13 netinstall to USB, boot it, then at the GRUB prompt:
 # Advanced options → Automated install
 # Add to boot parameters:
-#   auto=true url=https://raw.githubusercontent.com/mulai/slimeos/main/membrane/preseed/slimeos.preseed.cfg
+#   auto=true url=https://raw.githubusercontent.com/mulai/slimeos/main/membrane/preseed/slimeos-bios.preseed.cfg
 
 # Or, on an existing minimal Debian 13 install:
 curl -fsSL https://raw.githubusercontent.com/mulai/slimeos/main/membrane/installer/install.sh | sudo bash
 ```
+
+> There are two preseed files — pick the one matching how the board actually
+> boots, not just its age. The installer's own boot menu tells you: if it
+> shows **"(BIOS mode)"**, or the board predates ~2012/has no UEFI setup
+> screen, use `slimeos-bios.preseed.cfg` (Legacy BIOS, `grub-pc`, no EFI
+> System Partition) as shown above. If it booted the installer via UEFI
+> instead, use `slimeos.preseed.cfg` in that same URL. Using the wrong one
+> for the board's actual boot mode is a common install-time failure.
 
 ### 2. Deploy the Cloud Brain
 
