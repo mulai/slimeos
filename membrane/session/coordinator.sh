@@ -399,8 +399,8 @@ show_picker_or_empty() {
     fi
 
     local entries=()
+    local id name host last rel
     while IFS=$'\t' read -r id name host last; do
-        local rel
         rel=$(relative_time "$last")
         entries+=("$(jq -nc --arg id "$id" --arg name "$name" --arg host "$host" --arg rel "$rel" \
             '{id:$id, name:$name, host:$host, lastConnected:$rel, remote:false}')")
@@ -411,6 +411,19 @@ show_picker_or_empty() {
     # "tap to reconnect" cards. Skipping ones already paired here avoids
     # showing the same brain twice once it's been both saved AND paired
     # on this particular kiosk.
+    #
+    # id/name/host are deliberately `local` above (and rid/rname/rhost/
+    # rport below): a `while read var...; do ...; done < <(cmd)` loop's
+    # read variables get reset to empty right after the loop's final
+    # (EOF-failing) read -- confirmed live 2026-08-09, reproducible with
+    # a two-line `printf` and no jq/coordinator involved at all, so it's
+    # bash's own `read` behavior, not something specific to this script.
+    # Without `local`, that reset clobbered the CALLER's same-named
+    # globals: addBrain's `$host`/`$name` (set right before calling this
+    # function) always came back empty afterward, so the
+    # showSaveBrainPrompt `if` check below it was silently always false
+    # -- the save prompt has never fired for anyone since this shipped.
+    local rid rname rhost rport
     while IFS=$'\t' read -r rid rname rhost rport; do
         [[ -z "$rid" ]] && continue
         if jq -e --arg h "$rhost" --arg p "$rport" \
