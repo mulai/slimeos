@@ -162,7 +162,10 @@ do_network_setup() {
                         [[ "$mode" == "settings" ]] && return 0
                         ;;
                     forceBack) return 0 ;;
-                    *) try_handle_power_event "$ev_type" || : ;;
+                    *)
+                        try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
+                        ;;
                 esac
             done
         fi
@@ -184,7 +187,10 @@ do_network_setup() {
                         continue 2
                         ;;
                     forceBack) return 0 ;;
-                    *) try_handle_power_event "$ev_type" || : ;;
+                    *)
+                        try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
+                        ;;
                 esac
             done
         fi
@@ -235,7 +241,10 @@ do_network_setup() {
                         ;;
                     back) phase="list"; continue 2 ;;
                     forceBack) return 0 ;;
-                    *) try_handle_power_event "$ev_type" || : ;;
+                    *)
+                        try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
+                        ;;
                 esac
             done
         fi

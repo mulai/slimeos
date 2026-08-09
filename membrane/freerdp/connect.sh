@@ -83,7 +83,10 @@ wake_brain() {
             ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
             case "$ev_type" in
                 cancelConnect|back|forceBack) return 1 ;;
-                *) try_handle_power_event "$ev_type" || : ;;
+                *)
+                    try_handle_power_event "$ev_type" || :
+                    try_handle_crash_report "$ev_type" "$line" || :
+                    ;;
             esac
         else
             rc=$?
@@ -120,7 +123,10 @@ wake_brain() {
                 ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
                 case "$ev_type" in
                     cancelConnect|back|forceBack) return 1 ;;
-                    *) try_handle_power_event "$ev_type" || : ;;
+                    *)
+                        try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
+                        ;;
                 esac
             fi
             waited=$((waited + 3))
@@ -198,7 +204,10 @@ do_connect() {
                             got_creds=true
                             ;;
                         back|forceBack) return 0 ;;
-                        *) try_handle_power_event "$ev_type" || : ;; # ignore anything else while waiting for credentials
+                        *)
+                            try_handle_power_event "$ev_type" || :
+                            try_handle_crash_report "$ev_type" "$line" || :
+                            ;; # ignore anything else while waiting for credentials
                     esac
                 done
             fi
@@ -358,6 +367,7 @@ do_connect() {
                         # about to power off/reboot regardless -- no need to
                         # kill xfreerdp ourselves, the OS shutdown handles that.
                         try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
                     fi
                 else
                     local rc=$?
@@ -428,6 +438,7 @@ do_connect() {
                             break
                         else
                             try_handle_power_event "$ev_type" || :
+                            try_handle_crash_report "$ev_type" "$line" || :
                         fi
                     else
                         local rc=$?
@@ -477,7 +488,10 @@ do_connect() {
                         continue 3
                         ;;
                     back|forceBack) return 0 ;;
-                    *) try_handle_power_event "$ev_type" || : ;;
+                    *)
+                        try_handle_power_event "$ev_type" || :
+                        try_handle_crash_report "$ev_type" "$line" || :
+                        ;;
                 esac
             done
         done

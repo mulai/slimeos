@@ -14,7 +14,8 @@
      state: 'empty' | 'picker' | 'addBrain' | 'credentials' |
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
-            'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings'
+            'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
+            'crashReportSettings'
      data per state:
        picker:       { brains: [{ id, name, host, lastConnected }] }
        credentials:  { brainName, needUsername: bool }   // false => password-only
@@ -76,6 +77,14 @@
                        // `version` is the installed Membrane version, written
                        // once by install.sh and read verbatim -- purely
                        // informational, display-only, no update affordance.
+       crashReportSettings: { mode: 'settings', enabled: bool }
+                       // Settings panel's Privacy tab -- one toggle for
+                       // anonymous error reporting (see
+                       // membrane/session/crash-reporting.sh). No `boot`
+                       // mode, same as supportSettings; the FIRST-EVER
+                       // decision is instead made via the one-shot
+                       // 'showCrashConsent' message below, before the user
+                       // has ever opened Settings at all.
 
      Examples:
        SlimeUI.setState('picker', { brains: [
@@ -94,6 +103,15 @@
      Example:
        SlimeUI.setStatus({ clock: '14:32', tunnel: 'up' });
 
+   {"type":"showCrashConsent"} (raw WS message, not a SlimeUI call)
+     One-shot instruction to render the anonymous-error-reporting consent
+     modal on top of whatever screen is currently showing -- sent by the
+     coordinator at most once ever, the first time a device reaches the
+     idle screen with no prior answer on file. Pure client-side overlay,
+     same shape as the Power-options/remove-brain confirm modals: it never
+     touches `current.state`, so closing it just reveals whatever was
+     already rendered underneath.
+
  The page never calls a backend directly — it only fires DOM CustomEvents on
  `document`, payload in `event.detail`. The backend listens and responds with
  setState/setStatus calls:
@@ -110,7 +128,7 @@
    'slime:cancel-connect'  {}
 
    'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
-   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'
+   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -123,6 +141,14 @@
    'slime:pair-skip'       {}                             // boot mode only
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
+
+   'slime:crash-report'    { message, stack, state }       // auto-fired by window.onerror/unhandledrejection,
+     never by a user action -- the page always fires this regardless of the
+     user's reporting choice; the coordinator is the sole place that checks
+     consent before doing anything with it (see crash-reporting.sh). `state`
+     is whatever `current.state` was when the error happened, for context.
+   'slime:crash-consent'   { granted }                     // answer to the one-shot consent modal (OK/Cancel)
+   'slime:crash-report-toggle' { enabled }                 // Settings panel's Privacy tab checkbox
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -438,6 +464,64 @@
     });
   }
 
+  /* ===================== crash reporting =====================
+     Always fires on any uncaught error/rejection, regardless of the user's
+     reporting choice -- this page never checks consent itself (see
+     'slime:crash-report' in the header comment). The coordinator is the
+     one place that decides whether to actually send anything anywhere.
+  */
+  window.addEventListener('error', function(e){
+    emit('slime:crash-report', {
+      message: e.message || 'Unknown error',
+      stack: (e.error && e.error.stack) || '',
+      state: current.state
+    });
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    var reason = e.reason;
+    emit('slime:crash-report', {
+      message: (reason && reason.message) || String(reason || 'Unhandled rejection'),
+      stack: (reason && reason.stack) || '',
+      state: current.state
+    });
+  });
+
+  // Real-hardware finding (2026-08-08, UTM VM): the global 'error' handler
+  // above is a necessary last-resort fallback, but under this page's
+  // file:// origin, WPE WebKit redacts window.onerror's own message/stack
+  // to the generic "Script error." for interactive-handler exceptions --
+  // confirmed live (a real bug during Settings/Privacy tab testing reported
+  // as bare "Script error." with no detail). A `catch` block's Error object
+  // is never subject to that redaction -- it's a completely different
+  // mechanism (no browser-level cross-origin error event involved) -- so
+  // every interactive handler in bindScreen() goes through `on()` below
+  // instead of raw addEventListener, to get real diagnostics.
+  function reportCaughtError(err){
+    try {
+      emit('slime:crash-report', {
+        message: (err && err.message) || String(err),
+        stack: (err && err.stack) || '',
+        state: current.state
+      });
+    } catch (e) { /* never let error reporting itself throw */ }
+  }
+
+  // Deliberately swallows (never rethrows): if it did, the error would
+  // propagate up through the browser's normal event dispatch and ALSO
+  // trigger the global 'error' listener above, double-reporting the same
+  // failure -- one accurate (from here) and one generic "Script error."
+  // (from there), inflating a single real bug into two GitHub issues.
+  function guarded(handler){
+    return function(e){
+      try { return handler(e); }
+      catch (err) { reportCaughtError(err); }
+    };
+  }
+
+  function on(el, type, handler){
+    el.addEventListener(type, guarded(handler));
+  }
+
   /* ===================== mousedown -> click activation workaround =====================
      Real-hardware finding (2026-07-12, Gigabyte GA-78LMT-S2P, cage 0.2.0 +
      cog + WPE on trixie): mouse clicks on buttons/cards/icons never
@@ -520,17 +604,19 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1 };
   var SETTINGS_TABS = [
     { id: 'internet', label: 'Internet' },
     { id: 'pair', label: 'Pairing' },
-    { id: 'support', label: 'Support' }
+    { id: 'support', label: 'Support' },
+    { id: 'privacy', label: 'Privacy' }
   ];
 
   function settingsTabForState(state){
     if (state === 'pairEntry' || state === 'pairConnecting' || state === 'pairError') return 'pair';
     if (state === 'supportSettings') return 'support';
+    if (state === 'crashReportSettings') return 'privacy';
     return 'internet';
   }
 
@@ -559,17 +645,31 @@
   }
 
   function bindSettingsShell(state){
+    try { bindSettingsShellImpl(state); }
+    catch (err) { reportCaughtError(err); }
+  }
+
+  function bindSettingsShellImpl(state){
     var close = document.getElementById('btnSettingsClose');
-    if (close) close.addEventListener('click', function(){ emit('slime:back'); });
+    if (close) on(close, 'click', function(){ emit('slime:back'); });
     Array.prototype.forEach.call(document.querySelectorAll('.settings-tab'), function(btn){
-      btn.addEventListener('click', function(){
+      on(btn, 'click', function(){
         var tab = btn.getAttribute('data-tab');
         if (tab !== settingsTabForState(state)) emit('slime:settings-tab', { tab: tab });
       });
     });
   }
 
+  // Wrapped like guarded()'s handlers, same reasoning: a thrown error here
+  // (e.g. malformed data from the backend) gets full-fidelity message/stack
+  // via this catch instead of the generic global fallback -- swallow, don't
+  // rethrow, so it isn't double-reported.
   function render(){
+    try { renderImpl(); }
+    catch (err) { reportCaughtError(err); }
+  }
+
+  function renderImpl(){
     var state = current.state, data = current.data || {};
     var html = '';
     if (state === 'empty') html = renderEmpty();
@@ -588,6 +688,7 @@
     else if (state === 'pairConnecting') html = renderPairConnecting(data);
     else if (state === 'pairError') html = renderPairError(data);
     else if (state === 'supportSettings') html = renderSupportSettings(data);
+    else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
 
     var isSettingsPanel = SETTINGS_STATES[state] && data.mode === 'settings';
     if (isSettingsPanel) html = renderSettingsShell(state, html);
@@ -937,16 +1038,43 @@
     );
   }
 
+  function renderCrashReportSettings(data){
+    var enabled = !!data.enabled;
+    return (
+      '<div class="screen" data-screen="crashReportSettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Privacy</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Automatically send anonymous error reports to help us fix bugs faster. No personal data, network details, or anything you’ve typed is ever included.</p>' +
+          '<label class="support-toggle-row">' +
+            '<input type="checkbox" id="fieldCrashReportToggle" data-autofocus' + (enabled ? ' checked' : '') + '>' +
+            '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Anonymous error reporting is ' + (enabled ? 'on' : 'off') + '</span>' +
+          '</label>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   /* ===================== event binding ===================== */
 
+  // Wrapped like render(): setup-time errors (e.g. a missing element) get
+  // full-fidelity reporting via this catch instead of the generic global
+  // fallback. Every listener registered inside bindScreenImpl uses on()/
+  // guarded() so errors raised LATER, when the user actually interacts,
+  // are equally well-diagnosed (this outer try/catch only covers binding
+  // itself, not events that fire afterward).
   function bindScreen(state, data){
+    try { bindScreenImpl(state, data); }
+    catch (err) { reportCaughtError(err); }
+  }
+
+  function bindScreenImpl(state, data){
     if (state === 'empty'){
-      document.getElementById('btnAddBrain').onclick = showLocalAddBrain;
-      document.getElementById('btnSlimeId').onclick = showComingSoon;
+      document.getElementById('btnAddBrain').onclick = guarded(showLocalAddBrain);
+      document.getElementById('btnSlimeId').onclick = guarded(showComingSoon);
     }
     else if (state === 'picker'){
       var list = document.getElementById('pickerList');
-      list.addEventListener('keydown', function(e){
+      on(list, 'keydown', function(e){
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         var focusable = Array.prototype.slice.call(list.querySelectorAll('[tabindex]'));
         var idx = focusable.indexOf(document.activeElement);
@@ -957,11 +1085,11 @@
       });
       list.querySelectorAll('.brain-card').forEach(function(card){
         var id = card.getAttribute('data-brain-id');
-        card.addEventListener('click', function(){ emit('slime:connect', { id: id }); });
-        card.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:connect', { id: id }); });
+        on(card, 'click', function(){ emit('slime:connect', { id: id }); });
+        on(card, 'keydown', function(e){ if (e.key === 'Enter') emit('slime:connect', { id: id }); });
       });
       list.querySelectorAll('.brain-remove').forEach(function(btn){
-        btn.addEventListener('click', function(e){
+        on(btn, 'click', function(e){
           e.stopPropagation();
           pendingRemoveId = btn.getAttribute('data-remove-id');
           var brains = (current.data && current.data.brains) || [];
@@ -969,21 +1097,21 @@
           showRemoveConfirm(b);
         });
       });
-      document.getElementById('btnAddBrainCard').addEventListener('click', showLocalAddBrain);
-      document.getElementById('btnAddBrainCard').addEventListener('keydown', function(e){ if (e.key === 'Enter') showLocalAddBrain(); });
-      document.getElementById('btnSlimeId2').onclick = showComingSoon;
+      on(document.getElementById('btnAddBrainCard'), 'click', showLocalAddBrain);
+      on(document.getElementById('btnAddBrainCard'), 'keydown', function(e){ if (e.key === 'Enter') showLocalAddBrain(); });
+      document.getElementById('btnSlimeId2').onclick = guarded(showComingSoon);
     }
     else if (state === 'addBrain'){
       var form = document.getElementById('addBrainForm');
       var advBtn = document.getElementById('btnAdvanced');
       var advPanel = document.getElementById('advancedPanel');
-      advBtn.addEventListener('click', function(){
+      on(advBtn, 'click', function(){
         var open = !advPanel.classList.contains('hidden');
         advPanel.classList.toggle('hidden');
         advBtn.textContent = open ? '+ Advanced (port)' : '\u2212 Hide advanced';
       });
-      document.getElementById('btnCancelAdd').addEventListener('click', function(){ emit('slime:back'); });
-      form.addEventListener('submit', function(e){
+      on(document.getElementById('btnCancelAdd'), 'click', function(){ emit('slime:back'); });
+      on(form, 'submit', function(e){
         e.preventDefault();
         var name = document.getElementById('fieldName').value.trim();
         var host = document.getElementById('fieldHost').value.trim();
@@ -1005,13 +1133,13 @@
       var cform = document.getElementById('credentialsForm');
       var toggleBtn = document.getElementById('btnTogglePw');
       var pwField = document.getElementById('fieldPassword');
-      toggleBtn.addEventListener('click', function(){
+      on(toggleBtn, 'click', function(){
         var showing = pwField.type === 'text';
         pwField.type = showing ? 'password' : 'text';
         toggleBtn.textContent = showing ? 'SHOW' : 'HIDE';
       });
-      document.getElementById('btnBackFromCreds').addEventListener('click', function(){ emit('slime:back'); });
-      cform.addEventListener('submit', function(e){
+      on(document.getElementById('btnBackFromCreds'), 'click', function(){ emit('slime:back'); });
+      on(cform, 'submit', function(e){
         e.preventDefault();
         var payload = { password: pwField.value };
         var uField = document.getElementById('fieldUsername');
@@ -1020,19 +1148,19 @@
       });
     }
     else if (state === 'connecting'){
-      document.getElementById('btnCancelConnect').addEventListener('click', function(){ emit('slime:cancel-connect'); });
+      on(document.getElementById('btnCancelConnect'), 'click', function(){ emit('slime:cancel-connect'); });
     }
     else if (state === 'error'){
-      document.getElementById('btnTryAgain').addEventListener('click', function(){ emit('slime:retry'); });
-      document.getElementById('btnReenterPassword').addEventListener('click', function(){ emit('slime:reenter-password'); });
-      document.getElementById('btnBackFromError').addEventListener('click', function(){ emit('slime:back'); });
+      on(document.getElementById('btnTryAgain'), 'click', function(){ emit('slime:retry'); });
+      on(document.getElementById('btnReenterPassword'), 'click', function(){ emit('slime:reenter-password'); });
+      on(document.getElementById('btnBackFromError'), 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'reconnecting'){
-      document.getElementById('btnBackFromReconnect').addEventListener('click', function(){ emit('slime:back'); });
+      on(document.getElementById('btnBackFromReconnect'), 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'wifiList'){
       var wlist = document.getElementById('wifiListRoot');
-      wlist.addEventListener('keydown', function(e){
+      on(wlist, 'keydown', function(e){
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         var focusable = Array.prototype.slice.call(wlist.querySelectorAll('[tabindex]'));
         var idx = focusable.indexOf(document.activeElement);
@@ -1043,36 +1171,36 @@
       });
       wlist.querySelectorAll('.wifi-item').forEach(function(item){
         var ssid = item.getAttribute('data-ssid');
-        item.addEventListener('click', function(){ emit('slime:wifi-connect', { ssid: ssid }); });
-        item.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:wifi-connect', { ssid: ssid }); });
+        on(item, 'click', function(){ emit('slime:wifi-connect', { ssid: ssid }); });
+        on(item, 'keydown', function(e){ if (e.key === 'Enter') emit('slime:wifi-connect', { ssid: ssid }); });
       });
       var rescanBtn = document.getElementById('btnWifiRescan');
-      if (rescanBtn) rescanBtn.addEventListener('click', function(){ emit('slime:wifi-rescan'); });
+      if (rescanBtn) on(rescanBtn, 'click', function(){ emit('slime:wifi-rescan'); });
       var skipBtn = document.getElementById('btnWifiSkip');
-      if (skipBtn) skipBtn.addEventListener('click', function(){ emit('slime:wifi-skip'); });
+      if (skipBtn) on(skipBtn, 'click', function(){ emit('slime:wifi-skip'); });
       var wbackBtn = document.getElementById('btnWifiBack');
-      if (wbackBtn) wbackBtn.addEventListener('click', function(){ emit('slime:back'); });
+      if (wbackBtn) on(wbackBtn, 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'wifiPassword'){
       var wform = document.getElementById('wifiPasswordForm');
       var wToggle = document.getElementById('btnToggleWifiPw');
       var wPwField = document.getElementById('fieldWifiPassword');
-      wToggle.addEventListener('click', function(){
+      on(wToggle, 'click', function(){
         var showing = wPwField.type === 'text';
         wPwField.type = showing ? 'password' : 'text';
         wToggle.textContent = showing ? 'SHOW' : 'HIDE';
       });
-      document.getElementById('btnBackFromWifiPw').addEventListener('click', function(){ emit('slime:back'); });
-      wform.addEventListener('submit', function(e){
+      on(document.getElementById('btnBackFromWifiPw'), 'click', function(){ emit('slime:back'); });
+      on(wform, 'submit', function(e){
         e.preventDefault();
         emit('slime:wifi-password', { password: wPwField.value });
       });
     }
     else if (state === 'wifiError'){
-      document.getElementById('btnWifiTryAgain').addEventListener('click', function(){ emit('slime:retry'); });
+      on(document.getElementById('btnWifiTryAgain'), 'click', function(){ emit('slime:retry'); });
       var wReenter = document.getElementById('btnWifiReenterPassword');
-      if (wReenter) wReenter.addEventListener('click', function(){ emit('slime:reenter-password'); });
-      document.getElementById('btnBackFromWifiError').addEventListener('click', function(){ emit('slime:back'); });
+      if (wReenter) on(wReenter, 'click', function(){ emit('slime:reenter-password'); });
+      on(document.getElementById('btnBackFromWifiError'), 'click', function(){ emit('slime:back'); });
     }
     /* wifiConnecting has no interactive elements — nmcli connect is short and
        synchronous, unlike the long-lived xfreerdp session renderConnecting
@@ -1081,10 +1209,10 @@
     else if (state === 'pairEntry'){
       var pform = document.getElementById('pairEntryForm');
       var pBackBtn = document.getElementById('btnBackFromPair');
-      if (pBackBtn) pBackBtn.addEventListener('click', function(){ emit('slime:back'); });
+      if (pBackBtn) on(pBackBtn, 'click', function(){ emit('slime:back'); });
       var pSkipBtn = document.getElementById('btnPairSkip');
-      if (pSkipBtn) pSkipBtn.addEventListener('click', function(){ emit('slime:pair-skip'); });
-      pform.addEventListener('submit', function(e){
+      if (pSkipBtn) on(pSkipBtn, 'click', function(){ emit('slime:pair-skip'); });
+      on(pform, 'submit', function(e){
         e.preventDefault();
         var hostInput = document.getElementById('fieldPairHost');
         var host = hostInput.value.trim();
@@ -1106,12 +1234,17 @@
       });
     }
     else if (state === 'pairError'){
-      document.getElementById('btnPairTryAgain').addEventListener('click', function(){ emit('slime:retry'); });
-      document.getElementById('btnBackFromPairError').addEventListener('click', function(){ emit('slime:back'); });
+      on(document.getElementById('btnPairTryAgain'), 'click', function(){ emit('slime:retry'); });
+      on(document.getElementById('btnBackFromPairError'), 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'supportSettings'){
-      document.getElementById('fieldSupportToggle').addEventListener('change', function(e){
+      on(document.getElementById('fieldSupportToggle'), 'change', function(e){
         emit('slime:support-toggle', { enabled: e.target.checked });
+      });
+    }
+    else if (state === 'crashReportSettings'){
+      on(document.getElementById('fieldCrashReportToggle'), 'change', function(e){
+        emit('slime:crash-report-toggle', { enabled: e.target.checked });
       });
     }
   }
@@ -1149,11 +1282,11 @@
           '</div>' +
         '</div>' +
       '</div>';
-    document.getElementById('btnCancelRemove').onclick = closeModal;
-    document.getElementById('btnConfirmRemove').onclick = function(){
+    document.getElementById('btnCancelRemove').onclick = guarded(closeModal);
+    document.getElementById('btnConfirmRemove').onclick = guarded(function(){
       emit('slime:remove-brain', { id: pendingRemoveId });
       closeModal();
-    };
+    });
     modalRoot.querySelector('#btnCancelRemove').focus();
   }
 
@@ -1172,18 +1305,44 @@
           '</div>' +
         '</div>' +
       '</div>';
-    document.getElementById('btnCancelPower').onclick = closeModal;
-    document.getElementById('btnConfirmShutdown').onclick = function(){
+    document.getElementById('btnCancelPower').onclick = guarded(closeModal);
+    document.getElementById('btnConfirmShutdown').onclick = guarded(function(){
       closeModal();
       showPowerOverlay('Shutting down…');
       emit('slime:power-shutdown');
-    };
-    document.getElementById('btnConfirmRestart').onclick = function(){
+    });
+    document.getElementById('btnConfirmRestart').onclick = guarded(function(){
       closeModal();
       showPowerOverlay('Restarting…');
       emit('slime:power-restart');
-    };
+    });
     modalRoot.querySelector('#btnCancelPower').focus();
+  }
+
+  // Sent by the coordinator at most once ever (see the header comment's
+  // 'showCrashConsent' entry) -- pure client overlay, same shape as
+  // showRemoveConfirm/showPowerConfirm, never touches `current.state`.
+  function showCrashConsentModal(){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Help improve Slime OS</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">Automatically send anonymous error reports (no personal data) to help us fix bugs faster? You can change this anytime from Settings &middot; Privacy.</p>' +
+          '<div style="display:flex;gap:10px;margin-top:22px;">' +
+            '<button class="btn-secondary" style="flex:1;" id="btnCrashConsentCancel">Cancel</button>' +
+            '<button class="btn-primary" style="flex:1;padding:11px;box-shadow:none;" id="btnCrashConsentOk">OK</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnCrashConsentCancel').onclick = guarded(function(){
+      emit('slime:crash-consent', { granted: false });
+      closeModal();
+    });
+    document.getElementById('btnCrashConsentOk').onclick = guarded(function(){
+      emit('slime:crash-consent', { granted: true });
+      closeModal();
+    });
+    modalRoot.querySelector('#btnCrashConsentOk').focus();
   }
 
   // Client-only, non-interactive: once confirmed, the real machine is
@@ -1201,7 +1360,7 @@
 
   /* ===================== global keyboard (Esc = back/cancel) ===================== */
 
-  document.addEventListener('keydown', function(e){
+  on(document, 'keydown', function(e){
     if (e.key !== 'Escape') return;
     if (modalRoot.innerHTML.trim()){ closeModal(); return; }
     var s = current.state;
@@ -1212,17 +1371,18 @@
     else if (s === 'pairError') emit('slime:back');
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'supportSettings') emit('slime:back');
+    else if (s === 'crashReportSettings') emit('slime:back');
   });
 
   /* Gear icon lives in the always-present status strip, outside #screenRoot,
      so it's bound once here rather than per-render in bindScreen(). */
   var btnOpenSettings = document.getElementById('btnOpenSettings');
-  btnOpenSettings.addEventListener('click', function(){ emit('slime:open-settings'); });
-  btnOpenSettings.addEventListener('keydown', function(e){ if (e.key === 'Enter') emit('slime:open-settings'); });
+  on(btnOpenSettings, 'click', function(){ emit('slime:open-settings'); });
+  on(btnOpenSettings, 'keydown', function(e){ if (e.key === 'Enter') emit('slime:open-settings'); });
 
   var btnPower = document.getElementById('btnPower');
-  btnPower.addEventListener('click', showPowerConfirm);
-  btnPower.addEventListener('keydown', function(e){ if (e.key === 'Enter') showPowerConfirm(); });
+  on(btnPower, 'click', showPowerConfirm);
+  on(btnPower, 'keydown', function(e){ if (e.key === 'Enter') showPowerConfirm(); });
 
   /* ===================== public API ===================== */
 
@@ -1250,7 +1410,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1271,6 +1431,7 @@
     var demoWifiMode = 'settings';
     var demoSupportEnabled = false;
     var demoSupportConnection = null;
+    var demoCrashReportEnabled = false;
 
     document.addEventListener('slime:open-settings', function(){
       demoWifiMode = 'settings';
@@ -1285,6 +1446,8 @@
         window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
+      } else if (tab === 'privacy'){
+        window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
       }
     });
 
@@ -1297,6 +1460,11 @@
         password: Math.random().toString(36).slice(2, 10)
       } : null;
       window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null });
+    });
+
+    document.addEventListener('slime:crash-report-toggle', function(e){
+      demoCrashReportEnabled = !!e.detail.enabled;
+      window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
     });
 
     document.addEventListener('slime:wifi-rescan', function(){
@@ -1453,7 +1621,10 @@
       'slime:power-restart': 'powerRestart',
       'slime:pair-submit': 'pairSubmit',
       'slime:pair-skip': 'pairSkip',
-      'slime:support-toggle': 'supportToggle'
+      'slime:support-toggle': 'supportToggle',
+      'slime:crash-report': 'crashReport',
+      'slime:crash-consent': 'crashConsent',
+      'slime:crash-report-toggle': 'crashReportToggle'
     };
 
     function sendEvent(type, detail){
@@ -1480,6 +1651,7 @@
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
         if (msg.type === 'setState') window.SlimeUI.setState(msg.state, msg.data);
         else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel });
+        else if (msg.type === 'showCrashConsent') showCrashConsentModal();
       };
       ws.onclose = function(){
         window.SlimeUI.setState('disconnected', {});

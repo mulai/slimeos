@@ -31,22 +31,31 @@
 #   {"type":"pairSubmit","host":..,"code":..} | {"type":"pairSkip"}
 #     (pairSubmit/pairSkip only consumed by do_pair, see pair.sh — retry/back are reused there too)
 #   {"type":"supportToggle","enabled":..}                  only consumed by do_support, see support.sh
-#   {"type":"settingsTab","tab":"internet"|"pair"|"support"}  only consumed by whichever of do_network_setup/
-#     do_pair/do_support is currently running in `settings` mode — switches
-#     the Settings panel to a different tab without leaving it (see the
+#   {"type":"crashReportToggle","enabled":..}              only consumed by do_crash_reporting, see crash-reporting.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"support"|"privacy"}  only consumed by whichever of
+#     do_network_setup/do_pair/do_support/do_crash_reporting is currently running in `settings` mode —
+#     switches the Settings panel to a different tab without leaving it (see the
 #     openSettings case's SETTINGS_NEXT_TAB loop below)
+#   {"type":"crashConsent","granted":true|false}            handled directly here (see the outer dispatch's
+#     crashConsent case) — a one-shot answer to the 'showCrashConsent' popup, writes
+#     $CONFIG_DIR/crash-reporting-consent and never re-appears once answered
+#   {"type":"crashReport","message":..,"stack":..,"state":..}  recognized regardless of which do_*
+#     currently owns the event loop, same as powerShutdown/powerRestart — see
+#     try_handle_crash_report() in crash-reporting.sh and its call sites in every
+#     do_*'s catch-all
 #   {"type":"powerShutdown"} | {"type":"powerRestart"}      already confirmed client-side (see index.html); no response emitted, the machine powers off/reboots
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
+#   {"type":"showCrashConsent"}                            one-shot, not a setState — see index.html's doc comment
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
-# supportSettings.
+# supportSettings/crashReportSettings.
 #
 # On stdin EOF (the bridge died), exit cleanly rather than erroring — the
 # bridge's own supervisor will spawn a fresh coordinator and resync whatever
@@ -191,6 +200,8 @@ source "$INSTALL_DIR/network-setup.sh" # defines do_network_setup()
 source "$INSTALL_DIR/pair.sh" # defines do_pair()
 # shellcheck source=support.sh
 source "$INSTALL_DIR/support.sh" # defines do_support()
+# shellcheck source=crash-reporting.sh
+source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -199,6 +210,7 @@ source "$INSTALL_DIR/support.sh" # defines do_support()
 # have_default_route wait) on every client reattach.
 network_checked=false
 wg_checked=false
+consent_checked=false
 
 # Set by do_network_setup()/do_pair()/do_support() (see each of their
 # `settingsTab` cases) when the Settings panel's tab bar is clicked while
@@ -317,6 +329,26 @@ while true; do
             fi
             send_status
             show_picker_or_empty
+            # Once only, ever, per device. install.sh seeds this file with
+            # literal content "unset" at install time (so crashConsent's
+            # write handler is always an overwrite, never a create -- see
+            # its own comment) -- check CONTENT, not mere existence, or a
+            # freshly installed device (file always present) would never
+            # show this at all. Missing entirely (e.g. a hand-patched
+            # device predating this feature) is treated the same as
+            # "unset". Deliberately checked last (after network/pairing) so
+            # it never competes with first-boot onboarding, and sent as its
+            # own message rather than a setState — see index.html's
+            # 'showCrashConsent' doc comment — so it overlays whatever
+            # screen show_picker_or_empty just rendered instead of
+            # replacing it.
+            if ! $consent_checked; then
+                consent_checked=true
+                consent_state=$(cat "$CONFIG_DIR/crash-reporting-consent" 2>/dev/null || echo "unset")
+                if [[ "$consent_state" == "unset" ]]; then
+                    jq -nc '{type:"showCrashConsent"}'
+                fi
+            fi
             ;;
         _clientDisconnected)
             : # nothing to do; an active connect session (if any) keeps running
@@ -332,6 +364,21 @@ while true; do
             id=$(jq -r '.id // empty' <<<"$line")
             [[ -n "$id" ]] && remove_brain "$id"
             show_picker_or_empty
+            ;;
+        crashConsent)
+            granted=$(jq -r '.granted // false' <<<"$line")
+            # install.sh pre-creates this file (world-unwritable dir,
+            # slime-owned file) specifically so this is always an overwrite,
+            # never a create -- but don't let a failure here (stale/
+            # hand-patched device missing that seed file, disk full, etc.)
+            # take down the whole coordinator under set -e. Worst case: the
+            # popup just reappears next time instead of silently corrupting
+            # session state.
+            if [[ "$granted" == "true" ]]; then
+                echo "granted" > "$CONFIG_DIR/crash-reporting-consent" || log "Failed to write crash-reporting-consent (granted)"
+            else
+                echo "declined" > "$CONFIG_DIR/crash-reporting-consent" || log "Failed to write crash-reporting-consent (declined)"
+            fi
             ;;
         connect)
             id=$(jq -r '.id // empty' <<<"$line")
@@ -364,6 +411,7 @@ while true; do
                     internet) do_network_setup settings ;;
                     pair)     do_pair settings ;;
                     support)  do_support settings ;;
+                    privacy)  do_crash_reporting settings ;;
                 esac
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"
@@ -377,6 +425,9 @@ while true; do
             # whole coordinator under set -e -- same lesson as the
             # once-missing connect.log guard in connect.sh.
             try_handle_power_event "$ev_type"
+            ;;
+        crashReport)
+            try_handle_crash_report "$ev_type" "$line"
             ;;
         *)
             # credentials/retry/reenterPassword/cancelConnect only make

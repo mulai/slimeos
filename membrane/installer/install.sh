@@ -240,7 +240,9 @@ curl -fsSL "$REPO_BASE/membrane/session/support.sh" \
      -o "$INSTALL_DIR/support.sh"
 curl -fsSL "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
      -o "$INSTALL_DIR/remote-support-toggle.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh"
+curl -fsSL "$REPO_BASE/membrane/session/crash-reporting.sh" \
+     -o "$INSTALL_DIR/crash-reporting.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -435,13 +437,21 @@ if [[ ! -f "$CONFIG_DIR/brains.json" ]]; then
 fi
 mkdir -p "$CONFIG_DIR/brains"
 chmod 700 "$CONFIG_DIR/brains"
+# do_crash_reporting()/try_handle_crash_report() (crash-reporting.sh) read
+# and write this directly as $SESSION_USER, same reasoning as brains.json
+# below -- "unset" until the consent popup (or the Privacy settings tab) is
+# ever answered.
+if [[ ! -f "$CONFIG_DIR/crash-reporting-consent" ]]; then
+    echo 'unset' > "$CONFIG_DIR/crash-reporting-consent"
+    chmod 600 "$CONFIG_DIR/crash-reporting-consent"
+fi
 # The Connect screen (brain-select.sh) runs as $SESSION_USER and owns this
 # data: it reads/rewrites brains.json and creates per-Brain .cred files in
 # brains/. Left owned by root (this script runs as root), brain-select.sh
 # dies on its first chmod/read and the session crash-loops with a black
 # screen. /etc/slimeos itself stays root-owned -- the session user gets
-# exactly these two entries, nothing else.
-chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains"
+# exactly these entries, nothing else.
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent"
 
 # pair.sh's do_pair() writes /etc/wireguard/wg0.conf directly as
 # $SESSION_USER once it fetches a config from the enrollment endpoint --

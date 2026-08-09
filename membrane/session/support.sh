@@ -88,7 +88,10 @@ do_support() {
                 ;;
             back) return 0 ;;
             forceBack) return 0 ;;
-            *) try_handle_power_event "$ev_type" || : ;;
+            *)
+                try_handle_power_event "$ev_type" || :
+                try_handle_crash_report "$ev_type" "$line" || :
+                ;;
         esac
     done
 }
