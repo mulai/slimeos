@@ -322,6 +322,20 @@ do_connect() {
             # pick; plughw so FreeRDP's requested sample format needn't
             # match the mic's native one. Confirmed live: USB PnP mic →
             # Azure Windows Brain, 2026-07-16.
+            # Tried an explicit `rate:16000` override here 2026-08-10 to
+            # see if it eased the tight 5ms default capture period
+            # (period_size 221 @ 44100Hz, confirmed via
+            # /proc/asound/cardN/pcm0c/sub0/hw_params) that was still
+            # underrunning even after fixing the real CPU-hog root cause
+            # (WPEWebProcess's ambientDrift animation, see index.html).
+            # Made it strictly worse, not better: FreeRDP's audin ALSA
+            # backend offered ZERO valid formats to the server with an
+            # explicit rate set (`audin_process_open: invalid format index
+            # 0 (total 0)`, channel failing to open on literally every
+            # attempt, ~0.7s apart) -- no mic at all, instead of an
+            # imperfect one. Reverted same day. Do not re-add an explicit
+            # rate: here without first confirming format negotiation still
+            # succeeds (check connect.log for audin_process_open errors).
             local mic_flag="/microphone:sys:alsa" usb_mic
             if usb_mic=$(usb_capture_card); then
                 mic_flag="/microphone:sys:alsa,dev:plughw:CARD=${usb_mic}"
@@ -398,6 +412,28 @@ do_connect() {
                 /log-level:WARN \
                 ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 &
             local xpid=$! cancelled=false
+
+            # The lockscreen page never hears anything else from us for
+            # the entire duration of a session -- xfreerdp3's own
+            # Xwayland-hosted window is what's actually on screen the
+            # whole time, so it stayed rendering the "connecting" screen
+            # (with its infinite pulseRing spinner) full-tilt, unseen, for
+            # the session's whole lifetime. WPE WebKit has no
+            # page-visibility signal for "occluded by another Wayland
+            # surface" the way a real browser tab would, so nothing ever
+            # throttled it on its own. Confirmed live 2026-08-10:
+            # WPEWebProcess sustained ~84% CPU through an entire RDP
+            # session, contributing to real mic-capture underruns (ALSA
+            # buffer starvation from CPU contention) -- though the bigger
+            # single contributor turned out to be the #app root's own
+            # ambientDrift background animation (removed outright, see
+            # its CSS comment; that alone was ~254% CPU even at idle).
+            # sessionActive swaps to a static screen with no infinite
+            # animation of its own (see index.html's renderSessionActive)
+            # so the pulseRing spinner isn't left running for the session's
+            # whole duration either.
+            emit_state sessionActive "$(jq -nc --arg n "$brain_name" \
+                '{brainName:$n}')"
 
             while kill -0 "$xpid" 2>/dev/null; do
                 if read -t 1 -r line <&0; then

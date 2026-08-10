@@ -300,11 +300,19 @@
   ::selection{background:rgba(0,194,168,0.35);}
 
   @keyframes fadeUp{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
-  @keyframes ambientDrift{0%,100%{background-position:0% 20%, 100% 80%}50%{background-position:8% 26%, 92% 74%}}
   @keyframes pulseRing{0%{transform:scale(0.85);opacity:0.55}70%{transform:scale(1.35);opacity:0}100%{opacity:0}}
   @keyframes blobFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
   @keyframes spin{to{transform:rotate(360deg)}}
 
+  /* Static gradient background -- was an infinite 26s background-position
+     animation (ambientDrift). Measured live on the AMD box 2026-08-10:
+     that single animation accounted for essentially all of a sustained
+     ~254% CPU in WPEWebProcess even at pure idle (dropped to ~6.5% with
+     just this animation removed, vs ~4.2% with every animation on the
+     page removed) -- this hardware's WebKit compositor evidently can't
+     cheaply re-render this gradient every frame. Not worth the resource
+     cost for a background drift effect nobody's actively looking at.
+  */
   .app{
     position:relative;width:100%;height:100vh;
     background:
@@ -312,7 +320,6 @@
       radial-gradient(110% 90% at 90% 90%, rgba(79,172,254,0.08), transparent 55%),
       var(--shell);
     background-size:180% 180%,180% 180%;
-    animation:ambientDrift 26s ease-in-out infinite;
   }
 
   /* -------- status strip -------- */
@@ -760,6 +767,7 @@
     else if (state === 'addBrain') html = renderAddBrain();
     else if (state === 'credentials') html = renderCredentials(data);
     else if (state === 'connecting') html = renderConnecting(data);
+    else if (state === 'sessionActive') html = renderSessionActive(data);
     else if (state === 'error') html = renderError(data);
     else if (state === 'reconnecting') html = renderReconnecting(data);
     else if (state === 'disconnected') html = renderDisconnected();
@@ -911,6 +919,23 @@
         '<h2 style="margin:30px 0 0;font-family:var(--font-display);font-weight:700;font-size:21px;color:#F2F6FB;">' + escapeHtml(data.brainName || 'your Brain') + '</h2>' +
         '<p style="margin:12px 0 0;font-size:14.5px;color:var(--mint);font-family:var(--font-mono);">' + escapeHtml(data.stage || STAGE_FALLBACK) + '</p>' +
         '<button class="btn-secondary" style="margin-top:34px;padding:11px 22px;font-size:13.5px;" id="btnCancelConnect" data-autofocus>Cancel</button>' +
+      '</div>'
+    );
+  }
+
+  // Shown for the entire duration of an active RDP session -- xfreerdp3's
+  // own window is what's actually on screen this whole time (see the
+  // emit_state sessionActive comment in connect.sh), so this deliberately
+  // has NO infinite CSS animation (unlike renderConnecting's spinning
+  // ring, which used to stay in the DOM -- and running -- for the whole
+  // session because nothing ever transitioned away from it).
+  function renderSessionActive(data){
+    return (
+      '<div class="screen" data-screen="sessionActive">' +
+        slimeBlobSVG(66, 'color', false) +
+        '<h2 style="margin:20px 0 0;font-family:var(--font-display);font-weight:700;font-size:21px;color:#F2F6FB;">' + escapeHtml(data.brainName || 'your Brain') + '</h2>' +
+        '<p style="margin:12px 0 0;font-size:14.5px;color:var(--mint);font-family:var(--font-mono);">Session active</p>' +
+        '<button class="btn-secondary" style="margin-top:34px;padding:11px 22px;font-size:13.5px;" id="btnCancelConnect">Disconnect</button>' +
       '</div>'
     );
   }
@@ -1307,7 +1332,7 @@
         emit('slime:credentials', payload);
       });
     }
-    else if (state === 'connecting'){
+    else if (state === 'connecting' || state === 'sessionActive'){
       on(document.getElementById('btnCancelConnect'), 'click', function(){ emit('slime:cancel-connect'); });
     }
     else if (state === 'error'){
@@ -1555,7 +1580,7 @@
     if (e.key !== 'Escape') return;
     if (modalRoot.innerHTML.trim()){ closeModal(); return; }
     var s = current.state;
-    if (s === 'connecting') emit('slime:cancel-connect');
+    if (s === 'connecting' || s === 'sessionActive') emit('slime:cancel-connect');
     else if (s === 'addBrain' || s === 'credentials' || s === 'error' || s === 'reconnecting') emit('slime:back');
     else if (s === 'wifiPassword' || s === 'wifiError') emit('slime:back');
     else if (s === 'wifiList' && current.data && current.data.mode === 'settings') emit('slime:back');
