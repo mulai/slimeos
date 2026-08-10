@@ -405,6 +405,27 @@ do_connect() {
                     ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
                     if [[ "$ev_type" == "cancelConnect" || "$ev_type" == "forceBack" ]]; then
                         kill "$xpid" 2>/dev/null || true
+                        # xfreerdp3 can catch SIGTERM and wedge in its own
+                        # abort/cleanup path instead of actually exiting --
+                        # confirmed live 2026-08-10: a frozen session's
+                        # process logged "Caught signal 'Terminated'" /
+                        # freerdp_abort_connect_context, then sat at ~86%
+                        # CPU for 90+ seconds, never dying. The `wait`
+                        # below is blocking, so a wedged process here
+                        # froze the WHOLE coordinator (and the kiosk
+                        # screen with it) even though the hotkey fired
+                        # correctly at the bridge level -- SIGKILL was the
+                        # only thing that unstuck it. Give SIGTERM a
+                        # bounded grace period, then escalate.
+                        local kill_waited=0
+                        while (( kill_waited < 5 )) && kill -0 "$xpid" 2>/dev/null; do
+                            sleep 1
+                            kill_waited=$((kill_waited + 1))
+                        done
+                        if kill -0 "$xpid" 2>/dev/null; then
+                            log "xfreerdp3 (pid $xpid) still alive 5s after SIGTERM — sending SIGKILL"
+                            kill -KILL "$xpid" 2>/dev/null || true
+                        fi
                         cancelled=true
                         break
                     else
