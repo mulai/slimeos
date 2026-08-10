@@ -34,6 +34,28 @@ usb_capture_card() {
     return 1
 }
 
+# ALSA's own "default" PCM resolves to card 0 with no check that it
+# actually supports playback -- on hardware where a capture-only device
+# (USB mic dongle, webcam mic) happens to enumerate ahead of the real
+# speakers, xfreerdp3's bare `/sound:sys:alsa` then fails outright
+# (`rdpsnd_alsa_open: snd_pcm_open failed`), silently killing the speaker
+# while the mic -- which explicitly targets its own card, see
+# usb_capture_card above -- keeps working. Confirmed live on the AMD box
+# 2026-08-10: /proc/asound/cards had a USB mic dongle at card 0
+# (capture-only, no pcm*p node) ahead of the onboard ALC887 at card 2.
+# Mirrors usb_capture_card's approach: walk cards in index order, return
+# the first one with a pcm*p node (i.e. actually has a playback substream).
+default_playback_card() {
+    local idx name
+    while read -r idx name; do
+        if compgen -G "/proc/asound/card${idx}/pcm*p" >/dev/null; then
+            printf '%s' "$name"
+            return 0
+        fi
+    done < <(awk '{gsub(/\[/, "", $2); print $1, $2}' /proc/asound/cards 2>/dev/null)
+    return 1
+}
+
 # Wake a managed cloud Brain before attempting RDP. The hub's power
 # service (brain/power, http://10.10.0.1:7677 — plain HTTP over the
 # tunnel, so Membrane clock drift can't break a TLS handshake here)
@@ -306,6 +328,29 @@ do_connect() {
                 log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
             fi
 
+            # See default_playback_card above — picks the first ALSA card
+            # that can actually play audio, instead of trusting ALSA's own
+            # index-0 default. Re-checked every attempt for the same
+            # hot-plug-reordering reason as the mic.
+            #
+            # `hw:`, not `plughw:` (unlike the mic flag below): FreeRDP's
+            # ALSA sound backend reuses this same `dev:` string for BOTH
+            # the PCM stream AND an internal snd_mixer_attach() call for
+            # volume control. `plughw:` is a PCM-only plugin type with no
+            # corresponding CTL device, so the mixer attach fails outright
+            # on it (confirmed live 2026-08-10: `amixer -D plughw:CARD=SB`
+            # → "Invalid CTL plughw:CARD=SB") and that failure aborts the
+            # whole rdpsnd channel before any audio plays, even though the
+            # PCM side alone would have opened fine. `hw:` mixer-attaches
+            # correctly, and plays standard 48kHz/S16_LE/stereo (what RDP
+            # audio negotiates) without needing plughw's format
+            # conversion — verified with speaker-test before switching.
+            local sound_flag="/sound:sys:alsa" playback_card
+            if playback_card=$(default_playback_card); then
+                sound_flag="/sound:sys:alsa,dev:hw:CARD=${playback_card}"
+                log "Playback ALSA card '${playback_card}' selected"
+            fi
+
             # Webcam redirection (MS-RDPECAM, /dvc:rdpecam) — ON by
             # default when a /dev/video* device exists; set
             # SLIMEOS_ENABLE_CAMERA=0 in /etc/slimeos/config to opt out.
@@ -346,7 +391,7 @@ do_connect() {
                 /network:"${RDP_NETWORK:-auto}" \
                 ${RES_FLAGS} \
                 /dynamic-resolution \
-                /sound:sys:alsa \
+                ${sound_flag} \
                 ${mic_flag} \
                 ${cam_flag} \
                 /drive:usb,"/media/$(id -un)" \
