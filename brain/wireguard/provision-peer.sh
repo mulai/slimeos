@@ -87,16 +87,38 @@ PresharedKey = ${PSK}
 AllowedIPs = ${CLIENT_IP}
 EOF
 
-# Reload WireGuard without downtime
-wg addconf wg0 <(wg-quick strip wg0 | grep -A4 "# Peer: ${PEER_NAME}" || true) 2>/dev/null || \
-    wg syncconf wg0 <(wg-quick strip wg0) 2>/dev/null || true
+# Reload WireGuard without downtime. `wg syncconf` reconciles the live
+# kernel state to match wg0.conf on disk, keyed by pubkey -- switched to
+# this from the old `wg addconf` + `grep -A4 "# Peer: ${PEER_NAME}"`
+# approach because a re-provisioned PEER_NAME (pairgen mints a new peer
+# per code request, same device_name every time -- see pair-peer.sh)
+# leaves multiple "# Peer: ${PEER_NAME}" blocks in the file, and grep -A4
+# matches ALL of them, feeding wg addconf a garbled multi-peer blob.
+# The bigger problem this whole block used to hide: every failure here
+# was swallowed by `2>/dev/null || ... || true`, so a peer could sit in
+# the config file forever, valid-looking, and NEVER load into the kernel
+# -- the client held a config that could never handshake, and every layer
+# above this (pair-peer.sh, pairgen, the dashboard) reported success.
+# Confirmed live 2026-08-10: exactly this happened to a self-service
+# pairing-code peer.
+if ! wg syncconf wg0 <(wg-quick strip wg0); then
+    die "wg syncconf failed -- peer '${PEER_NAME}' was written to $SERVER_CONF but NOT loaded into the live interface. Do not hand out this pairing code."
+fi
 
-# wg addconf registers the peer in the kernel but does NOT install a route to
-# its IP -- wg-quick only creates per-peer routes for peers present when the
-# interface comes up. Without this, the tunnel handshakes fine but all return
-# traffic to the new client exits via the container's default route and
-# vanishes: rx grows, tx stays flat, and every ping/RDP attempt times out.
-ip route add "${CLIENT_IP}" dev wg0 2>/dev/null || true
+# Confirm the peer actually made it into the live kernel state -- syncconf
+# can no-op on malformed input without a nonzero exit.
+if ! wg show wg0 | grep -qF "peer: ${CLIENT_PUBKEY}"; then
+    die "peer '${PEER_NAME}' (${CLIENT_PUBKEY}) still missing from live wg0 after syncconf. Do not hand out this pairing code."
+fi
+
+# wg syncconf registers the peer in the kernel but does NOT install a route
+# to its IP -- wg-quick only creates per-peer routes for peers present when
+# the interface comes up. Without this, the tunnel handshakes fine but all
+# return traffic to the new client exits via the container's default route
+# and vanishes: rx grows, tx stays flat, and every ping/RDP attempt times out.
+if ! ip route add "${CLIENT_IP}" dev wg0 2>/dev/null; then
+    ip route show | grep -qF "${CLIENT_IP%/32} " || die "failed to add route for ${CLIENT_IP} -- peer is live but unreachable. Do not hand out this pairing code."
+fi
 
 echo ""
 echo "  ✓ Peer '${PEER_NAME}' provisioned"
