@@ -585,17 +585,44 @@ while true; do
                 # Only fall through to pairing if the probe fails (no
                 # tunnel yet, or this bookmark's Brain is on a different
                 # network than whatever's currently paired).
+                #
+                # A failed probe doesn't necessarily mean "never paired",
+                # though: a managed cloud Brain the idle watchdog
+                # deallocated (see wake_brain in connect.sh) looks
+                # identical to a genuinely different network until we try
+                # waking it. wake_brain is already sourced in here (it's
+                # what do_connect uses), is a no-op for unmanaged hosts,
+                # and re-checks the RDP port itself before returning -- so
+                # one more brain_reachable() call right after it returns
+                # is enough to tell "was asleep" from "was never paired"
+                # apart. Confirmed live 2026-08-10: an idled Azure Brain
+                # sent a device with a perfectly good tunnel back to "Pair
+                # with a Brain" instead of just waking up.
                 rid="${id#remote:}"
                 rname=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .name // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 rhost=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .host // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 rport=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .port // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 [[ -n "$rport" ]] || rport="3389"
 
-                if have_wg_tunnel && [[ -n "$rhost" ]] && brain_reachable "$rhost" "$rport"; then
-                    log "Bookmarked brain '$rname' ($rhost:$rport) is already reachable over this device's existing tunnel — adding locally, no pairing needed"
+                reachable=false
+                wake_cancelled=false
+                if have_wg_tunnel && [[ -n "$rhost" ]]; then
+                    if brain_reachable "$rhost" "$rport"; then
+                        reachable=true
+                    elif wake_brain "$rhost" "$rport" "${rname:-a saved Brain}"; then
+                        brain_reachable "$rhost" "$rport" && reachable=true
+                    else
+                        wake_cancelled=true
+                    fi
+                fi
+
+                if [[ "$reachable" == true ]]; then
+                    log "Bookmarked brain '$rname' ($rhost:$rport) is reachable over this device's existing tunnel — adding locally, no pairing needed"
                     add_brain "${rname:-Untitled Brain}" "$rhost" "$rport"
                     stamp_last_connected "$LAST_ADDED_BRAIN_ID"
                     do_connect "$LAST_ADDED_BRAIN_ID"
+                elif [[ "$wake_cancelled" == true ]]; then
+                    log "Wake cancelled while reconnecting to bookmarked brain '$rname' ($rhost)"
                 else
                     log "Reconnecting to bookmarked brain '$rname' ($rhost) — needs a fresh pairing code"
                     PAIR_HINT="Reconnecting to \"${rname:-a saved Brain}\"${rhost:+ ($rhost)} — enter a fresh pairing code from its enroll screen."
