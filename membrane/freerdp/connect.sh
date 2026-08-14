@@ -16,6 +16,30 @@
 # always shows the Brain picker next — exactly what every one of those old
 # `exec brain-select.sh` calls did.
 
+# True if $1 (an ALSA card index) is the audio interface of a device that
+# ALSO exposes a video4linux capture interface -- i.e. a webcam's built-in
+# mic, not a dedicated USB microphone. A webcam's audio and video are
+# separate USB interfaces on the SAME physical device, so they share the
+# same parent directory in sysfs (e.g. audio at .../usb2/2-5/2-5:1.2, video
+# at .../usb2/2-5/2-5:1.0 -- same "2-5" parent, different ":I.N" interface
+# suffix). Confirmed live 2026-08-14 on the AMD box: the Logitech C920's
+# mic (card 2) enumerates ahead of the dedicated USB mic dongle (card 3) in
+# /proc/asound/cards, so usb_capture_card's old first-match logic had been
+# silently redirecting the webcam's mic instead of the dongle every single
+# session that day -- worse quality, and not what Tommy thought he was
+# testing when chasing an unrelated audio-quality report.
+is_webcam_audio_card() {
+    local card="$1" card_dev card_parent video_dev video_parent
+    card_dev=$(readlink -f "/sys/class/sound/card${card}/device" 2>/dev/null) || return 1
+    card_parent=$(dirname "$card_dev")
+    for video_dev in /sys/class/video4linux/video*/device; do
+        [[ -e "$video_dev" ]] || continue
+        video_parent=$(dirname "$(readlink -f "$video_dev")")
+        [[ "$video_parent" == "$card_parent" ]] && return 0
+    done
+    return 1
+}
+
 # First ALSA card that is both USB and capture-capable. USB microphones
 # enumerate as their own ALSA card, but ALSA's *default* capture device
 # stays pointed at the onboard input (typically an empty rear mic jack) --
@@ -23,14 +47,26 @@
 # while Windows shows a perfectly healthy "Remote Audio" recording device.
 # /proc/asound needs no alsa-utils and is authoritative; "pcm*c" nodes are
 # capture streams (a USB DAC/speaker without a mic exposes only pcm*p).
+# Skips a webcam's mic (see is_webcam_audio_card above) in favor of a
+# dedicated mic when both are present, but still falls back to a webcam's
+# mic if it's the only USB capture device around -- better than silence on
+# a webcam-only setup.
 usb_capture_card() {
-    local idx name
+    local idx name fallback=""
     while read -r idx name; do
         if compgen -G "/proc/asound/card${idx}/pcm*c" >/dev/null; then
+            if is_webcam_audio_card "$idx"; then
+                [[ -z "$fallback" ]] && fallback="$name"
+                continue
+            fi
             printf '%s' "$name"
             return 0
         fi
     done < <(awk '/USB-Audio/ {gsub(/\[/, "", $2); print $1, $2}' /proc/asound/cards 2>/dev/null)
+    if [[ -n "$fallback" ]]; then
+        printf '%s' "$fallback"
+        return 0
+    fi
     return 1
 }
 
