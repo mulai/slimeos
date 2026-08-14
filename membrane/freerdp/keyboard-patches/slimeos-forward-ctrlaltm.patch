@@ -1,0 +1,44 @@
+Description: Forward Ctrl+Alt+M to the remote session instead of minimizing locally
+ On this kiosk there is no window manager chrome and the client always runs
+ fullscreen (no /f toggle exposed to the user) -- "minimize the RDP client
+ window" has no meaningful UI to minimize *to*. Worse, Ctrl+Alt+M is a real
+ in-application shortcut on the remote side (e.g. Google Sheets' "insert
+ comment"), and xf_keyboard_handle_special_keys() intercepts it completely:
+ the keysym never reaches xf_keyboard_send_key(), so it never reaches the
+ remote session at all.
+ .
+ /action-script was investigated as a non-source-patch alternative and found
+ architecturally incapable of solving this (confirmed by reading
+ run_action_script()/xf_keyboard_execute_action_script() in this same
+ source): the script only gets a chance to *substitute a different local
+ action* for a hotkey it explicitly registers at pre-connect init -- this
+ switch statement runs unconditionally afterward regardless of what the
+ script registered, and no action-script output value means "forward this
+ to the remote instead." A source patch is the only way to change this
+ behavior.
+ .
+ Removes the XK_m/XK_M case entirely, so Ctrl+Alt+M falls through to the
+ same path every ordinary key takes (the function's final `return FALSE`),
+ which is what causes xf_keyboard_key_press() to call xf_keyboard_send_key()
+ and forward the real keydown/keyup pair to the remote session -- a true
+ forward, not a locally-simulated keypress. Ctrl+Alt+C (toggle-control) and
+ Ctrl+Alt+D (disconnect) are left untouched; only Ctrl+Alt+M was reported as
+ a problem.
+Author: Slime OS <dev@mulai.com>
+Forwarded: not-needed
+Last-Update: 2026-08-14
+--- a/client/X11/xf_keyboard.c
++++ b/client/X11/xf_keyboard.c
+@@ -1049,12 +1049,6 @@ BOOL xf_keyboard_handle_special_keys(xfContext* xfc, KeySym keysym)
+ 	{
+ 		switch (keysym)
+ 		{
+-			case XK_m:
+-			case XK_M:
+-				WLog_INFO(TAG, "<ctrl>+<alt>+m pressed, minimizing RDP session...");
+-				xf_sync_kbd_state(xfc);
+-				xf_minimize(xfc);
+-				return TRUE;
+ 			case XK_c:
+ 			case XK_C:
+ 				/* Ctrl-Alt-C: toggle control */
