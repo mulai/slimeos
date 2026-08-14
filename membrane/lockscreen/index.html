@@ -724,10 +724,45 @@
     var label = document.getElementById('tunnelLabel');
     var color = tunnel === 'up' ? '#00FF87' : tunnel === 'connecting' ? '#5FE6D2' : '#56616f';
     var text = tunnel === 'up' ? 'Secure tunnel' : tunnel === 'connecting' ? 'Connecting\u2026' : 'Not connected';
+    if (tunnel === 'up' && tunnelPingMs !== null) text += ' \u00b7 ' + tunnelPingMs + 'ms';
     dot.style.background = color;
     dot.style.boxShadow = '0 0 6px ' + color;
     label.style.color = color;
     label.textContent = text;
+
+    // Ping only runs while the tunnel is actually up -- no point timing a
+    // request over a down/still-connecting tunnel. Purely client-side
+    // (no coordinator.sh involvement, same as the clock's own 30s
+    // setInterval above): times a no-cors fetch to the hub's power
+    // service (10.10.0.1:7677/status, same read-only endpoint
+    // refresh_brain_status() uses -- no auth, no side effects, always
+    // reachable over the tunnel once wg0 is up) the same way the
+    // marketing site's demo.astro / useLatency.ts measures its "EDGE"
+    // indicator, so this reads as the same feature Tommy's used to.
+    if (tunnel === 'up'){
+      if (!tunnelPingTimer){
+        measureTunnelPing();
+        tunnelPingTimer = setInterval(measureTunnelPing, 5000);
+      }
+    } else if (tunnelPingTimer){
+      clearInterval(tunnelPingTimer);
+      tunnelPingTimer = null;
+      tunnelPingMs = null;
+    }
+  }
+
+  var tunnelPingMs = null;
+  var tunnelPingTimer = null;
+  function measureTunnelPing(){
+    var t0 = performance.now();
+    fetch('http://10.10.0.1:7677/status', { mode: 'no-cors', cache: 'no-store' })
+      .then(function(){
+        tunnelPingMs = Math.round(performance.now() - t0);
+        if (lastTunnel === 'up') renderTunnel('up');
+      })
+      .catch(function(){
+        tunnelPingMs = null;
+      });
   }
 
   /* ===================== rendering ===================== */
