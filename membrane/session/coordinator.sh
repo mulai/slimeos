@@ -268,6 +268,14 @@ consent_checked=false
 # "no bookmarks shown", never blocks the picker.
 REMOTE_BRAINS_JSON="[]"
 
+# Cache of local/paired brains' reachability (see refresh_brain_status,
+# below) -- same "refresh at a few entry points, not every render" posture
+# as REMOTE_BRAINS_JSON above, and for the same reason: show_picker_or_empty
+# runs on nearly every screen transition. Map of id -> "online"/"asleep"/
+# "offline"; a brain with no entry yet (never refreshed, e.g. just added)
+# renders with no badge rather than a false "offline".
+BRAIN_STATUS_JSON="{}"
+
 # Set by add_brain() (below) to the id it just generated -- read by the
 # `connect` case's bookmark-reachable fast path right after calling
 # add_brain(), same side-channel-global pattern as PAIR_HINT/
@@ -343,6 +351,50 @@ refresh_remote_brains() {
         return
     fi
     REMOTE_BRAINS_JSON=$(fetch_remote_brains)
+}
+
+# Refreshes BRAIN_STATUS_JSON for every local/paired brain. Called at the
+# same entry points as refresh_remote_brains() (see its comment) -- never
+# on routine navigation. Probes run in PARALLEL (one background job per
+# brain, each writing its own tmp file) rather than serially: brain_
+# reachable()'s 3s timeout summed across several hosts would make picker
+# entry visibly slow otherwise. Wall-clock cost is bounded by the single
+# slowest host, not N x per-host timeout.
+#
+# On an unreachable host, and only if a WireGuard tunnel exists at all
+# (no point calling the hub over a tunnel that isn't up), asks the hub's
+# power service whether it's a managed cloud Brain that's merely asleep
+# (deallocated to save cost -- a normal, expected state) rather than
+# genuinely offline. MUST call the hub's /status endpoint here, never
+# /wake -- /wake is documented (brain/power/main.go) as deliberately
+# action-taking (can issue a real ARM VM start) specifically to handle
+# the deallocating-race during an actual connect attempt; that doesn't
+# apply to this passive display query, and calling /wake here would
+# start (and bill for) every idle managed Brain on every picker refresh.
+refresh_brain_status() {
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    local id host port
+    while IFS=$'\t' read -r id host port; do
+        [[ -z "$id" ]] && continue
+        (
+            local status="offline"
+            if brain_reachable "$host" "$port"; then
+                status="online"
+            elif have_wg_tunnel; then
+                local resp managed
+                resp=$(curl -fsS -m 3 "${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}/status?host=${host}" 2>/dev/null)
+                managed=$(jq -r '.managed // false' <<<"$resp" 2>/dev/null || echo false)
+                [[ "$managed" == "true" ]] && status="asleep"
+            fi
+            jq -nc --arg id "$id" --arg status "$status" '{($id):$status}' > "$tmpdir/$id.json"
+        ) &
+    done < <(jq -r '.[] | [.id, .host, (.port // "3389")] | @tsv' "$BRAINS_FILE")
+    wait
+
+    BRAIN_STATUS_JSON=$(jq -sc 'add // {}' "$tmpdir"/*.json 2>/dev/null || echo '{}')
+    rm -rf "$tmpdir"
 }
 
 # Best-effort POST to /api/device/brains-save -- only ever called after the
@@ -432,12 +484,17 @@ show_picker_or_empty() {
     fi
 
     local entries=()
-    local id name host last rel
-    while IFS=$'\t' read -r id name host last; do
+    local id name host port last rel status
+    while IFS=$'\t' read -r id name host port last; do
         rel=$(relative_time "$last")
-        entries+=("$(jq -nc --arg id "$id" --arg name "$name" --arg host "$host" --arg rel "$rel" \
-            '{id:$id, name:$name, host:$host, lastConnected:$rel, remote:false}')")
-    done < <(jq -r '.[] | [.id, .name, .host, (.lastConnected // "")] | @tsv' "$BRAINS_FILE")
+        # No entry in BRAIN_STATUS_JSON yet (e.g. just added, never
+        # refreshed) renders as "unknown" -- no badge -- rather than a
+        # false "offline"; see refresh_brain_status()'s comment.
+        status=$(jq -r --arg id "$id" '.[$id] // "unknown"' <<<"$BRAIN_STATUS_JSON" 2>/dev/null || echo "unknown")
+        entries+=("$(jq -nc --arg id "$id" --arg name "$name" --arg host "$host" --arg port "$port" \
+            --arg rel "$rel" --arg status "$status" \
+            '{id:$id, name:$name, host:$host, port:$port, lastConnected:$rel, status:$status, remote:false}')")
+    done < <(jq -r '.[] | [.id, .name, .host, (.port // "3389"), (.lastConnected // "")] | @tsv' "$BRAINS_FILE")
 
     # Slime ID bookmarks not already paired on this device (matched by
     # host+port against the local brains.json) -- rendered as distinct
@@ -503,6 +560,7 @@ while true; do
                 fi
             fi
             refresh_remote_brains
+            refresh_brain_status
             send_status
             show_picker_or_empty
             # Once only, ever, per device. install.sh seeds this file with
@@ -646,18 +704,21 @@ while true; do
                 stamp_last_connected "$id"
                 do_connect "$id"
             fi
+            refresh_brain_status
             send_status
             show_picker_or_empty
             ;;
         slimeIdStart)
             do_slime_id_login
             refresh_remote_brains
+            refresh_brain_status
             send_status
             show_picker_or_empty
             ;;
         slimeIdLogout)
             slime_id_logout
             refresh_remote_brains
+            refresh_brain_status
             send_status
             show_picker_or_empty
             ;;

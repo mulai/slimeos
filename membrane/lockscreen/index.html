@@ -293,6 +293,7 @@
     --text-dim:#56616f;
     --text-faint:#3f4954;
     --error:#ff8f8f;
+    --amber:#f5b955;
     --font-display:'Space Grotesk', system-ui, sans-serif;
     --font-body:'Plus Jakarta Sans', system-ui, sans-serif;
     --font-mono:'JetBrains Mono', ui-monospace, monospace;
@@ -419,6 +420,14 @@
      distinguishes it from an ordinary, already-connectable card. */
   .brain-card-bookmark{border-style:dashed;border-color:rgba(0,194,168,0.3);}
   .brain-bookmark-badge{display:inline-block;font-family:var(--font-sans, inherit);font-weight:600;font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;color:var(--mint);background:rgba(0,194,168,0.12);border-radius:5px;padding:2px 6px;margin-left:4px;vertical-align:middle;}
+  /* Only shown for the two exceptional states (asleep/offline) -- an
+     online brain is the quiet default and gets no badge at all, same
+     restraint as the bookmark badge above. Offline is deliberately muted
+     rather than --error red: an intentionally-off self-hosted box isn't
+     a fault. */
+  .brain-status-badge{display:inline-block;font-family:var(--font-sans, inherit);font-weight:600;font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;border-radius:5px;padding:2px 6px;margin-left:4px;vertical-align:middle;}
+  .brain-status-badge.asleep{color:var(--amber);background:rgba(245,185,85,0.12);}
+  .brain-status-badge.offline{color:var(--text-dim);background:rgba(86,97,111,0.18);}
   .add-card{width:280px;background:transparent;border:1px dashed rgba(255,255,255,0.16);border-radius:16px;padding:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;min-height:96px;outline:none;color:var(--text-muted);}
   .add-card:hover{border-color:rgba(0,194,168,0.5);color:var(--mint);}
 
@@ -860,13 +869,21 @@
       var accent = ACCENTS[i % ACCENTS.length];
       var initial = (b.name || '?').trim().charAt(0).toUpperCase() || '?';
       var isRemote = !!b.remote;
+      // Quiet default: "online"/"unknown" get no badge at all, matching
+      // how the Slime ID bookmark badge above only appears for the
+      // exceptional case. Local/paired brains only -- remote bookmark
+      // cards keep their own existing "Tap to reconnect" affordance.
+      var statusBadge = '';
+      if (!isRemote && (b.status === 'asleep' || b.status === 'offline')) {
+        statusBadge = ' <span class="brain-status-badge ' + b.status + '">' + (b.status === 'asleep' ? 'Asleep' : 'Offline') + '</span>';
+      }
       return (
         '<div class="brain-card' + (isRemote ? ' brain-card-bookmark' : '') + '" tabindex="0" role="listitem" data-brain-id="' + escapeHtml(b.id) + '"' + (i === 0 ? ' data-autofocus="1"' : '') + '>' +
           '<div class="brain-row">' +
             '<div class="brain-id">' +
               '<span class="brain-avatar" style="background:' + accent + ';">' + escapeHtml(initial) + '</span>' +
               '<div style="min-width:0;">' +
-                '<div class="brain-name">' + escapeHtml(b.name) + (isRemote ? ' <span class="brain-bookmark-badge">Slime ID</span>' : '') + '</div>' +
+                '<div class="brain-name">' + escapeHtml(b.name) + (isRemote ? ' <span class="brain-bookmark-badge">Slime ID</span>' : statusBadge) + '</div>' +
                 '<div class="brain-host">' + escapeHtml(b.host) + '</div>' +
               '</div>' +
             '</div>' +
