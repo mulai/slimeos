@@ -280,7 +280,7 @@ func (b *bridge) runCoordinatorOnce() {
 	b.stdinMu.Unlock()
 }
 
-// ── Global force-disconnect hotkey (Ctrl+Alt+Backspace, held 3s) ────────────
+// ── Global force-disconnect hotkey (Ctrl+Alt+End, held 3s) ──────────────────
 //
 // Once xfreerdp3 owns the Wayland surface there is no window chrome, no
 // VT-switching (cage runs without -s), and the lock screen page -- which is
@@ -290,6 +290,15 @@ func (b *bridge) runCoordinatorOnce() {
 // wedged screen) can always be escaped back to the picker. See
 // coordinator.sh's header comment for the "forceBack" protocol entry this
 // feeds.
+//
+// Was Ctrl+Alt+Backspace until 2026-08-14: this reader doesn't grab the
+// device (see watchKeyboardDevice below), so the raw chord also reaches
+// whatever xfreerdp3 has focused on the Brain side. Ctrl+Alt+Backspace is
+// X11's classic "zap the X server" sequence -- if a Linux Brain's X
+// server has DontZap off, holding it kills and restarts the Brain's
+// whole desktop session, and it also ate any Ctrl+Alt+* binding a user
+// actually wanted inside the remote session. Ctrl+Alt+End has no such
+// reserved meaning on Windows or X11 desktops.
 //
 // Pure stdlib, matching this binary's zero-dependency rule (see the header
 // comment above): finds keyboard-class device nodes by parsing
@@ -302,7 +311,7 @@ const (
 	keyRightCtrl = 97
 	keyLeftAlt   = 56
 	keyRightAlt  = 100
-	keyBackspace = 14
+	keyEnd       = 107
 
 	// struct input_event on 64-bit platforms: timeval (2x8-byte long) +
 	// u16 type + u16 code + s32 value = 24 bytes. Read as raw offsets
@@ -318,9 +327,9 @@ const (
 // keyboard's Ctrl plus a USB keyboard's Alt still counts. Cheap edge case
 // to get right.
 type hotkeyState struct {
-	mu                   sync.Mutex
-	ctrl, alt, backspace bool
-	timer                *time.Timer
+	mu             sync.Mutex
+	ctrl, alt, end bool
+	timer          *time.Timer
 }
 
 func startHotkeyWatcher(b *bridge) {
@@ -418,17 +427,17 @@ func (hs *hotkeyState) update(code uint16, down bool, b *bridge) {
 		hs.ctrl = down
 	case keyLeftAlt, keyRightAlt:
 		hs.alt = down
-	case keyBackspace:
-		hs.backspace = down
+	case keyEnd:
+		hs.end = down
 	default:
 		return
 	}
 
-	chord := hs.ctrl && hs.alt && hs.backspace
+	chord := hs.ctrl && hs.alt && hs.end
 	switch {
 	case chord && hs.timer == nil:
 		hs.timer = time.AfterFunc(3*time.Second, func() {
-			log.Printf("hotkey: Ctrl+Alt+Backspace held 3s -- forcing back to the picker")
+			log.Printf("hotkey: Ctrl+Alt+End held 3s -- forcing back to the picker")
 			b.writeToCoordinator(`{"type":"forceBack"}`)
 		})
 	case !chord && hs.timer != nil:

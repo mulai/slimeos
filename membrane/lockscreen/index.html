@@ -15,7 +15,7 @@
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
-            'crashReportSettings' | 'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
+            'crashReportSettings' | 'timezoneSettings' | 'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
        empty:        { signedInEmail: string | null }
        picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null }
@@ -112,6 +112,15 @@
                        // decision is instead made via the one-shot
                        // 'showCrashConsent' message below, before the user
                        // has ever opened Settings at all.
+       timezoneSettings: { mode: 'settings', current: string,
+                          timezones: string[], error: string | null }
+                       // Settings panel's Timezone tab (see
+                       // membrane/session/timezone.sh). `timezones` is the
+                       // full IANA zone list (`timedatectl list-timezones`)
+                       // rendered as a plain <select> -- no search/filter UI,
+                       // there just aren't enough entries (~400) to need one.
+                       // No `boot` mode, same as supportSettings/
+                       // crashReportSettings.
        slimeIdConnecting: { stage }
                        // "Sign in with Slime ID" (see
                        // membrane/session/slime-id.sh) -- reached directly
@@ -185,7 +194,7 @@
    'slime:cancel-connect'  {}
 
    'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
-   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'
+   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'|'timezone'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -198,6 +207,7 @@
    'slime:pair-skip'       {}                             // boot mode only
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
+   'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
 
    'slime:crash-report'    { message, stack, state }       // auto-fired by window.onerror/unhandledrejection,
      never by a user action -- the page always fires this regardless of the
@@ -352,6 +362,22 @@
   input.field:focus-visible{border-color:var(--teal);outline:2px solid rgba(0,194,168,0.35);outline-offset:1px;}
   input.field.error{border-color:var(--error);}
 
+  /* Timezone tab's combobox -- deliberately NOT a native <select>: its
+     platform popup is a foreign surface outside cage/cog's normal
+     compositing (same class of issue as this file's other native/foreign-
+     element avoidances, e.g. inline SVG-via-innerHTML). Confirmed live
+     2026-08-14: opening a native <select> here briefly flashed the
+     underlying text VT (kernel boot warnings) through before returning to
+     the panel. An all-in-page <div> list has no such surface to misbehave. */
+  .tz-combobox{position:relative;}
+  /* position:fixed + explicit left/top/width set via JS (see bindScreen's
+     timezoneSettings case) -- rendered into #tzDropdownRoot, a top-level
+     sibling of the Settings panel, not this element's own ancestor chain. */
+  .tz-dropdown{position:fixed;max-height:240px;overflow-y:auto;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:10px;z-index:50;padding:4px;box-shadow:0 12px 32px rgba(0,0,0,0.45);}
+  .tz-option{padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);cursor:pointer;}
+  .tz-option.active{background:rgba(0,194,168,0.15);color:var(--mint);}
+  .tz-empty{padding:9px 12px;font-size:13px;color:var(--text-dim);}
+
   button{cursor:pointer;}
   button:focus-visible, [tabindex]:focus-visible, a:focus-visible{outline:2px solid var(--mint);outline-offset:3px;}
 
@@ -477,6 +503,16 @@
   <div id="screenRoot"></div>
 
   <div id="modalRoot"></div>
+
+  <!-- Floating host for the Timezone tab's dropdown -- a sibling of
+       screenRoot/modalRoot, not a descendant of the Settings panel's
+       .settings-body, specifically so it isn't clipped by that panel's
+       own overflow-y:auto (confirmed live 2026-08-14: nested inside the
+       panel, the list rendered but got cropped at the panel's bottom
+       edge). Positioned via JS (getBoundingClientRect of the input),
+       cleared on every render() so it can never outlive the tab that
+       opened it. -->
+  <div id="tzDropdownRoot"></div>
 
 </div>
 
@@ -694,12 +730,13 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1 };
   var SETTINGS_TABS = [
     { id: 'internet', label: 'Internet' },
     { id: 'pair', label: 'Pairing' },
     { id: 'support', label: 'Support' },
+    { id: 'timezone', label: 'Timezone' },
     { id: 'privacy', label: 'Privacy' }
   ];
 
@@ -707,6 +744,7 @@
     if (state === 'pairEntry' || state === 'pairConnecting' || state === 'pairError') return 'pair';
     if (state === 'supportSettings') return 'support';
     if (state === 'crashReportSettings') return 'privacy';
+    if (state === 'timezoneSettings') return 'timezone';
     return 'internet';
   }
 
@@ -761,6 +799,11 @@
 
   function renderImpl(){
     var state = current.state, data = current.data || {};
+    // See #tzDropdownRoot's own HTML comment: it's a floating overlay
+    // outside the normal state-driven screenRoot tree, so it needs its
+    // own explicit teardown on every re-render rather than getting wiped
+    // for free by screenRoot.innerHTML being replaced below.
+    document.getElementById('tzDropdownRoot').innerHTML = '';
     var html = '';
     if (state === 'empty') html = renderEmpty(data);
     else if (state === 'picker') html = renderPicker(data);
@@ -779,6 +822,7 @@
     else if (state === 'pairConnecting') html = renderPairConnecting(data);
     else if (state === 'pairError') html = renderPairError(data);
     else if (state === 'supportSettings') html = renderSupportSettings(data);
+    else if (state === 'timezoneSettings') html = renderTimezoneSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
     else if (state === 'slimeIdConnecting') html = renderSlimeIdConnecting(data);
     else if (state === 'slimeIdEntry') html = renderSlimeIdEntry(data);
@@ -1166,6 +1210,24 @@
     );
   }
 
+  function renderTimezoneSettings(data){
+    var current = data.current || 'UTC';
+    var error = data.error;
+    return (
+      '<div class="screen" data-screen="timezoneSettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Timezone</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Sets this Membrane’s clock and timestamps. Doesn’t affect the time inside a Brain session, which keeps its own timezone.</p>' +
+          '<label class="field-label">Timezone</label>' +
+          '<div class="tz-combobox" id="tzCombobox">' +
+            '<input class="field" id="fieldTimezone" autocomplete="off" spellcheck="false" data-autofocus value="' + escapeHtml(current) + '" placeholder="Type to search…" style="margin-bottom:0;">' +
+          '</div>' +
+          (error ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderCrashReportSettings(data){
     var enabled = !!data.enabled;
     return (
@@ -1427,6 +1489,104 @@
         emit('slime:support-toggle', { enabled: e.target.checked });
       });
     }
+    else if (state === 'timezoneSettings'){
+      var tzInput = document.getElementById('fieldTimezone');
+      var tzDropdownRoot = document.getElementById('tzDropdownRoot');
+      var tzZones = data.timezones || [];
+      var tzMatches = [];
+      var tzActiveIndex = -1;
+      var tzOpen = false;
+
+      function tzPosition(){
+        var r = tzInput.getBoundingClientRect();
+        var dd = tzDropdownRoot.firstChild;
+        if (!dd) return;
+        dd.style.left = r.left + 'px';
+        dd.style.width = r.width + 'px';
+        dd.style.top = (r.bottom + 4) + 'px';
+      }
+      function tzClose(){
+        tzOpen = false;
+        tzDropdownRoot.innerHTML = '';
+      }
+      function tzFilter(query){
+        var q = query.trim().toLowerCase();
+        var pool = q ? tzZones.filter(function(z){ return z.toLowerCase().indexOf(q) !== -1; }) : tzZones;
+        return pool.slice(0, 60);
+      }
+      function tzRenderList(matches){
+        tzMatches = matches;
+        tzActiveIndex = matches.length ? 0 : -1;
+        tzOpen = true;
+        tzDropdownRoot.innerHTML = '<div class="tz-dropdown">' + (matches.length ? matches.map(function(z, i){
+          return '<div class="tz-option' + (i === 0 ? ' active' : '') + '" data-zone="' + escapeHtml(z) + '">' + escapeHtml(z) + '</div>';
+        }).join('') : '<div class="tz-empty">No matching timezone</div>') + '</div>';
+        // Bound HERE, fresh on the just-created .tz-dropdown node, not
+        // once on the persistent #tzDropdownRoot in the outer scope below
+        // -- #tzDropdownRoot itself is never replaced (that's what lets it
+        // escape the settings panel's clipping), so a listener bound to IT
+        // inside bindScreen (which reruns on every emit_state, including
+        // once per successful timezone change) would stack a new one on
+        // top of every prior one forever. Confirmed live 2026-08-14: by
+        // the second change, N stacked listeners all fired off one real
+        // click, spamming timezoneSet that many times. Binding to the
+        // freshly-created child instead means the old node (and its
+        // listener) is simply garbage-collected when innerHTML replaces it
+        // -- exactly the same reasoning screenRoot's own re-render relies
+        // on, just one level deeper since this element sits outside it.
+        on(tzDropdownRoot.firstChild, 'mousedown', function(e){
+          var opt = e.target.closest('.tz-option');
+          if (!opt) return;
+          e.preventDefault();
+          tzChoose(opt.getAttribute('data-zone'));
+        });
+        tzPosition();
+      }
+      function tzHighlight(index){
+        tzActiveIndex = index;
+        Array.prototype.forEach.call(tzDropdownRoot.querySelectorAll('.tz-option'), function(el, i){
+          el.classList.toggle('active', i === index);
+        });
+      }
+      function tzChoose(zone){
+        tzInput.value = zone;
+        tzClose();
+        emit('slime:timezone-set', { timezone: zone });
+      }
+
+      // Deliberately NOT bound to 'focus': this screen's autofocus() (see
+      // its own function, called ~30ms after every render) programmatically
+      // focuses this input on every tab-open, which would otherwise pop the
+      // full list open unasked-for on every visit to this tab (confirmed
+      // live 2026-08-14). mousedown reflects a real user action; typing
+      // ('input') opens/narrows it too.
+      on(tzInput, 'mousedown', function(){ if (!tzOpen) tzRenderList(tzFilter(tzInput.value)); });
+      on(tzInput, 'input', function(){ tzRenderList(tzFilter(tzInput.value)); });
+      on(tzInput, 'keydown', function(e){
+        if (!tzOpen){
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') tzRenderList(tzFilter(tzInput.value));
+          return;
+        }
+        if (e.key === 'ArrowDown'){ e.preventDefault(); tzHighlight(Math.min(tzActiveIndex + 1, tzMatches.length - 1)); }
+        else if (e.key === 'ArrowUp'){ e.preventDefault(); tzHighlight(Math.max(tzActiveIndex - 1, 0)); }
+        else if (e.key === 'Enter'){ e.preventDefault(); if (tzMatches[tzActiveIndex]) tzChoose(tzMatches[tzActiveIndex]); }
+        else if (e.key === 'Escape'){ e.stopPropagation(); tzClose(); tzInput.value = data.current || 'UTC'; }
+      });
+      // (Selecting an option is handled inside tzRenderList() above, bound
+      // fresh to each dropdown instance -- see its comment for why it
+      // can't live here on the outer, persistent #tzDropdownRoot. mousedown
+      // rather than click: fires before the input's own blur, and sidesteps
+      // this hardware's click-registration quirk documented above `on()`'s
+      // global mousedown-synthesizes-click workaround -- these option rows
+      // aren't `button`/`[tabindex]` so that workaround doesn't cover them
+      // anyway, making mousedown the more reliable event here regardless.)
+      on(tzInput, 'blur', function(){
+        setTimeout(function(){
+          tzClose();
+          if (tzInput.value !== data.current) tzInput.value = data.current || 'UTC';
+        }, 150);
+      });
+    }
     else if (state === 'crashReportSettings'){
       on(document.getElementById('fieldCrashReportToggle'), 'change', function(e){
         emit('slime:crash-report-toggle', { enabled: e.target.checked });
@@ -1587,6 +1747,7 @@
     else if (s === 'pairError') emit('slime:back');
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'supportSettings') emit('slime:back');
+    else if (s === 'timezoneSettings') emit('slime:back');
     else if (s === 'crashReportSettings') emit('slime:back');
     else if (s === 'slimeIdEntry') emit('slime:back');
     else if (s === 'slimeIdError') emit('slime:back');
@@ -1628,7 +1789,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -1650,6 +1811,7 @@
     var demoSupportEnabled = false;
     var demoSupportConnection = null;
     var demoCrashReportEnabled = false;
+    var demoTimezone = 'UTC';
     var demoSignedInEmail = null;
 
     document.addEventListener('slime:open-settings', function(){
@@ -1665,6 +1827,8 @@
         window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
+      } else if (tab === 'timezone'){
+        window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
       } else if (tab === 'privacy'){
         window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
       }
@@ -1684,6 +1848,11 @@
     document.addEventListener('slime:crash-report-toggle', function(e){
       demoCrashReportEnabled = !!e.detail.enabled;
       window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
+    });
+
+    document.addEventListener('slime:timezone-set', function(e){
+      demoTimezone = e.detail.timezone;
+      window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
     });
 
     function startDemoSlimeId(){
@@ -1871,6 +2040,7 @@
       'slime:pair-submit': 'pairSubmit',
       'slime:pair-skip': 'pairSkip',
       'slime:support-toggle': 'supportToggle',
+      'slime:timezone-set': 'timezoneSet',
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',

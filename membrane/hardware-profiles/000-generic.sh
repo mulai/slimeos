@@ -24,8 +24,9 @@ SLIMEOS_COMPOSITOR_RENDERER=""
 # video/animation-heavy sessions; Brains without GFX/H.264 (xrdp 0.9)
 # negotiate down harmlessly. No /network flag here: it would silently
 # override the config file's RDP_NETWORK setting (later flag wins on the
-# xfreerdp3 command line).
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
+# xfreerdp3 command line). +video — MS-RDPEVOR video-optimized channel,
+# see coordinator.sh's SLIMEOS_FREERDP_EXTRA_FLAGS comment.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
 
 # Export for use by connect.sh
 cat > /etc/slimeos/hw-freerdp-flags <<EOF

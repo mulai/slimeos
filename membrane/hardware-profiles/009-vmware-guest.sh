@@ -34,8 +34,10 @@ SLIMEOS_COMPOSITOR_RENDERER="pixman"
 
 # ── FreeRDP performance flags ─────────────────────────────────────────────────
 # Same as generic: AVC444 decode is pure CPU via libavcodec, so software
-# compositing doesn't change the calculus.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
+# compositing doesn't change the calculus. +video — MS-RDPEVOR
+# video-optimized channel, see coordinator.sh's SLIMEOS_FREERDP_EXTRA_FLAGS
+# comment.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
 
 # Export for use by connect.sh and slimeos-session.sh
 cat > /etc/slimeos/hw-freerdp-flags <<EOF

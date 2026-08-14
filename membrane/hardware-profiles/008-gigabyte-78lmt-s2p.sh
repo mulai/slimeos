@@ -36,7 +36,12 @@ SLIMEOS_COMPOSITOR_RENDERER=""
 # old /gfx:rfx RemoteFX set. Negotiated — an xrdp Brain without GFX falls
 # back harmlessly. No /network here: it would override the config file's
 # RDP_NETWORK on the xfreerdp3 command line (later flag wins).
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
+# +video — MS-RDPEVOR video-optimized channel, see coordinator.sh's
+# SLIMEOS_FREERDP_EXTRA_FLAGS comment. This board's Radeon HD 3000-class
+# iGPU (760G/RS880, `radeon` KMS driver) has no reliable VAAPI H.264
+# decode of its own either way — the win here is the channel split, not
+# hardware decode.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
 
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"

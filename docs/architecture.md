@@ -134,7 +134,7 @@ no input focus. `slimeos-bridge` runs a second goroutine alongside the
 coordinator relay that reads raw evdev events directly from
 `/dev/input/eventN` (below whatever currently has focus, stdlib-only, no
 `EVIOCGRAB` so it never steals input from cage/libinput's own reads): on
-**Ctrl+Alt+Backspace held 3 seconds**, it injects a synthesized
+**Ctrl+Alt+End held 3 seconds**, it injects a synthesized
 `{"type":"forceBack"}` line onto the coordinator's stdin the same way it
 already does for `_clientConnected`/`_clientDisconnected`. Every
 blocking-read site in `coordinator.sh`/`connect.sh`/`network-setup.sh`/

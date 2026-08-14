@@ -165,6 +165,93 @@ else
     log "Non-amd64 architecture — skipping camera rebuild (no prebuilt debs); webcam redirection unavailable"
 fi
 
+# ── 1c. Boot splash (Plymouth) + GRUB timeout ─────────────────────────────────
+# The preseed's add-kernel-opts comment always said "no splash (custom
+# plymouth later)" — this is that. GRUB_TIMEOUT=0 removes the menu flash
+# d-i's grub-installer leaves at its 5s default (there's nothing to
+# dual-boot into on a kiosk device); the installer USB's own Advanced
+# options → Rescue mode remains the recovery path, not this machine's
+# own GRUB menu, so losing the menu costs nothing.
+log "Installing boot splash (Plymouth)..."
+apt-get install -y --no-install-recommends plymouth plymouth-themes
+mkdir -p /usr/share/plymouth/themes/slimeos
+cp -r /usr/share/plymouth/themes/spinner/. /usr/share/plymouth/themes/slimeos/
+rm -f /usr/share/plymouth/themes/slimeos/spinner.plymouth
+curl -fsSL "$REPO_BASE/membrane/plymouth/watermark.png" \
+     -o /usr/share/plymouth/themes/slimeos/watermark.png
+# Built on Debian's stock "spinner" (two-step plugin) theme rather than
+# from scratch: reuses its already-correct throbber/animation frame set
+# and just swaps in the Slime OS mark as a centered watermark plus the
+# lock screen's own near-black shell colour as the background, instead of
+# hand-rolling frame-by-frame spinner art.
+cat > /usr/share/plymouth/themes/slimeos/slimeos.plymouth <<'PLYMOUTH'
+[Plymouth Theme]
+Name=Slime OS
+Description=Slime OS boot splash (based on the stock Spinner theme).
+ModuleName=two-step
+
+[two-step]
+WatermarkImage=watermark.png
+Font=Cantarell 12
+TitleFont=Cantarell Light 30
+ImageDir=/usr/share/plymouth/themes/slimeos
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.382
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.7
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.36
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x05080b
+BackgroundEndColor=0x05080b
+ProgressBarBackgroundColor=0x606060
+ProgressBarForegroundColor=0xffffff
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false
+PLYMOUTH
+plymouth-set-default-theme -R slimeos
+
+# plymouth-quit(-wait).service default to After=systemd-user-sessions.service
+# -- basic system init, long before network-online.target (which
+# slimeos-session.service waits on) or cage actually paints anything --
+# so the splash ends and drops to the text console a while before the
+# kiosk is ready, exposing kernel/NetworkManager boot noise (ACPI table
+# warnings, sp5100-tco, alsactl UCM errors, NetworkManager resolvconf
+# warnings) for a few seconds before slimeos-session.service takes the
+# screen. Cosmetic only -- confirmed live 2026-08-14, boots to the lock
+# screen fine either way.
+#
+# Tried tightening this by masking plymouth-quit(-wait).service and
+# having slimeos-session.service itself call `plymouth quit` right
+# before cage: that call ran as this unit's own User=slime, plymouthd's
+# control socket rejected it every time (permission denied, silently
+# swallowed by the leading `-`), the splash then never actually quit,
+# and cage crash-looped forever unable to acquire the DRM master
+# Plymouth still held -- confirmed live on the AMD box the same day,
+# needed a rescue-mode USB recovery to undo. Reverting to the simple,
+# validated-working version here rather than re-attempting the `+`
+# (run-as-root) fix blind against production hardware with no way to
+# see the screen mid-iteration -- if revisited, do it against a VM
+# where the boot screen is actually visible first.
+
+sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub
+grep -q 'GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\bsplash\b' /etc/default/grub ||
+    sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"$/\1 splash"/' /etc/default/grub
+update-grub
+update-initramfs -u -k all
+ok "Boot splash installed, GRUB_TIMEOUT=0"
+
 # ── 2. Create session user if not exists ─────────────────────────────────────
 # `render` (not just `video`) is required for GPU-accelerated rendering:
 # /dev/dri/renderD128 is group-owned by `render`, separately from card0's
@@ -238,13 +325,15 @@ curl -fsSL "$REPO_BASE/membrane/session/pair.sh" \
      -o "$INSTALL_DIR/pair.sh"
 curl -fsSL "$REPO_BASE/membrane/session/support.sh" \
      -o "$INSTALL_DIR/support.sh"
+curl -fsSL "$REPO_BASE/membrane/session/timezone.sh" \
+     -o "$INSTALL_DIR/timezone.sh"
 curl -fsSL "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
      -o "$INSTALL_DIR/remote-support-toggle.sh"
 curl -fsSL "$REPO_BASE/membrane/session/crash-reporting.sh" \
      -o "$INSTALL_DIR/crash-reporting.sh"
 curl -fsSL "$REPO_BASE/membrane/session/slime-id.sh" \
      -o "$INSTALL_DIR/slime-id.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -388,7 +477,27 @@ chmod 440 /etc/sudoers.d/slimeos-remote-support
 visudo -cf /etc/sudoers.d/slimeos-remote-support || die "generated sudoers file failed validation"
 ok "Remote Support sudo grant installed"
 
-# ── 3g. On-device version record ──────────────────────────────────────────────
+# ── 3g. Polkit rule: timezone from the kiosk UI ───────────────────────────────
+# timezone.sh's do_timezone() calls `timedatectl set-timezone` as
+# $SESSION_USER from the Settings panel's Timezone tab. Same missing-
+# active-session root cause as the polkit rules above: systemd-timedated's
+# default authorization normally keys off an active local logind session,
+# which this kiosk deliberately never registers as (see the NetworkManager
+# rule's comment for why). set-ntp is included too even though nothing in
+# this UI toggles it yet -- timedatectl bundles both under the one D-Bus
+# interface and a partial grant is no safer, just a future footgun.
+cat > /etc/polkit-1/rules.d/54-slimeos-timedate.rules <<POLKIT
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.timedate1.set-timezone" ||
+         action.id == "org.freedesktop.timedate1.set-ntp") &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+ok "Timezone setting enabled for the kiosk UI"
+
+# ── 3h. On-device version record ──────────────────────────────────────────────
 # Lets a device report what it's running without SSHing in and checking git
 # log -- surfaced read-only in the Settings panel's Support tab (see
 # support.sh's do_support()). Reinstall remains the only supported upgrade

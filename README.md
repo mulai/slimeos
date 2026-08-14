@@ -164,7 +164,7 @@ Windows Brain (local speakers, a USB microphone, and hot-plugged USB
 storage all working inside the remote session), and cloud Brain power
 management (an idle Azure VM deallocates itself to stop billing and
 wakes automatically on connect, ~2 minutes to desktop), and a global
-Ctrl+Alt+Backspace (held 3s) recovery hotkey that force-disconnects a
+Ctrl+Alt+End (held 3s) recovery hotkey that force-disconnects a
 stuck RDP session and returns to the picker from anywhere, even with no
 window focus — all confirmed on real hardware, not just in a VM.
 

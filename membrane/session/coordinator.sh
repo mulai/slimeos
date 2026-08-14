@@ -18,7 +18,7 @@
 #   {"type":"credentials","username":?,"password":..}     (only consumed by do_connect, see connect.sh)
 #   {"type":"retry"} | {"type":"reenterPassword"} | {"type":"back"} | {"type":"cancelConnect"}
 #   {"type":"forceBack"}                                   bridge-synthesized (see main.go's hotkey watcher) on a
-#     held Ctrl+Alt+Backspace; recognized at every blocking-read site in this
+#     held Ctrl+Alt+End; recognized at every blocking-read site in this
 #     file/connect.sh/network-setup.sh/pair.sh as an unconditional "give up,
 #     return to the picker now" -- unlike plain `back`, never mode-conditional
 #     or a partial step-back. Kills an in-flight xfreerdp3 session first if
@@ -32,8 +32,9 @@
 #     (pairSubmit/pairSkip only consumed by do_pair, see pair.sh — retry/back are reused there too)
 #   {"type":"supportToggle","enabled":..}                  only consumed by do_support, see support.sh
 #   {"type":"crashReportToggle","enabled":..}              only consumed by do_crash_reporting, see crash-reporting.sh
-#   {"type":"settingsTab","tab":"internet"|"pair"|"support"|"privacy"}  only consumed by whichever of
-#     do_network_setup/do_pair/do_support/do_crash_reporting is currently running in `settings` mode —
+#   {"type":"timezoneSet","timezone":..}                   only consumed by do_timezone, see timezone.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"support"|"privacy"|"timezone"}  only consumed by whichever of
+#     do_network_setup/do_pair/do_support/do_crash_reporting/do_timezone is currently running in `settings` mode —
 #     switches the Settings panel to a different tab without leaving it (see the
 #     openSettings case's SETTINGS_NEXT_TAB loop below)
 #   {"type":"crashConsent","granted":true|false}            handled directly here (see the outer dispatch's
@@ -209,7 +210,15 @@ chmod 700 "$CRED_DIR"
 # old "/network:broadband" duplicated do_connect()'s own
 # /network:$RDP_NETWORK and, coming later on the command line, silently
 # overrode whatever the config file said.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32"
+# +video — MS-RDPEVOR "Video Optimized Remoting" virtual channel. Distinct
+# from /gfx (which carries the whole desktop surface): a Windows Brain
+# that recognizes a video-playback region hands it to this channel as a
+# separately-coded stream instead of folding it into the general desktop
+# bitmap/GFX pipeline, which is where users perceive "choppy video" on a
+# plain /gfx:AVC444 session. Purely client-offered/negotiated — a Brain
+# or xrdp version that doesn't implement the server side of MS-RDPEVOR
+# just never opens the channel, same negotiated-fallback shape as /gfx.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
 if [[ -f "$CONFIG_DIR/hw-freerdp-flags" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_DIR/hw-freerdp-flags"
@@ -234,6 +243,8 @@ source "$INSTALL_DIR/network-setup.sh" # defines do_network_setup()
 source "$INSTALL_DIR/pair.sh" # defines do_pair()
 # shellcheck source=support.sh
 source "$INSTALL_DIR/support.sh" # defines do_support()
+# shellcheck source=timezone.sh
+source "$INSTALL_DIR/timezone.sh" # defines do_timezone()
 # shellcheck source=crash-reporting.sh
 source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
 # shellcheck source=slime-id.sh
@@ -672,6 +683,7 @@ while true; do
                     pair)     do_pair settings ;;
                     support)  do_support settings ;;
                     privacy)  do_crash_reporting settings ;;
+                    timezone) do_timezone settings ;;
                 esac
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"

@@ -92,7 +92,10 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 
 # ── FreeRDP performance flags ─────────────────────────────────────────────────
 # Intel HD/Iris on Mac supports H.264 decode via VA-API (i965/iHD driver).
 # Using GFX pipeline with AVC; fallback to RFX if the server doesn't offer AVC.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc420 /bpp:32 /rfx"
+# +video — MS-RDPEVOR video-optimized channel, see coordinator.sh's
+# SLIMEOS_FREERDP_EXTRA_FLAGS comment for why this is worth having
+# alongside /gfx.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc420 /bpp:32 /rfx +video"
 
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"

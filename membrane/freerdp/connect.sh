@@ -395,6 +395,19 @@ do_connect() {
             #     plugged in mid-session without a reconnect. Encrypted
             #     (LUKS) volumes aren't handled — no unlock-prompt UI exists
             #     on this kiosk yet.
+            # Tried /action-script:action-noop.sh here 2026-08-14 to stop
+            # xfreerdp3 intercepting Ctrl+Alt+Enter/C/M locally instead of
+            # forwarding them to the Brain (Google Sheets' Ctrl+Alt+M
+            # "insert comment" shortcut never arrived because of this) --
+            # reverted same day: contrary to --help's description, FreeRDP
+            # calls the script at PRE-CONNECT time expecting real output,
+            # not just at runtime keypresses; a script producing no output
+            # aborted every connection outright with
+            # ERRCONNECT_PRE_CONNECT_FAILED (exit 136), confirmed live
+            # against all three Brains. The actual action-script response
+            # contract needs reading FreeRDP's source, not just --help,
+            # before trying this again — see membrane/freerdp/
+            # action-noop.sh's own header for the postmortem.
             set +e
             xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
