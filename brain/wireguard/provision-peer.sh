@@ -101,7 +101,19 @@ EOF
 # above this (pair-peer.sh, pairgen, the dashboard) reported success.
 # Confirmed live 2026-08-10: exactly this happened to a self-service
 # pairing-code peer.
-if ! wg syncconf wg0 <(wg-quick strip wg0); then
+#
+# `wg-quick strip wg0` (bare interface name) resolves to /etc/wireguard/
+# wg0.conf by wg-quick's own convention -- that path only exists inside the
+# wireguard container's filesystem (populated by the linuxserver/wireguard
+# image's own init). pairgen execs this same script from a SEPARATE
+# container that shares wg0's network namespace but not that filesystem
+# path, so the bare-name form fails there with "does not exist" and takes
+# the live interface down to zero peers mid-syncconf (confirmed live
+# 2026-08-15: every peer vanished from `wg show wg0` and the listening
+# port randomized until manually resynced). Pass $SERVER_CONF explicitly --
+# a real path ending in .conf is used literally by wg-quick, so this works
+# identically from any container that has /config mounted, not just this one.
+if ! wg syncconf wg0 <(wg-quick strip "$SERVER_CONF"); then
     die "wg syncconf failed -- peer '${PEER_NAME}' was written to $SERVER_CONF but NOT loaded into the live interface. Do not hand out this pairing code."
 fi
 
