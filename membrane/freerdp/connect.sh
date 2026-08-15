@@ -194,6 +194,39 @@ wake_brain() {
     return 0
 }
 
+# Best-effort POST to /api/device/brain-credential -- fetched fresh
+# immediately before every connect attempt to a kind='paid' brain, never
+# cached in $CRED_DIR's .cred file mechanism (every connect gets a live
+# fetch; no cache/invalidation problem to solve). Echoes
+# {"ok":true,"username":...,"password":...} on success, {"ok":false} on ANY
+# failure (offline, not signed into Slime ID, brain has no stored
+# credential yet, server error) -- callers treat every ok:false identically:
+# fall back to the existing manual-entry+local-cache flow. Mirrors
+# coordinator.sh's fetch_remote_brains() exactly (same
+# SLIME_ID_API/SLIME_ID_SESSION_FILE globals, same non-fatal curl posture --
+# both are defined in slime-id.sh, sourced before this is ever called).
+fetch_brain_credential() {
+    local brain_id="$1" token
+    token=$(jq -r '.token // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null)
+    if [[ -z "$token" ]]; then
+        echo '{"ok":false}'
+        return
+    fi
+
+    set +e
+    local response
+    response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+        -d "$(jq -nc --arg t "$token" --arg id "$brain_id" '{session_token:$t, brainId:$id}')" \
+        "$SLIME_ID_API/device/brain-credential" 2>/dev/null)
+    set -e
+
+    if jq -e '.ok == true and (.password // "") != ""' <<<"$response" >/dev/null 2>&1; then
+        echo "$response"
+    else
+        echo '{"ok":false}'
+    fi
+}
+
 do_connect() {
     local brain_id="$1"
     local brain_json
@@ -203,17 +236,25 @@ do_connect() {
         return 0
     fi
 
-    local vm_host vm_port slime_username brain_name
+    local vm_host vm_port slime_username brain_name brain_kind
     vm_host=$(jq -r '.host' <<<"$brain_json")
     vm_port=$(jq -r '.port' <<<"$brain_json")
     slime_username=$(jq -r '.username' <<<"$brain_json")
     brain_name=$(jq -r '.name' <<<"$brain_json")
+    brain_kind=$(jq -r '.kind // "free"' <<<"$brain_json")
 
     local cred_file="$CRED_DIR/${brain_id}.cred"
     # Same per-Brain key derivation as before: machine-bound, brain-bound,
     # so a stolen brains.json + brains/ directory is useless off-device.
     local cred_pass; cred_pass="$(cat /etc/machine-id)-${brain_id}"
     local rdp_pass attempt=1
+    # cred_source tracks whether rdp_pass came from a live server fetch
+    # (kind='paid') or the local prompt+cache flow every other brain uses --
+    # the auth-failure handling below treats the two very differently (a
+    # human never typed a server-sourced password, so "Re-enter password"
+    # is meaningless for it). server_auth_retried bounds the one automatic
+    # re-fetch-and-retry to a single attempt per error episode.
+    local cred_source="" server_auth_retried=false
 
     # Two phases, dispatched by `phase`:
     #   "credentials" — only entered when username or password is still
@@ -228,6 +269,33 @@ do_connect() {
     local phase="credentials"
     while true; do
         if [[ "$phase" == "credentials" ]]; then
+            # kind='paid' Brains: the backend already knows the RDP
+            # password (set at VM-provisioning time via the admin
+            # fulfillment runbook, admin/orders/[uuid].ts) -- a signed-in
+            # Slime ID user should never have to type it on the on-screen
+            # keyboard. Try the live fetch FIRST, before the existing
+            # need_username/cred_file prompt logic below; only fall back to
+            # prompting if it fails for any reason (offline, not signed in,
+            # this brain has no stored credential yet). Skipped entirely
+            # for kind='free' -- their OS credentials are the customer's
+            # own business, and the endpoint would 404 for them anyway
+            # (server-side ownership+kind gate), but checking brain_kind
+            # here avoids a pointless round-trip.
+            if [[ "$brain_kind" == "paid" ]]; then
+                local cred_response
+                cred_response=$(fetch_brain_credential "$brain_id")
+                if jq -e '.ok == true' <<<"$cred_response" >/dev/null 2>&1; then
+                    rdp_pass=$(jq -r '.password' <<<"$cred_response")
+                    local server_username
+                    server_username=$(jq -r '.username // empty' <<<"$cred_response")
+                    [[ -n "$server_username" ]] && slime_username="$server_username"
+                    cred_source="server"
+                    phase="connect"
+                    continue
+                fi
+                log "No server-stored credential for paid brain $brain_id (or fetch failed) — falling back to manual entry"
+            fi
+
             local need_username=false
             [[ -z "$slime_username" ]] && need_username=true
 
@@ -277,6 +345,7 @@ do_connect() {
                 continue # phase stays "credentials"; cred_file is gone so it re-prompts
             fi
 
+            cred_source="local"
             phase="connect"
             continue
         fi
@@ -611,6 +680,37 @@ do_connect() {
             local err_hint message detail
             err_hint=$(tail -c +$((log_offset + 1)) "$FREERDP_LOG_FILE" \
                 | grep -o 'ERRCONNECT_[A-Z_]*' | tail -1 || true)
+
+            local is_auth_failure=false
+            case "$err_hint" in
+                ERRCONNECT_AUTHENTICATION_FAILED|ERRCONNECT_LOGON_FAILURE) is_auth_failure=true ;;
+            esac
+
+            # A server-sourced credential's auth failure gets special
+            # handling: a human never typed this password, so the generic
+            # "Re-enter password" prompt is worse than useless here -- it
+            # implies an action the user can't meaningfully take. First
+            # failure: silently re-fetch once (covers the motivating case --
+            # Tommy fixing a wrong password via the admin endpoint while the
+            # kiosk is mid-retry) and reconnect without ever showing an
+            # error screen. This is ONE bounded automatic retry, not a
+            # loop, so it doesn't reopen the "blind retries can lock a
+            # Windows account" risk noted above (a single extra attempt,
+            # same cost as a human clicking "Try again" once). Second
+            # consecutive failure: fall through to a distinct error state
+            # with no "Re-enter password" button.
+            if [[ "$is_auth_failure" == true && "$cred_source" == "server" && "$server_auth_retried" != true ]]; then
+                server_auth_retried=true
+                log "Server-stored credential rejected for paid brain $brain_id — re-fetching once before surfacing an error"
+                phase="credentials"
+                # Only 2 loops enclose this point (the connect-attempt loop,
+                # then the outer phase-dispatch loop) -- unlike the
+                # `continue 3`s below, which run from one level deeper,
+                # inside the error-wait loop this same fast-failure section
+                # is about to enter.
+                continue 2
+            fi
+
             case "$err_hint" in
                 ERRCONNECT_AUTHENTICATION_FAILED|ERRCONNECT_LOGON_FAILURE)
                     message="That password didn't work." ;;
@@ -624,16 +724,48 @@ do_connect() {
                     message="Connection failed." ;;
             esac
             detail="${err_hint:-exit code $exit_code}"
-            emit_state error "$(jq -nc --arg n "$brain_name" --arg m "$message" --arg d "$detail" \
-                '{brainName:$n,message:$m,detail:$d}')"
+
+            local hide_reenter=false
+            if [[ "$is_auth_failure" == true && "$cred_source" == "server" ]]; then
+                # Second consecutive server-credential auth failure -- the
+                # re-fetch above didn't help. Override the message; suppress
+                # the button that would prompt for a password this user was
+                # never given.
+                message="This Brain's saved sign-in details aren't working. This has been flagged for Tommy to fix."
+                hide_reenter=true
+            fi
+
+            emit_state error "$(jq -nc --arg n "$brain_name" --arg m "$message" --arg d "$detail" --argjson hr "$hide_reenter" \
+                '{brainName:$n,message:$m,detail:$d,hideReenterPassword:$hr}')"
 
             while true; do
                 local line ev_type
                 line=$(read_event) || return 0
                 ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
                 case "$ev_type" in
-                    retry) continue 2 ;;
+                    retry)
+                        if [[ "$is_auth_failure" == true && "$cred_source" == "server" ]]; then
+                            # "Try again" on the distinct server-credential
+                            # error screen means "re-check whether Tommy
+                            # fixed it yet", not "immediately resubmit the
+                            # same rejected password".
+                            server_auth_retried=false
+                            phase="credentials"
+                            continue 3
+                        fi
+                        continue 2
+                        ;;
                     reenterPassword)
+                        if [[ "$cred_source" == "server" ]]; then
+                            # This button isn't rendered when
+                            # hideReenterPassword is true, so reaching here
+                            # would only happen via a stale frontend event --
+                            # treat it the same as retry: re-fetch, there's
+                            # no local cred_file for this brain to delete.
+                            server_auth_retried=false
+                            phase="credentials"
+                            continue 3
+                        fi
                         rm -f "$cred_file"
                         phase="credentials"
                         continue 3

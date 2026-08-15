@@ -1067,6 +1067,12 @@
   }
 
   function renderError(data){
+    // hideReenterPassword: set for a rejected server-delivered credential
+    // (kind='paid' Brain) -- a human never typed that password, so a
+    // "Re-enter password" button implies an action they can't take. Every
+    // other emit_state error caller leaves this unset/falsy, so the button
+    // still renders as before everywhere else.
+    var showReenter = !data.hideReenterPassword;
     return (
       '<div class="screen" data-screen="error">' +
         '<div class="error-card">' +
@@ -1075,7 +1081,7 @@
           '<p style="margin:10px 0 0;font-size:13.5px;line-height:1.6;color:var(--text-muted);">' + escapeHtml(data.brainName ? ('Couldn\u2019t connect to ' + data.brainName + '.') : '') + '</p>' +
           '<div class="error-actions">' +
             '<button class="btn-primary" style="box-shadow:none;" id="btnTryAgain" data-autofocus>Try again</button>' +
-            '<button class="btn-secondary" id="btnReenterPassword">Re-enter password</button>' +
+            (showReenter ? '<button class="btn-secondary" id="btnReenterPassword">Re-enter password</button>' : '') +
             '<button class="btn-tertiary" id="btnBackFromError">Back to Brain list</button>' +
           '</div>' +
           '<details class="tech"><summary>+ Technical details</summary><div class="code">' + escapeHtml(data.detail || '') + '</div></details>' +
@@ -1481,7 +1487,8 @@
     }
     else if (state === 'error'){
       on(document.getElementById('btnTryAgain'), 'click', function(){ emit('slime:retry'); });
-      on(document.getElementById('btnReenterPassword'), 'click', function(){ emit('slime:reenter-password'); });
+      var reenterBtn = document.getElementById('btnReenterPassword');
+      if (reenterBtn) on(reenterBtn, 'click', function(){ emit('slime:reenter-password'); });
       on(document.getElementById('btnBackFromError'), 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'reconnecting'){

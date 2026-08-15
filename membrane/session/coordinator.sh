@@ -326,7 +326,7 @@ LAST_ADDED_BRAIN_ID=""
 SETTINGS_NEXT_TAB=""
 
 add_brain() {
-    local name="$1" host="$2" port="$3"
+    local name="$1" host="$2" port="$3" kind="${4:-free}"
     local tmp
     # Sets the file-scope LAST_ADDED_BRAIN_ID (not `local`) so callers that
     # need the new id back (the `connect` case's bookmark-reachable fast
@@ -336,11 +336,15 @@ add_brain() {
     tmp=$(mktemp)
     # Write-through, not `mv`: /etc/slimeos is root-owned; we only own
     # brains.json itself, not rename() rights inside its parent directory.
-    jq --arg id "$LAST_ADDED_BRAIN_ID" --arg name "$name" --arg host "$host" --arg port "$port" \
-        '. += [{id:$id, name:$name, host:$host, port:$port, username:"", lastConnected:null}]' \
+    # `kind` lets connect.sh's phase=="credentials" block (see
+    # membrane/freerdp/connect.sh) decide whether to try a server-delivered
+    # RDP credential (kind='paid') before falling back to the manual
+    # prompt+local-cache flow every other brain still uses.
+    jq --arg id "$LAST_ADDED_BRAIN_ID" --arg name "$name" --arg host "$host" --arg port "$port" --arg kind "$kind" \
+        '. += [{id:$id, name:$name, host:$host, port:$port, kind:$kind, username:"", lastConnected:null}]' \
         "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
     rm -f "$tmp"
-    log "Added brain '$name' ($host:$port) id=$LAST_ADDED_BRAIN_ID"
+    log "Added brain '$name' ($host:$port, kind=$kind) id=$LAST_ADDED_BRAIN_ID"
 }
 
 remove_brain() {
@@ -722,6 +726,7 @@ while true; do
                 rhost=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .host // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 rport=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .port // empty' <<<"$REMOTE_BRAINS_JSON" | head -n1)
                 [[ -n "$rport" ]] || rport="3389"
+                rkind=$(jq -r --arg id "$rid" '.[] | select(.id == $id) | .kind // "free"' <<<"$REMOTE_BRAINS_JSON" | head -n1)
 
                 reachable=false
                 wake_cancelled=false
@@ -737,7 +742,7 @@ while true; do
 
                 if [[ "$reachable" == true ]]; then
                     log "Bookmarked brain '$rname' ($rhost:$rport) is reachable over this device's existing tunnel — adding locally, no pairing needed"
-                    add_brain "${rname:-Untitled Brain}" "$rhost" "$rport"
+                    add_brain "${rname:-Untitled Brain}" "$rhost" "$rport" "${rkind:-free}"
                     stamp_last_connected "$LAST_ADDED_BRAIN_ID"
                     do_connect "$LAST_ADDED_BRAIN_ID"
                 elif [[ "$wake_cancelled" == true ]]; then
