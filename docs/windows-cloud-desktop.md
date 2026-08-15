@@ -2,6 +2,8 @@
 
 This guide sets up a **Windows 11 Pro cloud desktop** on Azure, reachable from any Slime OS client via WireGuard. No RDP port is ever exposed to the public internet.
 
+> **Production Azure Brain (as of 2026-08-15)**: `Standard_NV6ads_A10_v5` (GPU-accelerated) in `indonesiacentral`, rg `slimeos-gpu-test`, VM name `slimeos-gputest`, WireGuard peer `10.10.0.6`. Replaces the earlier `D4s_v3` VM in `eastasia` (rg `slimeos-windows`, fully deleted). See "GPU acceleration" below — hardware NVIDIA H.264 RDP encode is confirmed working via Windows' own event log, ~2x the hourly cost of the D4s_v3 setup.
+
 ## How it works
 
 ```
@@ -26,7 +28,7 @@ The Windows VM sits on the Slime OS WireGuard network (`10.10.0.0/24`) as a peer
 # Login
 az login
 
-# Resource group (Southeast Asia — adjust region as needed)
+# Resource group
 az group create --name slimeos-windows --location southeastasia
 
 # Windows 11 Pro VM — no public inbound ports
@@ -42,6 +44,36 @@ az vm create \
 ```
 
 > **Licensing note:** Azure activates Windows automatically via KMS — the VM hourly rate includes the Windows license. No retail key required.
+
+> **`--nsg-rule None`, not `RDP`.** Using `--nsg-rule RDP` opens port 3389 to the entire public internet, not just the WireGuard tunnel — defeats the whole "no public RDP" design. Hit this for real on 2026-08-15 (a test VM created with `--nsg-rule RDP` sat with 3389 open to `*` until caught and fixed with `az network nsg rule delete`) — always verify with `az network nsg rule list` after creation, don't just trust the flag you meant to pass.
+
+### GPU acceleration (optional)
+
+For hardware-accelerated RDP video (NVIDIA H.264 encode instead of software), use a GPU SKU from the `NVadsA10_v5` family instead of a plain `D`-series size — e.g. `Standard_NV6ads_A10_v5` (6 vCPU, 1/6 A10 GPU, 4 GiB vRAM). Everything else in this guide (WireGuard setup, RDP enablement) is identical; FreeRDP clients don't need any changes, since `/gfx:AVC444 +video` is already the default flag set in every Membrane hardware profile.
+
+**Extra steps beyond a plain VM:**
+1. **GPU driver extension** (needs a reboot to actually bind — `Status: Error` in `Get-PnpDevice` right after install is normal, reboot fixes it):
+   ```bash
+   az vm extension set --resource-group <rg> --vm-name <vm> \
+     --name NvidiaGpuDriverWindows --publisher Microsoft.HpcCompute --version 1.6
+   az vm restart --resource-group <rg> --name <vm>
+   ```
+2. **Two registry keys** (no domain/GPO infrastructure needed — run via `az vm run-command invoke --command-id RunPowerShellScript`):
+   ```powershell
+   $path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+   New-ItemProperty -Path $path -Name "AVCHardwareEncodePreferred" -Value 1 -PropertyType DWord -Force
+   New-ItemProperty -Path $path -Name "AVC444ModePreferred" -Value 1 -PropertyType DWord -Force
+   New-ItemProperty -Path $path -Name "bEnumerateHWBeforeSW" -Value 1 -PropertyType DWord -Force
+   Restart-Service -Name TermService -Force
+   ```
+3. **Verify it's actually working** — don't trust `nvidia-smi`'s encoder/decoder utilization counters (they read 0% on this GRID vGPU profile even under real sustained RDP traffic, a telemetry gap not a real signal). Instead check the Windows event log during a live session:
+   ```powershell
+   Get-WinEvent -LogName Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational -MaxEvents 30 |
+     Where-Object Id -eq 170
+   ```
+   Look for `AVC hardware encoder enabled: 1, encoder name is NVIDIA H.264 Encoder MFT` — this is the real, authoritative confirmation.
+
+**Cost**: roughly 2x the equivalent D-series SKU (`NV6ads_A10_v5` Windows on-demand was $0.832/hr vs. `D4s_v3`'s $0.409/hr in `indonesiacentral`, per Azure's retail pricing API, 2026-08-15). GPU family quota defaults to 0 on subscriptions that have never run a GPU VM — request an increase via the Azure Portal (Quotas → My Quotas → Compute); the CLI/API self-service path (`az quota update`) fails instantly with `ContactSupport` for a first-ever GPU request, don't bother trying it. Quota approval may land in a different region than requested if your preferred region has no capacity for the SKU family at all (confirmed: Singapore/`southeastasia` has zero capacity for the entire `NVadsA10v5` family, regardless of quota).
 
 ---
 
@@ -115,13 +147,14 @@ Port:     3389
 
 ---
 
-## Cost reference (Southeast Asia, June 2026)
+## Cost reference
 
-| Setup | Cost |
+| Setup | Hourly (on-demand) |
 |---|---|
-| Standard_D2s_v3, Windows, pay-as-you-go 24/7 | ~$140/month |
-| Standard_D2s_v3, Windows, 1-year reserved | ~$85/month |
-| Auto stop/start (8 hrs/day only) | ~$45/month |
+| Standard_D4s_v3, Windows | $0.409/hr (`indonesiacentral`, 2026-08-15) |
+| Standard_NV6ads_A10_v5, Windows (GPU) | $0.832/hr (`indonesiacentral`, 2026-08-15) |
+
+The `slimeos-power` service (see `brain/power/`) auto-deallocates the VM after 20 minutes idle and wakes it on connect, so real-world cost is well below the 24/7 figures above for either SKU — the ~2x ratio between GPU and non-GPU holds regardless.
 
 Stop the VM when not in use to save cost:
 ```bash
