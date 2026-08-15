@@ -61,8 +61,12 @@ fi
 # removed and gets the whole command line rejected (exit 23, usage dump).
 # +video — MS-RDPEVOR video-optimized channel, see coordinator.sh's
 # SLIMEOS_FREERDP_EXTRA_FLAGS comment for why this is worth having
-# alongside /gfx.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc444 /bpp:32 /rfx /cache:codec:rfx +video"
+# alongside /gfx. No /network here — coordinator.sh's own default already
+# hit this bug once (see its SLIMEOS_FREERDP_EXTRA_FLAGS comment): it comes
+# later than connect.sh's own /network:$RDP_NETWORK on the command line, so
+# it silently overrides whatever the config file says. Profiles 000/008
+# already omit it; this one just hadn't been brought in line yet.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx /gfx:avc444 /bpp:32 /rfx /cache:codec:rfx +video"
 
 # ── Compositor renderer ───────────────────────────────────────────────────────
 # cage uses wlroots; valid WLR_RENDERER values are gles2/pixman/vulkan -- "gl"

@@ -45,6 +45,30 @@ if ip link show wg0 &>/dev/null; then
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] WireGuard wg0 is up"
 fi
 
+# ── Wait for a connected display output ───────────────────────────────────────
+# cage/wlroots doesn't just fail to draw with zero connected DRM outputs --
+# cog segfaults outright (confirmed on real hardware and in the UTM/QEMU
+# harnesses: unplug the monitor, cog crashes immediately on start). With no
+# wait, slimeos-session.service's Restart=always/RestartSec=5 turns that into
+# a tight crash-loop burning CPU indefinitely until someone plugs a screen
+# in. Unlike the WireGuard wait above, there's no "continue anyway" here --
+# a kiosk with nothing to draw to has no useful fallback, so this waits
+# indefinitely, just logging every 30s so a long legitimate wait (a box
+# sitting on a shelf pending physical install) doesn't spam session.log.
+shopt -s nullglob
+display_wait=0
+while true; do
+    for status_file in /sys/class/drm/card*-*/status; do
+        [[ "$(cat "$status_file" 2>/dev/null)" == "connected" ]] && break 2
+    done
+    if (( display_wait % 30 == 0 )); then
+        echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] No connected display output — waiting"
+    fi
+    sleep 1
+    display_wait=$((display_wait + 1))
+done
+echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Display output detected"
+
 # ── Launch cage ───────────────────────────────────────────────────────────────
 # cage: minimal Wayland compositor designed for kiosk use
 #   -d = allow drop to shell on exit (disabled in production — remove for security)

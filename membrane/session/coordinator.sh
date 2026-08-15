@@ -58,6 +58,9 @@
 #     'showSaveBrainPrompt' overlay below (same shape as crashConsent) -- if save=true, best-effort
 #     POSTs the brain to /api/device/brains-save so it shows up in this account's Slime ID dashboard
 #     and on any other signed-in device. Opt-in, never automatic -- see brains-save.ts's own comment.
+#   {"type":"recoveryPinAck"}                                handled directly here (see the outer dispatch's
+#     recoveryPinAck case) — acknowledges the one-shot 'showRecoveryPin' modal, writes
+#     $CONFIG_DIR/recovery-pin-shown and never re-appears once shown
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
 #   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
@@ -66,6 +69,10 @@
 #   {"type":"showSaveBrainPrompt","data":{"name":..,"host":..,"port":..}}  one-shot, not a setState,
 #     same shape as showCrashConsent -- shown right after a brain is added locally (addBrain case
 #     below) while signed in to Slime ID. Answered via `saveBrainConsent`, see above.
+#   {"type":"showRecoveryPin","data":{"pin":..}}             one-shot, not a setState, same shape as
+#     showCrashConsent -- shown once ever, sequenced to fire only after crash-consent is resolved
+#     (see maybe_show_recovery_pin()) so the two one-shot boot modals never race for the shared
+#     modalRoot. Answered via `recoveryPinAck`, see above.
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
@@ -258,6 +265,32 @@ source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout
 network_checked=false
 wg_checked=false
 consent_checked=false
+pin_shown=false
+
+# One-shot recovery-PIN reveal (see install.sh's "Recovery PIN" section and
+# index.html's 'showRecoveryPin' doc comment) -- sequenced to run only after
+# the crash-consent question (above) is resolved, one way or another, so the
+# two one-shot boot modals never fire in the same tick and race for the
+# shared modalRoot. Called both from the _clientConnected consent check
+# (when crash-consent was already answered on a prior boot) and from the
+# crashConsent event handler (when it's answered for the first time this
+# boot) -- see both call sites below.
+maybe_show_recovery_pin() {
+    $pin_shown && return 0
+    pin_shown=true
+    local pin_shown_state pin
+    pin_shown_state=$(cat "$CONFIG_DIR/recovery-pin-shown" 2>/dev/null || echo "unset")
+    if [[ "$pin_shown_state" == "unset" ]]; then
+        # Missing/unreadable (e.g. a device hot-patched with this feature
+        # but never reinstalled, so install.sh's chown never ran) degrades
+        # to a silent no-op, same as an empty read anywhere else in this
+        # file -- it just never shows until the device is reinstalled.
+        pin=$(cat "$CONFIG_DIR/recovery-pin" 2>/dev/null || echo "")
+        if [[ -n "$pin" ]]; then
+            jq -nc --arg pin "$pin" '{type:"showRecoveryPin", data:{pin:$pin}}'
+        fi
+    fi
+}
 
 # Cache of this account's Slime ID-bookmarked brains (see brains-list.ts),
 # refreshed explicitly at a few entry points (refresh_remote_brains, below)
@@ -581,6 +614,12 @@ while true; do
                 consent_state=$(cat "$CONFIG_DIR/crash-reporting-consent" 2>/dev/null || echo "unset")
                 if [[ "$consent_state" == "unset" ]]; then
                     jq -nc '{type:"showCrashConsent"}'
+                else
+                    # Already answered on a prior boot, so it won't fire
+                    # again this run via the crashConsent event handler --
+                    # show the recovery-PIN modal directly instead of
+                    # waiting for an answer that's never coming.
+                    maybe_show_recovery_pin
                 fi
             fi
             ;;
@@ -628,6 +667,17 @@ while true; do
             else
                 echo "declined" > "$CONFIG_DIR/crash-reporting-consent" || log "Failed to write crash-reporting-consent (declined)"
             fi
+            # Answered for the first time this boot -- the recovery-PIN
+            # modal was withheld above (still "unset" when consent was
+            # unresolved) specifically to show it now instead, once this
+            # one's resolved.
+            maybe_show_recovery_pin
+            ;;
+        recoveryPinAck)
+            # Same "pre-created seed file, always an overwrite" reasoning as
+            # crashConsent above -- a write failure just means the modal
+            # reappears next boot instead of corrupting session state.
+            echo "shown" > "$CONFIG_DIR/recovery-pin-shown" || log "Failed to write recovery-pin-shown"
             ;;
         connect)
             id=$(jq -r '.id // empty' <<<"$line")

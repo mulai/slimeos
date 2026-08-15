@@ -94,8 +94,12 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 
 # Using GFX pipeline with AVC; fallback to RFX if the server doesn't offer AVC.
 # +video — MS-RDPEVOR video-optimized channel, see coordinator.sh's
 # SLIMEOS_FREERDP_EXTRA_FLAGS comment for why this is worth having
-# alongside /gfx.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/network:lan /gfx /gfx:avc420 /bpp:32 /rfx +video"
+# alongside /gfx. No /network here — coordinator.sh's own default already
+# hit this bug once (see its SLIMEOS_FREERDP_EXTRA_FLAGS comment): it comes
+# later than connect.sh's own /network:$RDP_NETWORK on the command line, so
+# it silently overrides whatever the config file says. Profiles 000/008
+# already omit it; this one just hadn't been brought in line yet.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx /gfx:avc420 /bpp:32 /rfx +video"
 
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"

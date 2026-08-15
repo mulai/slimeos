@@ -572,13 +572,22 @@ if [[ ! -f "$CONFIG_DIR/slime-id-session" ]]; then
     : > "$CONFIG_DIR/slime-id-session"
     chmod 600 "$CONFIG_DIR/slime-id-session"
 fi
+# maybe_show_recovery_pin() (coordinator.sh) reads/writes this directly as
+# $SESSION_USER -- same "must pre-exist, unprivileged code can only
+# overwrite it, never create it" reasoning as crash-reporting-consent above.
+# "unset" until the one-shot recovery-PIN modal (see section 13 below) has
+# ever been shown.
+if [[ ! -f "$CONFIG_DIR/recovery-pin-shown" ]]; then
+    echo 'unset' > "$CONFIG_DIR/recovery-pin-shown"
+    chmod 600 "$CONFIG_DIR/recovery-pin-shown"
+fi
 # The Connect screen (brain-select.sh) runs as $SESSION_USER and owns this
 # data: it reads/rewrites brains.json and creates per-Brain .cred files in
 # brains/. Left owned by root (this script runs as root), brain-select.sh
 # dies on its first chmod/read and the session crash-loops with a black
 # screen. /etc/slimeos itself stays root-owned -- the session user gets
 # exactly these entries, nothing else.
-chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent" "$CONFIG_DIR/slime-id-session"
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent" "$CONFIG_DIR/slime-id-session" "$CONFIG_DIR/recovery-pin-shown"
 
 # pair.sh's do_pair() writes /etc/wireguard/wg0.conf directly as
 # $SESSION_USER once it fetches a config from the enrollment endpoint --
@@ -843,6 +852,12 @@ echo "${SESSION_USER}:${RECOVERY_PIN}" | chpasswd
 mkdir -p "$CONFIG_DIR"
 echo "$RECOVERY_PIN" > "$CONFIG_DIR/recovery-pin"
 chmod 600 "$CONFIG_DIR/recovery-pin"
+# Owned by $SESSION_USER (not left root:root) so coordinator.sh's
+# maybe_show_recovery_pin() -- running unprivileged as this same user -- can
+# read it for the one-shot on-screen reveal. Not a new privilege boundary:
+# this PIN IS that user's own login password, and the kiosk session already
+# runs unprivileged as $SESSION_USER.
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/recovery-pin"
 ok "Recovery PIN set (stored in $CONFIG_DIR/recovery-pin)"
 
 # ── 14. Final summary ─────────────────────────────────────────────────────────

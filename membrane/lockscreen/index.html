@@ -178,6 +178,14 @@
      bookmark on other signed-in devices -- opt-in, never automatic.
      Answered via 'slime:save-brain-consent'.
 
+   {"type":"showRecoveryPin","data":{pin}} (raw WS message, not a SlimeUI call)
+     Same one-shot-overlay shape as showCrashConsent, shown exactly once
+     ever -- see install.sh's "Recovery PIN" section and coordinator.sh's
+     maybe_show_recovery_pin(). Sequenced server-side to fire only after
+     the crash-consent question is resolved, so a brand-new device's two
+     one-shot boot modals never fire in the same tick and clobber each
+     other on the shared modalRoot. Answered via 'slime:recovery-pin-ack'.
+
  The page never calls a backend directly — it only fires DOM CustomEvents on
  `document`, payload in `event.detail`. The backend listens and responds with
  setState/setStatus calls:
@@ -226,6 +234,8 @@
    'slime:save-brain-consent' { save, name, host, port }   // answer to the one-shot showSaveBrainPrompt
      overlay (Save / Not now) -- echoes back the same name/host/port it was shown, so the backend
      doesn't need to remember any state between the prompt and the answer.
+   'slime:recovery-pin-ack' {}                             // answer to the one-shot showRecoveryPin
+     overlay (single acknowledgement button, no choice to make) -- never shown again once acked.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -346,7 +356,8 @@
   .tunnel-dot{width:6px;height:6px;border-radius:50%;display:inline-block;}
   .tunnel{display:flex;align-items:center;gap:6px;}
   .bars{display:flex;align-items:flex-end;gap:2px;height:11px;}
-  .bars span{width:3px;background:var(--text-muted);border-radius:1px;}
+  .bars span{width:3px;background:rgba(139,151,167,0.25);border-radius:1px;transition:background 0.2s;}
+  .bars span.lit{background:var(--mint);}
   .settings-gear{display:flex;align-items:center;cursor:pointer;color:var(--text-muted);outline:none;}
   .settings-gear:hover{color:#C9D3DF;}
   .settings-gear:focus-visible{outline:2px solid var(--mint);outline-offset:3px;border-radius:4px;}
@@ -504,7 +515,7 @@
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
       <span class="settings-gear" id="btnOpenSettings" tabindex="0" role="button" title="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
-      <span class="bars"><span style="height:4px;"></span><span style="height:7px;"></span><span style="height:11px;"></span></span>
+      <span class="bars" id="tunnelBars" title="Connection quality"><span id="bar1" style="height:4px;"></span><span id="bar2" style="height:7px;"></span><span id="bar3" style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
     </div>
   </div>
@@ -724,11 +735,11 @@
     var label = document.getElementById('tunnelLabel');
     var color = tunnel === 'up' ? '#00FF87' : tunnel === 'connecting' ? '#5FE6D2' : '#56616f';
     var text = tunnel === 'up' ? 'Secure tunnel' : tunnel === 'connecting' ? 'Connecting\u2026' : 'Not connected';
-    if (tunnel === 'up' && tunnelPingMs !== null) text += ' \u00b7 ' + tunnelPingMs + 'ms';
     dot.style.background = color;
     dot.style.boxShadow = '0 0 6px ' + color;
     label.style.color = color;
     label.textContent = text;
+    renderTunnelBars(tunnel);
 
     // Ping only runs while the tunnel is actually up -- no point timing a
     // request over a down/still-connecting tunnel. Purely client-side
@@ -751,6 +762,24 @@
     }
   }
 
+  // Signal-strength icon instead of a numeric "·Xms" label -- lower latency
+  // lights more bars, same idea as a phone's signal indicator. Thresholds
+  // are a reasonable default (not measured against real-world Brain RTTs);
+  // adjust here if they read wrong in practice.
+  function tunnelBarLevel(tunnel, ms){
+    if (tunnel !== 'up' || ms == null) return 0;
+    if (ms < 80) return 3;
+    if (ms < 200) return 2;
+    if (ms < 400) return 1;
+    return 0;
+  }
+  function renderTunnelBars(tunnel){
+    var level = tunnelBarLevel(tunnel, tunnelPingMs);
+    [1, 2, 3].forEach(function(n){
+      document.getElementById('bar' + n).classList.toggle('lit', n <= level);
+    });
+  }
+
   var tunnelPingMs = null;
   var tunnelPingTimer = null;
   function measureTunnelPing(){
@@ -762,6 +791,7 @@
       })
       .catch(function(){
         tunnelPingMs = null;
+        if (lastTunnel === 'up') renderTunnel('up');
       });
   }
 
@@ -1773,6 +1803,31 @@
     modalRoot.querySelector('#btnSaveBrainOk').focus();
   }
 
+  // Sent by the coordinator at most once ever (see the header comment's
+  // 'showRecoveryPin' entry) -- pure client overlay, same shape as
+  // showCrashConsentModal, but a single acknowledgement button since
+  // there's no choice to make. PIN styled the same as the Slime ID device
+  // code (slimeIdEntry) -- both are a short code the user needs to read
+  // and note down.
+  function showRecoveryPinModal(pin){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Your recovery PIN</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">Write this down and keep it safe -- it\'s the only way to log in directly to this device if Slime OS itself is ever unreachable.</p>' +
+          '<p style="margin:14px 0 0;text-align:center;font-family:var(--font-mono);font-size:26px;font-weight:700;letter-spacing:3px;color:var(--mint);">' + escapeHtml(pin) + '</p>' +
+          '<div style="display:flex;margin-top:22px;">' +
+            '<button class="btn-primary" style="flex:1;padding:11px;box-shadow:none;" id="btnRecoveryPinOk">I\'ve saved it</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnRecoveryPinOk').onclick = guarded(function(){
+      emit('slime:recovery-pin-ack');
+      closeModal();
+    });
+    modalRoot.querySelector('#btnRecoveryPinOk').focus();
+  }
+
   // Client-only, non-interactive: once confirmed, the real machine is
   // about to power off/reboot regardless of anything the backend does
   // next, so there's nothing left to route an event to.
@@ -1841,7 +1896,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2098,7 +2153,8 @@
       'slime:crash-report-toggle': 'crashReportToggle',
       'slime:slime-id-start': 'slimeIdStart',
       'slime:slime-id-logout': 'slimeIdLogout',
-      'slime:save-brain-consent': 'saveBrainConsent'
+      'slime:save-brain-consent': 'saveBrainConsent',
+      'slime:recovery-pin-ack': 'recoveryPinAck'
     };
 
     function sendEvent(type, detail){
@@ -2127,6 +2183,7 @@
         else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel });
         else if (msg.type === 'showCrashConsent') showCrashConsentModal();
         else if (msg.type === 'showSaveBrainPrompt') showSaveBrainPromptModal(msg.data);
+        else if (msg.type === 'showRecoveryPin') showRecoveryPinModal((msg.data || {}).pin);
       };
       ws.onclose = function(){
         window.SlimeUI.setState('disconnected', {});
