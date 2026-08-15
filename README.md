@@ -153,20 +153,27 @@ All guides live in [`docs/`](docs/) and stay versioned alongside the code they d
 **Minimum local specs:** x86_64, 512 MB RAM, 4 GB disk, network connection.
 
 **Validated end-to-end so far:** the automated Debian preseed install (both
-UEFI and Legacy BIOS variants), the cog/WPE kiosk lock screen driving a
+UEFI and Legacy BIOS variants, now auto-detecting the target disk instead
+of assuming `/dev/sda`), the cog/WPE kiosk lock screen driving a
 real WireGuard tunnel to a cloud Brain, RDP connect through to both a
 Linux (xRDP) and Windows Brain, mouse input, WiFi onboarding (including
 switching from Ethernet to WiFi with the Settings panel's Internet tab
-correctly naming which network is active), account-free WireGuard self-pairing (real
-pairing code → real Brain, tunnel persists across reboot), the
-on-screen power off/restart controls, peripheral redirection into a
-Windows Brain (local speakers, a USB microphone, and hot-plugged USB
-storage all working inside the remote session), and cloud Brain power
-management (an idle Azure VM deallocates itself to stop billing and
-wakes automatically on connect, ~2 minutes to desktop), and a global
-Ctrl+Alt+End (held 3s) recovery hotkey that force-disconnects a
+correctly naming which network is active, and reconnecting on its own
+across a reboot without re-prompting for a saved network), account-free
+WireGuard self-pairing (real pairing code → real Brain, tunnel persists
+across reboot), the on-screen power off/restart controls, peripheral
+redirection into a Windows Brain (local speakers, a USB microphone, and
+hot-plugged USB storage all working inside the remote session), cloud
+Brain power management (an idle Azure VM deallocates itself to stop
+billing and wakes automatically on connect, ~2 minutes to desktop), a
+global Ctrl+Alt+End (held 3s) recovery hotkey that force-disconnects a
 stuck RDP session and returns to the picker from anywhere, even with no
-window focus — all confirmed on real hardware, not just in a VM.
+window focus, cross-device Brain sign-in via Slime ID (QR/device-code
+login, a synced Brain list, and self-service pairing-code generation for
+purchased resources), a status strip showing live tunnel/Brain
+connection quality, and a one-time on-screen reveal of the device's
+recovery PIN right after install — all confirmed on real hardware, not
+just in a VM.
 
 Adding support for a new device = one new file in `membrane/hardware-profiles/`. See [Profile 001](membrane/hardware-profiles/001-gigabyte-h97.sh) as a template.
 
