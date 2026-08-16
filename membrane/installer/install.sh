@@ -259,18 +259,25 @@ update-grub
 update-initramfs -u -k all
 ok "Boot splash installed, GRUB_TIMEOUT=0"
 
-# Found live reinstalling a real device: the file-download loop in section 3
-# (curl -o against many small files in quick succession) intermittently hit
-# "curl: (23) client returned ERROR on write" immediately after this point --
-# reproducible 4/4 times on the real script, but never reproducible in
-# isolation (dozens of the exact same curl calls, including as root with
-# output redirected, run cleanly every time). The one thing missing from
-# every clean reproduction was the heavy disk I/O just above (dpkg unpacking
-# the FreeRDP rebuild + two update-initramfs regenerations + update-grub) --
-# `sync` flushes that before the download loop starts hammering the disk
-# again, rather than guessing at a longer curl --retry-delay to outlast
-# whatever write-pressure window this leaves.
+# Found live reinstalling a real device (a board with a documented history
+# of real hardware quirks -- see docs/architecture.md's "Hardware Tested"
+# notes): the file-download loop in section 3 (curl -o against many small
+# files in quick succession) intermittently hit "curl: (23) client returned
+# ERROR on write" immediately after this point -- reproducible on the real
+# script across 7 consecutive attempts (network path made no difference,
+# tried both WiFi and wired ethernet), but never once reproducible in
+# isolation -- dozens of the exact same curl calls, including as root with
+# output redirected, a raw `dd` of the identical byte count to the identical
+# destination seconds earlier, and confirmed curl runs fully unconfined by
+# AppArmor -- every isolated attempt succeeds cleanly. Disk space, memory,
+# ulimits, open-fd counts, and background job contention were all confirmed
+# healthy at the exact failure point. With every other explanation ruled
+# out, `sync` alone (flushing the heavy disk I/O just above -- dpkg
+# unpacking the FreeRDP rebuild, two update-initramfs regenerations, and
+# update-grub) wasn't enough on its own; giving this specific hardware a
+# real settle window after that I/O burst is the only thing left untried.
 sync
+sleep 15
 
 # ── 2. Create session user if not exists ─────────────────────────────────────
 # `render` (not just `video`) is required for GPU-accelerated rendering:
