@@ -102,7 +102,12 @@ if [[ -f "$STAGING_DIR/version" ]]; then
     install -m 0644 -o root -g root "$STAGING_DIR/version" "$CONFIG_DIR/version"
 fi
 
-rm -rf "$STAGING_DIR"
+# Clear CONTENTS only, never rm -rf the directory itself: it's slime:slime-
+# owned (set once by install.sh), and this helper running as root could
+# recreate the directory but never restore that ownership correctly for the
+# NEXT unprivileged do_apply_update() run -- same reasoning as update.sh's
+# own staging-dir cleanup.
+rm -rf "${STAGING_DIR:?}"/*
 
 echo "[apply-update] rebooting to complete the update"
 systemctl reboot

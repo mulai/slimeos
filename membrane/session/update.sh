@@ -98,9 +98,15 @@ do_apply_update() {
         return 0
     fi
 
-    rm -rf "$UPDATE_STAGING_DIR"
+    # Clear CONTENTS only, never rm -rf the directory itself: $CONFIG_DIR is
+    # root-owned, so if this ever removed the directory, the unprivileged
+    # slime user could never mkdir it back (found live on the UTM VM --
+    # install.sh's own chown only ever runs once, at install time). mkdir -p
+    # + chmod stay as a harmless no-op in the normal case and a defensive
+    # self-heal if the directory is somehow already gone.
     mkdir -p "$UPDATE_STAGING_DIR"
     chmod 700 "$UPDATE_STAGING_DIR"
+    rm -rf "${UPDATE_STAGING_DIR:?}"/* 2>/dev/null || true
     # Read by apply-update-helper.sh as the trusted new version marker --
     # already confirmed equal to $remote_version above, and this file is
     # never executed, only cat'd into $CONFIG_DIR/version, so no checksum
@@ -144,7 +150,7 @@ do_apply_update() {
 
     if ! $staged_ok; then
         log "Apply update: aborting, leaving the current install untouched (will retry on the next check)"
-        rm -rf "$UPDATE_STAGING_DIR"
+        rm -rf "${UPDATE_STAGING_DIR:?}"/* 2>/dev/null || true
         emit_update_failed "Couldn't verify the update. It will be offered again later."
         return 0
     fi
