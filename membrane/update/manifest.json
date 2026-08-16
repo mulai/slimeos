@@ -1,9 +1,9 @@
 {
-  "version": "0.2.1",
+  "version": "0.2.2",
   "files": [
     {
       "src": "session/coordinator.sh",
-      "sha256": "02c68be7f0dd4fe6aab787ac0c3b4e2ee86befeee62dbff3552985469c88f6aa"
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     {
       "src": "session/network-setup.sh",
