@@ -61,10 +61,32 @@
 #   {"type":"recoveryPinAck"}                                handled directly here (see the outer dispatch's
 #     recoveryPinAck case) — acknowledges the one-shot 'showRecoveryPin' modal, writes
 #     $CONFIG_DIR/recovery-pin-shown and never re-appears once shown
+#   {"type":"_updateTick"}                                   bridge-synthesized (see main.go's update
+#     ticker goroutine), roughly every 6h plus once ~2 minutes after bridge startup — triggers
+#     do_update_check() (update.sh): fetches membrane/update/manifest.json off `main`, and if its
+#     version is newer than $CONFIG_DIR/version, sets update_available_version and calls
+#     send_status() so the status strip's update icon can pick it up immediately (see setStatus's
+#     `update` field below) rather than waiting for the next incidental transition. Silently dropped
+#     like any other unrecognized event whenever an inner do_* owns read_event() — harmless, the
+#     next tick (or the next _clientConnected resync) tries again.
+#   {"type":"applyUpdate"}                                   handled directly here — fired by the
+#     status strip's update icon (shown client-side only on the idle empty/picker screens, see
+#     index.html) after the user confirms in its modal. Calls do_apply_update() (update.sh):
+#     re-fetches the manifest fresh (a TOCTOU guard against `main` moving since the last
+#     _updateTick), downloads + sha256-verifies every listed file into $CONFIG_DIR/update-staging,
+#     then hands off to the privileged /opt/slimeos/apply-update-helper.sh (via sudo -n, zero args,
+#     see its own header) which copies the verified files into place and reboots. Emits a one-shot
+#     'updateApplying' right before that handoff, or 'updateFailed' if verification/handoff fails at
+#     any point — see both below. Never destructive on failure: the current install is always left
+#     untouched unless every file was verified.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
 #   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
-#   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting"}
+#   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null}
+#     `update`, when non-null, is the newer version string from the last successful
+#     do_update_check() (update.sh) — sent on every screen, but index.html only shows the status
+#     strip's update icon while idle (empty/picker), so tapping it can never race a blocking
+#     do_* event loop that doesn't recognize 'applyUpdate' (see that case's own comment).
 #   {"type":"showCrashConsent"}                            one-shot, not a setState — see index.html's doc comment
 #   {"type":"showSaveBrainPrompt","data":{"name":..,"host":..,"port":..}}  one-shot, not a setState,
 #     same shape as showCrashConsent -- shown right after a brain is added locally (addBrain case
@@ -73,6 +95,12 @@
 #     showCrashConsent -- shown once ever, sequenced to fire only after crash-consent is resolved
 #     (see maybe_show_recovery_pin()) so the two one-shot boot modals never race for the shared
 #     modalRoot. Answered via `recoveryPinAck`, see above.
+#   {"type":"updateApplying"}                                one-shot, not a setState — see
+#     do_apply_update()'s doc comment above. Terminal from the frontend's perspective, same as a
+#     real power action: the device is about to reboot, nothing is left to route an event to.
+#   {"type":"updateFailed","data":{"message":..}}             one-shot, not a setState — sent
+#     instead of 'updateApplying' if do_apply_update() can't verify or apply the staged update.
+#     Never destructive: the current install is always left untouched on this path.
 #
 # `data` shapes are exactly what membrane/lockscreen/index.html's header
 # comment documents. `addBrain` state is rendered entirely client-side (the
@@ -105,13 +133,14 @@ FREERDP_LOG_FILE="/var/log/slimeos/connect.log"
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [coordinator] $*" >&2; }
 
 emit_state()  { jq -nc --arg state "$1" --argjson data "$2" '{type:"setState", state:$state, data:$data}'; }
-emit_status() { jq -nc --arg clock "$1" --arg tunnel "$2" '{type:"setStatus", clock:$clock, tunnel:$tunnel}'; }
+emit_status() { jq -nc --arg clock "$1" --arg tunnel "$2" --arg update "$3" '{type:"setStatus", clock:$clock, tunnel:$tunnel, update:(if $update == "" then null else $update end)}'; }
 
-# Sends the current real clock + tunnel state. The page auto-advances the
-# clock locally every 30s after that (see index.html), so one correct value
-# per client connection/resync is enough — without this, the status strip
-# never leaves the hardcoded 00:00 default the page paints before its first
-# backend message ever arrives.
+# Sends the current real clock + tunnel + pending-update state. The page
+# auto-advances the clock locally every 30s after that (see index.html), so
+# one correct value per client connection/resync is enough — without this,
+# the status strip never leaves the hardcoded 00:00 default the page paints
+# before its first backend message ever arrives. `update_available_version`
+# (see update.sh) is whatever do_update_check() last found, empty if none.
 send_status() {
     local clock tunnel
     clock=$(date +"%H:%M")
@@ -120,7 +149,7 @@ send_status() {
     else
         tunnel="down"
     fi
-    emit_status "$clock" "$tunnel"
+    emit_status "$clock" "$tunnel" "$update_available_version"
 }
 
 # Used to gate the automatic network-setup screen (see network_checked
@@ -256,6 +285,8 @@ source "$INSTALL_DIR/timezone.sh" # defines do_timezone()
 source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
 # shellcheck source=slime-id.sh
 source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout()
+# shellcheck source=update.sh
+source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -266,6 +297,12 @@ network_checked=false
 wg_checked=false
 consent_checked=false
 pin_shown=false
+
+# Set by do_update_check() (update.sh), read by send_status() — empty until
+# a real update is found, cleared again once main catches back down to (or
+# below) the installed version. See the header comment's '_updateTick' and
+# 'setStatus' entries.
+update_available_version=""
 
 # One-shot recovery-PIN reveal (see install.sh's "Recovery PIN" section and
 # index.html's 'showRecoveryPin' doc comment) -- sequenced to run only after
@@ -806,6 +843,12 @@ while true; do
             done
             send_status
             show_picker_or_empty
+            ;;
+        _updateTick)
+            do_update_check
+            ;;
+        applyUpdate)
+            do_apply_update
             ;;
         powerShutdown|powerRestart)
             # `|| log ...` inside the helper, not a bare call: a failure here

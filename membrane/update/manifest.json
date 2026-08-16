@@ -1,0 +1,67 @@
+{
+  "version": "0.2.0",
+  "files": [
+    {
+      "src": "session/coordinator.sh",
+      "sha256": "02c68be7f0dd4fe6aab787ac0c3b4e2ee86befeee62dbff3552985469c88f6aa"
+    },
+    {
+      "src": "session/network-setup.sh",
+      "sha256": "06639753d7d6fa3e394b71427379ff566a8d18731940d0c260dffb76ab1f0293"
+    },
+    {
+      "src": "session/pair.sh",
+      "sha256": "23a45b95e09dc4ba108ca1a17bacf65552c2963656a71fb209ef486e6639c04d"
+    },
+    {
+      "src": "session/support.sh",
+      "sha256": "dbe2bf019f7b4ca0320a4320ddcf9fe2eeb4829f6ab0072d402b4c3c2c9e3fdf"
+    },
+    {
+      "src": "session/timezone.sh",
+      "sha256": "6c97a1fdd6d912a0f4a0fc03246f92f4a360fff05271fdec839333ca02aca626"
+    },
+    {
+      "src": "session/remote-support-toggle.sh",
+      "sha256": "f58d5e69886f3309047c659f18adef039c6d2b6420f1d793b5cb9cb952736adc"
+    },
+    {
+      "src": "session/crash-reporting.sh",
+      "sha256": "8f0bdb2b0c1261cc19b5c6bef772f017c8ec6600c2a723d5ef150ac5750b7444"
+    },
+    {
+      "src": "session/slime-id.sh",
+      "sha256": "e0c251a87d9ea7948ce24c2ddab7d478efde91921e86aa2cdc0aaca05cba6942"
+    },
+    {
+      "src": "freerdp/connect.sh",
+      "sha256": "db142895a670e384c12047f97381a8d9baf7c204a2d38e99a9e7bd3eb5bea917"
+    },
+    {
+      "src": "lockscreen/index.html",
+      "sha256": "8d1038fdb81d5cda4d2d977227d6af22c616f2421a8cc08d9a0186b83dcb9c00"
+    },
+    {
+      "src": "lockscreen/fonts/space-grotesk.woff2",
+      "sha256": "a0d054c4af557de20afd6ca59f47ab353bcaec49c63ff04b6c9d39d0f8910557"
+    },
+    {
+      "src": "lockscreen/fonts/plus-jakarta-sans.woff2",
+      "sha256": "cd8db90cd950e26bc8761f65d323588bd5cd112d326d6d322bc7c8ea86771215"
+    },
+    {
+      "src": "lockscreen/fonts/jetbrains-mono.woff2",
+      "sha256": "2c32b9b3ee358c119e210f6f5195f9bd34894d78a785ff2e95d60e718e400af4"
+    }
+  ],
+  "bridge": {
+    "amd64": {
+      "src": "bridge/bin/slimeos-bridge-linux-amd64",
+      "sha256": "6f21c54cc05f4d35a77925ccdb27ed4f44d087972b394d69f7720d6835cf0edc"
+    },
+    "arm64": {
+      "src": "bridge/bin/slimeos-bridge-linux-arm64",
+      "sha256": "67c18aec55852d9693f84b36c8a365d628dcc13657c16669efb5487f03979bad"
+    }
+  }
+}

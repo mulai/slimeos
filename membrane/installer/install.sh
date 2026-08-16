@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.1.0"
+SLIMEOS_VERSION="0.2.0"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -38,7 +38,7 @@ echo ""
 echo -e "${BOLD}${CYAN}"
 echo "  ┌─────────────────────────────────────────┐"
 echo "  │   Slime OS Membrane Installer v${SLIMEOS_VERSION}   │"
-echo "  │   The Infinite Life Desktop OS          │"
+echo "  │   Open Source, Cloud-First OS           │"
 echo "  └─────────────────────────────────────────┘"
 echo -e "${RESET}"
 
@@ -340,7 +340,18 @@ curl -fsSL "$REPO_BASE/membrane/session/crash-reporting.sh" \
      -o "$INSTALL_DIR/crash-reporting.sh"
 curl -fsSL "$REPO_BASE/membrane/session/slime-id.sh" \
      -o "$INSTALL_DIR/slime-id.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh"
+curl -fsSL "$REPO_BASE/membrane/session/update.sh" \
+     -o "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/update.sh"
+
+# Privileged apply-update helper (see membrane/update/apply-update-helper.sh's
+# own header) -- deliberately NOT chmod +x'd/chowned to $SESSION_USER the way
+# every script above is: it must stay root:root, invokable only via the
+# sudoers grant below (section 3g), never directly executable by the
+# unprivileged session user.
+curl -fsSL "$REPO_BASE/membrane/update/apply-update-helper.sh" \
+     -o "$INSTALL_DIR/apply-update-helper.sh"
+chmod 700 "$INSTALL_DIR/apply-update-helper.sh"
 
 # Download the kiosk lock screen bundle (self-contained HTML/CSS/JS + local
 # fonts -- zero other network requests at runtime, see the file's own header
@@ -507,12 +518,45 @@ ok "Timezone setting enabled for the kiosk UI"
 # ── 3h. On-device version record ──────────────────────────────────────────────
 # Lets a device report what it's running without SSHing in and checking git
 # log -- surfaced read-only in the Settings panel's Support tab (see
-# support.sh's do_support()). Reinstall remains the only supported upgrade
-# path (see README) -- this file is purely informational, not an update
-# mechanism.
+# support.sh's do_support()). Written once here; from this point on it's
+# also the value the in-kiosk update mechanism (section 3i, update.sh)
+# compares against and advances -- see apply-update-helper.sh's own header
+# for why THIS write (at install time) is the only one not gated behind a
+# checksum-verified download.
 echo "$SLIMEOS_VERSION" > "$CONFIG_DIR/version"
 chmod 644 "$CONFIG_DIR/version"
 ok "Version recorded ($SLIMEOS_VERSION)"
+
+# ── 3i. Sudoers + staging dirs: in-kiosk update mechanism ─────────────────────
+# update.sh's do_apply_update() calls `sudo -n apply-update-helper.sh` (zero
+# args) as $SESSION_USER once a staged update is fully downloaded and
+# sha256-verified -- same "narrowly scoped to exactly one script, no shell,
+# no arbitrary root commands" posture as the Remote Support sudoers grant
+# above (section 3f), not a D-Bus action polkit could authorize instead.
+#
+# v1 explicitly cannot update itself: this grant, apply-update-helper.sh, and
+# these two directories only exist on a device that's run THIS install.sh —
+# a device already in the field before this feature shipped needs a manual
+# reinstall to pick it up, there's no "next tick" that fixes that gap (see
+# update.sh's own header comment).
+cat > /etc/sudoers.d/51-slimeos-update <<SUDOERS
+${SESSION_USER} ALL=(root) NOPASSWD: ${INSTALL_DIR}/apply-update-helper.sh
+SUDOERS
+chmod 440 /etc/sudoers.d/51-slimeos-update
+visudo -cf /etc/sudoers.d/51-slimeos-update || die "generated sudoers file failed validation"
+ok "Update-apply sudo grant installed"
+
+# update-staging: do_apply_update() downloads+verifies here as $SESSION_USER
+# before handing off to the root helper. update-previous: the helper's own
+# one-generation rollback snapshot (manual rescue-mode restore target only,
+# no automatic rollback) -- root-owned, since only the helper itself ever
+# writes there.
+mkdir -p "$CONFIG_DIR/update-staging"
+chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/update-staging"
+chmod 700 "$CONFIG_DIR/update-staging"
+mkdir -p "$CONFIG_DIR/update-previous"
+chmod 700 "$CONFIG_DIR/update-previous"
+ok "Update staging directories created"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."
