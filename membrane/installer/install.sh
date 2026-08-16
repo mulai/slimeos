@@ -259,6 +259,19 @@ update-grub
 update-initramfs -u -k all
 ok "Boot splash installed, GRUB_TIMEOUT=0"
 
+# Found live reinstalling a real device: the file-download loop in section 3
+# (curl -o against many small files in quick succession) intermittently hit
+# "curl: (23) client returned ERROR on write" immediately after this point --
+# reproducible 4/4 times on the real script, but never reproducible in
+# isolation (dozens of the exact same curl calls, including as root with
+# output redirected, run cleanly every time). The one thing missing from
+# every clean reproduction was the heavy disk I/O just above (dpkg unpacking
+# the FreeRDP rebuild + two update-initramfs regenerations + update-grub) --
+# `sync` flushes that before the download loop starts hammering the disk
+# again, rather than guessing at a longer curl --retry-delay to outlast
+# whatever write-pressure window this leaves.
+sync
+
 # ── 2. Create session user if not exists ─────────────────────────────────────
 # `render` (not just `video`) is required for GPU-accelerated rendering:
 # /dev/dri/renderD128 is group-owned by `render`, separately from card0's
