@@ -1,9 +1,10 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "changelog": "0.3.0\n- Added a Changelog tab to Settings, showing what changed in the version currently installed on this device.\n- install.sh now retries transient download errors and settles the disk after the FreeRDP rebuild + initramfs regeneration before downloading files, fixing intermittent install failures seen on real hardware.",
   "files": [
     {
       "src": "session/coordinator.sh",
-      "sha256": "02c68be7f0dd4fe6aab787ac0c3b4e2ee86befeee62dbff3552985469c88f6aa"
+      "sha256": "f65322b5f9c87bc2f4980103de1509e8eb5d8aac396cb800dd2d99a9149b2043"
     },
     {
       "src": "session/network-setup.sh",
@@ -34,12 +35,16 @@
       "sha256": "e0c251a87d9ea7948ce24c2ddab7d478efde91921e86aa2cdc0aaca05cba6942"
     },
     {
+      "src": "session/changelog.sh",
+      "sha256": "3fd020cd052b800c7ee8350bc4d06111959d3484570ca2b3f7f381f80b690788"
+    },
+    {
       "src": "freerdp/connect.sh",
       "sha256": "db142895a670e384c12047f97381a8d9baf7c204a2d38e99a9e7bd3eb5bea917"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "8d1038fdb81d5cda4d2d977227d6af22c616f2421a8cc08d9a0186b83dcb9c00"
+      "sha256": "4b9b2e10e6c625e4cfee0636a18781a1f160ba5926ac30514c0ca8d4445f42ef"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",

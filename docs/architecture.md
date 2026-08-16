@@ -316,6 +316,19 @@ shipped can only pick this feature up via a manual reinstall.
 since a profile change additionally needs `detect.sh` re-run to take
 effect.
 
+The manifest also carries a `changelog` field — free text describing what
+changed in that release. `install.sh` seeds it into `$CONFIG_DIR/changelog`
+at install time (same source as `$CONFIG_DIR/version`, one `curl`+`jq`
+pull from the manifest, degrading to a generic fallback string on any
+failure so it can never block an install), and `apply-update-helper.sh`
+advances it alongside `$CONFIG_DIR/version` whenever a real update applies.
+The Settings panel's Changelog tab (`membrane/session/changelog.sh`,
+`do_changelog()`, same boot-mode-less shape as `support.sh`/`timezone.sh`)
+is a purely read-only display of those two local files — it shows what's
+*installed*, not necessarily whatever's newest on `main`, and unlike
+`update.sh`/`apply-update-helper.sh` it's an ordinary bundle file, fully
+covered by the auto-update manifest itself.
+
 ### Key files
 | File | Purpose |
 |---|---|
@@ -331,7 +344,8 @@ effect.
 | `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
 | `membrane/session/pair.sh` | WireGuard self-pairing function library (`do_pair`), sourced by coordinator.sh |
 | `membrane/session/update.sh` | In-kiosk update check + apply function library (`do_update_check`, `do_apply_update`), sourced by coordinator.sh |
-| `membrane/update/manifest.json` | Versioned bundle manifest (one version number, per-file sha256) published on `main`, fetched by update.sh |
+| `membrane/session/changelog.sh` | Settings panel's Changelog tab (`do_changelog`), sourced by coordinator.sh — read-only display of `$CONFIG_DIR/version`/`$CONFIG_DIR/changelog` |
+| `membrane/update/manifest.json` | Versioned bundle manifest (one version number, per-file sha256, plus a free-text `changelog` field) published on `main`, fetched by update.sh |
 | `membrane/update/apply-update-helper.sh` | Privileged, zero-argument root helper (deployed to `/opt/slimeos/apply-update-helper.sh`) that copies a verified staged update into place and reboots — invoked via a scoped sudoers grant, never directly |
 | `slimeos-automount.service` (written by install.sh) | Runs `udiskie` headlessly so USB drives auto-mount under `/media/<user>` for connect.sh's `/drive` redirect |
 

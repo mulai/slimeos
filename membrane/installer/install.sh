@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.2.0"
+SLIMEOS_VERSION="0.3.0"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -360,9 +360,15 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/crash-reporting.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/slime-id.sh" \
      -o "$INSTALL_DIR/slime-id.sh"
+# changelog.sh is an ordinary bundle file (part of the auto-update manifest,
+# same as timezone.sh/support.sh) -- unlike update.sh/apply-update-helper.sh
+# just below, which are deliberately excluded from that manifest (see
+# update.sh's own header comment on why v1 can't update itself).
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/changelog.sh" \
+     -o "$INSTALL_DIR/changelog.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/update.sh"
 
 # Privileged apply-update helper (see membrane/update/apply-update-helper.sh's
 # own header) -- deliberately NOT chmod +x'd/chowned to $SESSION_USER the way
@@ -546,6 +552,19 @@ ok "Timezone setting enabled for the kiosk UI"
 echo "$SLIMEOS_VERSION" > "$CONFIG_DIR/version"
 chmod 644 "$CONFIG_DIR/version"
 ok "Version recorded ($SLIMEOS_VERSION)"
+
+# Seeds the Settings panel's Changelog tab (changelog.sh) for a fresh
+# install the same way apply-update-helper.sh seeds it for an in-kiosk
+# update -- pulled from the same manifest.json the update mechanism itself
+# reads, so there's one source of truth for "what changed in this version,"
+# not a second copy baked into this script. Never blocks the install: any
+# fetch/parse failure just falls back to a generic string, since this is
+# purely informational.
+CHANGELOG_TEXT=$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -m 15 \
+    "$REPO_BASE/membrane/update/manifest.json" 2>/dev/null | jq -r '.changelog // empty' 2>/dev/null || true)
+echo "${CHANGELOG_TEXT:-Fresh install.}" > "$CONFIG_DIR/changelog"
+chmod 644 "$CONFIG_DIR/changelog"
+ok "Changelog recorded"
 
 # ── 3i. Sudoers + staging dirs: in-kiosk update mechanism ─────────────────────
 # update.sh's do_apply_update() calls `sudo -n apply-update-helper.sh` (zero

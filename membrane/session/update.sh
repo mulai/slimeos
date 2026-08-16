@@ -112,6 +112,11 @@ do_apply_update() {
     # never executed, only cat'd into $CONFIG_DIR/version, so no checksum
     # is needed for it the way every other staged file gets one.
     echo "$remote_version" > "$UPDATE_STAGING_DIR/version"
+    # Same reasoning as version above -- read by changelog.sh's do_changelog()
+    # for the Settings panel's Changelog tab, never executed. Empty manifest
+    # field degrades to an empty file, which changelog.sh's own read falls
+    # back from gracefully (see its header comment).
+    jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null > "$UPDATE_STAGING_DIR/changelog" || true
 
     local staged_ok=true src sha256 base dest
     while IFS=$'\t' read -r src sha256; do

@@ -81,7 +81,7 @@
 #     untouched unless every file was verified.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null}
 #     `update`, when non-null, is the newer version string from the last successful
 #     do_update_check() (update.sh) — sent on every screen, but index.html only shows the status
@@ -107,7 +107,8 @@
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
-# supportSettings/crashReportSettings/slimeIdConnecting/slimeIdEntry/slimeIdError.
+# supportSettings/crashReportSettings/timezoneSettings/changelogSettings/
+# slimeIdConnecting/slimeIdEntry/slimeIdError.
 # `empty`/`picker` both additionally carry `signedInEmail` (null unless
 # do_slime_id_login() has ever successfully signed this device in).
 # `picker`'s brain entries additionally carry `remote` (true for a Slime
@@ -287,6 +288,8 @@ source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_han
 source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout()
 # shellcheck source=update.sh
 source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
+# shellcheck source=changelog.sh
+source "$INSTALL_DIR/changelog.sh" # defines do_changelog()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -837,6 +840,7 @@ while true; do
                     support)  do_support settings ;;
                     privacy)  do_crash_reporting settings ;;
                     timezone) do_timezone settings ;;
+                    changelog) do_changelog settings ;;
                 esac
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"

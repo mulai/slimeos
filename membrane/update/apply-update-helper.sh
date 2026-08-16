@@ -59,6 +59,7 @@ declare -A DEST_FOR=(
     [remote-support-toggle.sh]="$INSTALL_DIR/remote-support-toggle.sh"
     [crash-reporting.sh]="$INSTALL_DIR/crash-reporting.sh"
     [slime-id.sh]="$INSTALL_DIR/slime-id.sh"
+    [changelog.sh]="$INSTALL_DIR/changelog.sh"
     [index.html]="$INSTALL_DIR/lockscreen/index.html"
     [space-grotesk.woff2]="$INSTALL_DIR/lockscreen/fonts/space-grotesk.woff2"
     [plus-jakarta-sans.woff2]="$INSTALL_DIR/lockscreen/fonts/plus-jakarta-sans.woff2"
@@ -92,6 +93,13 @@ done
 if ! $applied_any; then
     echo "[apply-update] nothing staged, aborting without touching version or rebooting" >&2
     exit 1
+fi
+
+# Purely informational (see changelog.sh's Settings tab) -- doesn't gate
+# anything the way version below does, but written here, before version,
+# so version stays the true "did this fully land" marker either way.
+if [[ -f "$STAGING_DIR/changelog" ]]; then
+    install -m 0644 -o root -g root "$STAGING_DIR/changelog" "$CONFIG_DIR/changelog"
 fi
 
 # Written last, only after every file above has landed -- a helper that

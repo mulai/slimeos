@@ -15,7 +15,8 @@
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
-            'crashReportSettings' | 'timezoneSettings' | 'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
+            'crashReportSettings' | 'timezoneSettings' | 'changelogSettings' |
+            'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
        empty:        { signedInEmail: string | null }
        picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null }
@@ -125,6 +126,17 @@
                        // there just aren't enough entries (~400) to need one.
                        // No `boot` mode, same as supportSettings/
                        // crashReportSettings.
+       changelogSettings: { mode: 'settings', version: string, changelog: string }
+                       // Settings panel's Changelog tab (see
+                       // membrane/session/changelog.sh). Purely read-only,
+                       // no interactive elements. `version`/`changelog` are
+                       // the CURRENTLY INSTALLED release's own values --
+                       // $CONFIG_DIR/version and $CONFIG_DIR/changelog,
+                       // written once by install.sh and advanced together
+                       // by apply-update-helper.sh whenever a real update
+                       // applies (see update.sh's do_apply_update()) -- not
+                       // necessarily whatever's newest on `main`. No `boot`
+                       // mode, same as supportSettings/timezoneSettings.
        slimeIdConnecting: { stage }
                        // "Sign in with Slime ID" (see
                        // membrane/session/slime-id.sh) -- reached directly
@@ -225,7 +237,7 @@
    'slime:cancel-connect'  {}
 
    'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
-   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'|'timezone'
+   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'|'timezone'|'changelog'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -858,14 +870,15 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
   var SETTINGS_TABS = [
     { id: 'internet', label: 'Internet' },
     { id: 'pair', label: 'Pairing' },
     { id: 'support', label: 'Support' },
     { id: 'timezone', label: 'Timezone' },
-    { id: 'privacy', label: 'Privacy' }
+    { id: 'privacy', label: 'Privacy' },
+    { id: 'changelog', label: 'Changelog' }
   ];
 
   function settingsTabForState(state){
@@ -873,6 +886,7 @@
     if (state === 'supportSettings') return 'support';
     if (state === 'crashReportSettings') return 'privacy';
     if (state === 'timezoneSettings') return 'timezone';
+    if (state === 'changelogSettings') return 'changelog';
     return 'internet';
   }
 
@@ -953,6 +967,7 @@
     else if (state === 'supportSettings') html = renderSupportSettings(data);
     else if (state === 'timezoneSettings') html = renderTimezoneSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
+    else if (state === 'changelogSettings') html = renderChangelogSettings(data);
     else if (state === 'slimeIdConnecting') html = renderSlimeIdConnecting(data);
     else if (state === 'slimeIdEntry') html = renderSlimeIdEntry(data);
     else if (state === 'slimeIdError') html = renderSlimeIdError(data);
@@ -1382,6 +1397,26 @@
             '<input type="checkbox" id="fieldCrashReportToggle" data-autofocus' + (enabled ? ' checked' : '') + '>' +
             '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Anonymous error reporting is ' + (enabled ? 'on' : 'off') + '</span>' +
           '</label>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // Read-only, no fields/toggles -- shows what changed in the version
+  // CURRENTLY INSTALLED (see changelog.sh's own header comment on why this
+  // can differ from whatever's newest on `main`). white-space:pre-wrap
+  // preserves the manifest's own line breaks without needing any markdown
+  // rendering.
+  function renderChangelogSettings(data){
+    return (
+      '<div class="screen" data-screen="changelogSettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Changelog</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">What changed in the version currently installed on this device.</p>' +
+          '<div class="support-connection">' +
+            '<div class="field-label" style="margin-bottom:12px;">Slime OS v' + escapeHtml(data.version || 'unknown') + '</div>' +
+            '<p style="margin:0;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;">' + escapeHtml(data.changelog || 'No changelog recorded for this install.') + '</p>' +
+          '</div>' +
         '</div>' +
       '</div>'
     );
@@ -2076,6 +2111,8 @@
         window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
       } else if (tab === 'privacy'){
         window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
+      } else if (tab === 'changelog'){
+        window.SlimeUI.setState('changelogSettings', { mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.' });
       }
     });
 
