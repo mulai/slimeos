@@ -64,6 +64,7 @@ func main() {
 	b := &bridge{coordinatorPath: *coordinatorPath, logPath: *logPath}
 	go b.runCoordinatorLoop()
 	go startHotkeyWatcher(b)
+	go startUpdateTicker(b)
 
 	log.Printf("slimeos-bridge listening on %s (coordinator=%s)", *listen, *coordinatorPath)
 	if err := http.ListenAndServe(*listen, http.HandlerFunc(b.handleWS)); err != nil {
@@ -278,6 +279,25 @@ func (b *bridge) runCoordinatorOnce() {
 	b.stdinMu.Lock()
 	b.stdin = nil
 	b.stdinMu.Unlock()
+}
+
+// ── Update-check ticker ──────────────────────────────────────────────────────
+//
+// Single global ticker, started once here regardless of how many times the
+// coordinator subprocess itself respawns (see runCoordinatorLoop) -- a
+// per-spawn timer would need its own cancellation on every respawn or leak
+// one goroutine per crash-loop iteration. writeToCoordinator already no-ops
+// safely whenever no coordinator is currently attached (b.stdin == nil, see
+// above), so this can fire on a fixed schedule with no coordination with
+// the supervisor loop at all. See coordinator.sh's header comment for what
+// "_updateTick" does on the receiving end (update.sh's do_update_check()).
+func startUpdateTicker(b *bridge) {
+	time.Sleep(2 * time.Minute) // let a fresh boot settle before the first check
+	b.writeToCoordinator(`{"type":"_updateTick"}`)
+	ticker := time.NewTicker(6 * time.Hour)
+	for range ticker.C {
+		b.writeToCoordinator(`{"type":"_updateTick"}`)
+	}
 }
 
 // ── Global force-disconnect hotkey (Ctrl+Alt+End, held 3s) ──────────────────

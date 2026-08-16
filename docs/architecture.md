@@ -264,6 +264,58 @@ actions normally rely on an "active" logind session, which this kiosk's
 second polkit rule (`org.freedesktop.login1.power-off`/`.reboot`,
 scoped to the `$SESSION_USER` directly) authorizing it.
 
+### In-kiosk updates
+`slimeos-bridge` runs a global ticker goroutine (`main.go`) that injects a
+synthetic `{"type":"_updateTick"}` line into `coordinator.sh`'s stdin ~2
+minutes after every bridge startup, then every 6 hours — the same
+mechanism it already uses for `_clientConnected`/`_clientDisconnected`/
+`forceBack`. `coordinator.sh` sources `membrane/session/update.sh`, which
+fetches a versioned manifest (`membrane/update/manifest.json`, published on
+`main`, one version number for the whole bundle plus a per-file sha256) and
+compares it against `$CONFIG_DIR/version`; a newer version is surfaced via
+the existing `setStatus` channel's new `update` field, which the status
+strip renders as a third icon — but **only while idle** (`empty`/`picker`).
+That client-side gating exists because `coordinator.sh`'s inner `do_*` event
+loops (Settings tabs, an active connect attempt, etc.) don't recognize
+`applyUpdate` and would silently drop it, the same failure class
+`powerShutdown`/`crashReport` were explicitly patched to reach from every
+screen — restricting the icon's visibility to states where the outer
+dispatch loop is guaranteed to be listening sidesteps that without touching
+every `do_*` file.
+
+Tapping the icon and confirming re-downloads the manifest (a TOCTOU guard
+against `main` moving since the last tick), downloads every listed file
+plus the arch-matched `slimeos-bridge` binary into a `slime`-owned staging
+directory, and sha256-verifies each one — any failure aborts cleanly,
+leaves the current install untouched, and reports back via a one-shot
+`updateFailed` message. Once every file verifies, `coordinator.sh` hands
+off to `/opt/slimeos/apply-update-helper.sh` via a zero-argument,
+exact-path `sudo -n` grant (`/etc/sudoers.d/51-slimeos-update`, same
+least-privilege pattern as `remote-support-toggle.sh`). That root helper
+does no networking or manifest parsing at all — it copies the already
+-verified staged files into place using its own hardcoded filename →
+destination table (never a `dest` field out of the manifest, so a bad
+manifest can corrupt what's installed but never *where* it lands),
+snapshots the previous bundle to `update-previous/` as a manual
+rescue-mode restore point, advances `$CONFIG_DIR/version` as its last file
+operation, then calls `systemctl reboot`. Apply is a full reboot rather
+than individually restarting `slimeos-session.service`/
+`slimeos-bridge.service`: the helper runs as a descendant of
+`slimeos-bridge.service`'s own cgroup, so restarting that service first
+would kill the helper before it could also restart the session service —
+reboot sidesteps that ordering hazard entirely and reuses the
+already-proven boot/Plymouth path (cog/WPE only ever reads `index.html`
+once at process start regardless, so a session restart is unavoidable for
+UI changes no matter which path is taken).
+
+**v1 cannot update itself**: `update.sh`, `apply-update-helper.sh`, the
+sudoers grant, and the staging/previous directories are all
+`install.sh`-provisioned — a device already in the field before this
+shipped can only pick this feature up via a manual reinstall.
+`hardware-profiles/*.sh` is also deliberately excluded from the manifest,
+since a profile change additionally needs `detect.sh` re-run to take
+effect.
+
 ### Key files
 | File | Purpose |
 |---|---|
@@ -278,6 +330,9 @@ scoped to the `$SESSION_USER` directly) authorizing it.
 | `membrane/freerdp/connect.sh` | FreeRDP connection function library (`do_connect`), sourced by coordinator.sh, with security flags |
 | `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
 | `membrane/session/pair.sh` | WireGuard self-pairing function library (`do_pair`), sourced by coordinator.sh |
+| `membrane/session/update.sh` | In-kiosk update check + apply function library (`do_update_check`, `do_apply_update`), sourced by coordinator.sh |
+| `membrane/update/manifest.json` | Versioned bundle manifest (one version number, per-file sha256) published on `main`, fetched by update.sh |
+| `membrane/update/apply-update-helper.sh` | Privileged, zero-argument root helper (deployed to `/opt/slimeos/apply-update-helper.sh`) that copies a verified staged update into place and reboots — invoked via a scoped sudoers grant, never directly |
 | `slimeos-automount.service` (written by install.sh) | Runs `udiskie` headlessly so USB drives auto-mount under `/media/<user>` for connect.sh's `/drive` redirect |
 
 ### Security hardening

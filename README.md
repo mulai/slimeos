@@ -1,8 +1,8 @@
 # Slime OS
 
-**The Infinite Life Desktop OS** — an open-source, cloud-first operating system that rescues legacy hardware from e-waste.
+**Open Source, Cloud-First OS** — rescues legacy hardware from the landfill.
 
-> *"Liquid Rejuvenation."* Strip your old machine down to a featherweight local client, stream a full cloud desktop at 60fps over FreeRDP — and keep your hardware alive for another decade.
+Strip your old PC or phone down to a featherweight, read-only local client, stream a full cloud desktop at 60fps over FreeRDP — and keep your hardware alive for another decade.
 
 ---
 

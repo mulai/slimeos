@@ -102,8 +102,12 @@
                        // support; it's re-randomized every time `enabled`
                        // flips true, so an old screenshot of it is useless.
                        // `version` is the installed Membrane version, written
-                       // once by install.sh and read verbatim -- purely
-                       // informational, display-only, no update affordance.
+                       // once by install.sh and advanced by the in-kiosk
+                       // update mechanism (update.sh) when applied -- purely
+                       // informational, display-only in this tab. The actual
+                       // update affordance lives in the status strip's
+                       // update icon (see setStatus's `update` field and
+                       // 'slime:apply-update' below), not here.
        crashReportSettings: { mode: 'settings', enabled: bool }
                        // Settings panel's Privacy tab -- one toggle for
                        // anonymous error reporting (see
@@ -154,12 +158,18 @@
        SlimeUI.setState('reconnecting', { brainName: 'Home Office', attempt: 2 });
        SlimeUI.setState('wifiList', { networks: [{ssid:'HomeNet', signal:80, secured:true}], scanning:false, mode:'boot', connectionType:'', connectionSsid:'', skippable:true });
 
-   window.SlimeUI.setStatus({ clock, tunnel })
+   window.SlimeUI.setStatus({ clock, tunnel, update })
      clock:  'HH:MM' string. Once set, the strip advances it locally every 30s.
      tunnel: 'up' | 'down' | 'connecting'
+     update: newer version string, or null/absent -- see coordinator.sh's
+             '_updateTick'/'setStatus' doc comments (update.sh's
+             do_update_check()). Sent on every screen, but the status
+             strip's update icon only ever shows on the idle empty/picker
+             screens (see renderUpdateIcon()) -- see 'slime:apply-update'
+             below for why.
 
      Example:
-       SlimeUI.setStatus({ clock: '14:32', tunnel: 'up' });
+       SlimeUI.setStatus({ clock: '14:32', tunnel: 'up', update: null });
 
    {"type":"showCrashConsent"} (raw WS message, not a SlimeUI call)
      One-shot instruction to render the anonymous-error-reporting consent
@@ -185,6 +195,19 @@
      the crash-consent question is resolved, so a brand-new device's two
      one-shot boot modals never fire in the same tick and clobber each
      other on the shared modalRoot. Answered via 'slime:recovery-pin-ack'.
+
+   {"type":"updateApplying"} (raw WS message, not a SlimeUI call)
+     Sent once the backend has downloaded and checksum-verified a pending
+     update and is about to hand off to the privileged reboot helper (see
+     update.sh's do_apply_update()) -- terminal, same as a real power
+     action: the device is about to reboot, nothing is left to route an
+     event to. Shows the same full-screen overlay showPowerOverlay() does.
+
+   {"type":"updateFailed","data":{message}} (raw WS message, not a SlimeUI call)
+     Sent instead of 'updateApplying' if the update couldn't be verified or
+     applied -- never destructive, the current install is always left
+     untouched on this path. Dismissing its modal just returns to whatever
+     screen was already showing underneath.
 
  The page never calls a backend directly — it only fires DOM CustomEvents on
  `document`, payload in `event.detail`. The backend listens and responds with
@@ -236,6 +259,14 @@
      doesn't need to remember any state between the prompt and the answer.
    'slime:recovery-pin-ack' {}                             // answer to the one-shot showRecoveryPin
      overlay (single acknowledgement button, no choice to make) -- never shown again once acked.
+
+   'slime:apply-update'    {}                              // "Update now" in the update-available
+     modal (status strip icon, idle empty/picker screens only -- see setStatus's `update` field
+     above). Deliberately not reachable from any other screen: coordinator.sh's inner do_* event
+     loops (Settings tabs, an active connect attempt, etc.) don't recognize 'applyUpdate' and would
+     silently drop it, the same bug class powerShutdown/powerRestart/crashReport were explicitly
+     patched to avoid -- gating the icon's visibility client-side to the two states where the outer
+     dispatch loop is guaranteed to be listening sidesteps that without touching every do_* file.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -513,6 +544,7 @@
     </div>
     <div class="right">
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
+      <span class="settings-gear hidden" id="btnUpdate" tabindex="0" role="button" title="Update available"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg></span>
       <span class="settings-gear" id="btnOpenSettings" tabindex="0" role="button" title="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
       <span class="bars" id="tunnelBars" title="Connection quality"><span id="bar1" style="height:4px;"></span><span id="bar2" style="height:7px;"></span><span id="bar3" style="height:11px;"></span></span>
@@ -701,6 +733,13 @@
 
   /* ===================== status strip ===================== */
 
+  // Newer version string from the backend's last do_update_check() (see
+  // coordinator.sh/update.sh), or null if none -- kept independent of
+  // `current.state` so a status message that arrives before/after a state
+  // change doesn't race the icon's own visibility (see renderUpdateIcon,
+  // called both from here and from render() below).
+  var pendingUpdateVersion = null;
+
   function setStatus(opts){
     opts = opts || {};
     if (opts.clock){
@@ -720,6 +759,21 @@
     if (opts.tunnel){
       renderTunnel(opts.tunnel);
     }
+    if ('update' in opts){
+      pendingUpdateVersion = opts.update || null;
+      renderUpdateIcon();
+    }
+  }
+
+  // Shown only on the idle empty/picker screens, even though the backend
+  // sends `update` on every setStatus call regardless of screen -- see
+  // coordinator.sh's header comment on why 'applyUpdate' is only guaranteed
+  // to reach the outer dispatch loop (and not be silently dropped by
+  // whichever do_* currently owns read_event) from those two states.
+  function renderUpdateIcon(){
+    var btn = document.getElementById('btnUpdate');
+    var idle = (current.state === 'empty' || current.state === 'picker');
+    btn.classList.toggle('hidden', !(idle && pendingUpdateVersion));
   }
 
   function renderClock(){
@@ -869,6 +923,7 @@
   function render(){
     try { renderImpl(); }
     catch (err) { reportCaughtError(err); }
+    renderUpdateIcon();
   }
 
   function renderImpl(){
@@ -1835,6 +1890,78 @@
     modalRoot.querySelector('#btnRecoveryPinOk').focus();
   }
 
+  // Client-only: pendingUpdateVersion is already known from the last
+  // setStatus message (see the header comment's 'update' field) -- opening
+  // this needs no round trip, same as showPowerConfirm(). Only "Update now"
+  // talks to the backend, via 'slime:apply-update'.
+  function showUpdateModal(version){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Update available</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">Slime OS ' + escapeHtml(version) + ' is ready to install. Any active session will disconnect and the device will restart.</p>' +
+          '<div style="display:flex;gap:10px;margin-top:22px;">' +
+            '<button class="btn-secondary" style="flex:1;" id="btnUpdateLater">Later</button>' +
+            '<button class="btn-primary" style="flex:1;padding:11px;box-shadow:none;" id="btnUpdateNow">Update now</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnUpdateLater').onclick = guarded(closeModal);
+    document.getElementById('btnUpdateNow').onclick = guarded(function(){
+      showUpdateWorkingModal();
+      emit('slime:apply-update');
+    });
+    modalRoot.querySelector('#btnUpdateNow').focus();
+  }
+
+  // Shown right after "Update now" is clicked, replacing the confirm modal
+  // in place -- stays up until the backend answers with either
+  // 'updateApplying' (verified, about to reboot -- see
+  // showUpdateApplyingOverlay below) or 'updateFailed' (see
+  // showUpdateFailedModal below). No buttons: there's nothing to route an
+  // event to while the backend is mid-download/verify.
+  function showUpdateWorkingModal(){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card" style="text-align:center;">' +
+          '<span class="spinner"></span>' +
+          '<h3 style="margin:18px 0 0;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Checking update…</h3>' +
+        '</div>' +
+      '</div>';
+  }
+
+  // Sent by the coordinator once the update has been downloaded and
+  // checksum-verified and it's about to hand off to the privileged apply
+  // helper (which reboots the device) -- see update.sh's do_apply_update().
+  // Terminal, same as showPowerOverlay itself: nothing left to route an
+  // event to once this fires.
+  function showUpdateApplyingOverlay(){
+    closeModal();
+    showPowerOverlay('Updating Slime OS…');
+  }
+
+  // Sent by the coordinator if the update couldn't be verified/applied (bad
+  // checksum, manifest drift, or a sudo-helper/sudoers grant missing on a
+  // device that hasn't been reinstalled since this feature shipped) -- see
+  // update.sh's do_apply_update(). Dismissing just closes back to whatever
+  // screen was already showing underneath -- the current install was never
+  // touched on this path, and the update icon reappears on the next
+  // successful _updateTick if one is still available.
+  function showUpdateFailedModal(message){
+    modalRoot.innerHTML =
+      '<div class="modal-overlay">' +
+        '<div class="modal-card">' +
+          '<h3 style="margin:0 0 10px;font-family:var(--font-display);font-weight:700;font-size:16.5px;color:#F2F6FB;">Update failed</h3>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">' + escapeHtml(message || "Couldn’t apply the update.") + '</p>' +
+          '<div style="display:flex;margin-top:22px;">' +
+            '<button class="btn-primary" style="flex:1;padding:11px;box-shadow:none;" id="btnUpdateFailedOk">OK</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('btnUpdateFailedOk').onclick = guarded(closeModal);
+    modalRoot.querySelector('#btnUpdateFailedOk').focus();
+  }
+
   // Client-only, non-interactive: once confirmed, the real machine is
   // about to power off/reboot regardless of anything the backend does
   // next, so there's nothing left to route an event to.
@@ -1877,6 +2004,10 @@
   on(btnPower, 'click', showPowerConfirm);
   on(btnPower, 'keydown', function(e){ if (e.key === 'Enter') showPowerConfirm(); });
 
+  var btnUpdate = document.getElementById('btnUpdate');
+  on(btnUpdate, 'click', function(){ if (pendingUpdateVersion) showUpdateModal(pendingUpdateVersion); });
+  on(btnUpdate, 'keydown', function(e){ if (e.key === 'Enter' && pendingUpdateVersion) showUpdateModal(pendingUpdateVersion); });
+
   /* ===================== public API ===================== */
 
   window.SlimeUI = {
@@ -1903,7 +2034,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2161,7 +2292,8 @@
       'slime:slime-id-start': 'slimeIdStart',
       'slime:slime-id-logout': 'slimeIdLogout',
       'slime:save-brain-consent': 'saveBrainConsent',
-      'slime:recovery-pin-ack': 'recoveryPinAck'
+      'slime:recovery-pin-ack': 'recoveryPinAck',
+      'slime:apply-update': 'applyUpdate'
     };
 
     function sendEvent(type, detail){
@@ -2187,10 +2319,12 @@
         var msg;
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
         if (msg.type === 'setState') window.SlimeUI.setState(msg.state, msg.data);
-        else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel });
+        else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel, update: msg.update });
         else if (msg.type === 'showCrashConsent') showCrashConsentModal();
         else if (msg.type === 'showSaveBrainPrompt') showSaveBrainPromptModal(msg.data);
         else if (msg.type === 'showRecoveryPin') showRecoveryPinModal((msg.data || {}).pin);
+        else if (msg.type === 'updateApplying') showUpdateApplyingOverlay();
+        else if (msg.type === 'updateFailed') showUpdateFailedModal((msg.data || {}).message);
       };
       ws.onclose = function(){
         window.SlimeUI.setState('disconnected', {});

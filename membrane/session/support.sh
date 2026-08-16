@@ -27,9 +27,11 @@
 REMOTE_SUPPORT_TOGGLE="$INSTALL_DIR/remote-support-toggle.sh"
 
 # Written by install.sh at install time (see its "On-device version record"
-# step). Purely informational -- shown read-only in this tab, doesn't drive
-# any update mechanism. Read once here (not per-loop-turn like `enabled`
-# below): unlike ssh.service's live state, it can't change during a session.
+# step) and, from then on, kept current by the in-kiosk update mechanism
+# (membrane/session/update.sh) whenever an update is applied. Purely
+# read-only display here -- this tab never writes to it. Read once here (not
+# per-loop-turn like `enabled` below): unlike ssh.service's live state, it
+# can't change during a session (an applied update reboots the device).
 MEMBRANE_VERSION="unknown"
 [[ -f "$CONFIG_DIR/version" ]] && MEMBRANE_VERSION=$(cat "$CONFIG_DIR/version")
 
