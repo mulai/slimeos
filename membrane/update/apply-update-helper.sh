@@ -8,15 +8,31 @@
 # the NOPASSWD grant to exactly this one script, no args -- same precedent
 # as remote-support-toggle.sh.
 #
-# Deliberately does NO networking and NO parsing of untrusted data: every
-# file it touches is read from a fixed, hardcoded staging path
-# ($STAGING_DIR, below) by a fixed, hardcoded filename -> destination
-# mapping ($DEST_FOR, below) -- never a `dest` field out of manifest.json.
-# Checksum verification (already done by the caller) only covers file
-# CONTENT, not where a file claims it should go -- keeping the destination
-# mapping compiled into THIS script, not data-driven, is what closes that
-# gap: a bad/malicious manifest.json can corrupt what gets installed, but
-# never where it lands.
+# Deliberately does NO networking: every file it touches is read from a
+# fixed, hardcoded staging path ($STAGING_DIR, below), already
+# checksum-verified by the caller before this ever runs.
+#
+# Destination mapping is READ FROM STAGED DATA (dest-map.txt, part of the
+# regular bundle, see membrane/update/dest-map.txt), not hardcoded --
+# real incident, 2026-08-16 (v0.3.0): a hardcoded bash array here meant
+# adding changelog.sh to the bundle required this script's own CODE to
+# change, but this script is deliberately excluded from the auto-update
+# manifest (same "v1 can't update itself" limitation as update.sh) -- so
+# every already-provisioned device kept running its OLD, frozen array,
+# silently never copying the new file into place even though it was
+# correctly downloaded and verified into staging. coordinator.sh (which
+# DOES update normally) shipped a `source changelog.sh` line pointing at a
+# file that never arrived -- crash-looped every 2s on both the UTM VM and
+# the AMD box. Moving the MAPPING (not the copy logic) into the same
+# generic, checksummed staging pipeline every other file already goes
+# through means a future new file only ever needs a new line in
+# dest-map.txt, which flows to every device automatically. Checksum
+# verification (already done by the caller) only ever covered file
+# CONTENT, never where a file claims it should go -- now that the mapping
+# itself is untrusted data, DEST_SAFE below is the thing that closes that
+# gap: any `dest` containing `..` or starting with `/` is rejected outright,
+# so a bad dest-map.txt can corrupt what gets installed but never *where*
+# it lands (still confined under $INSTALL_DIR).
 #
 # File replacement uses `install` (unlink + recreate, i.e. rename
 # semantics) rather than in-place truncation: both coordinator.sh
@@ -46,26 +62,26 @@ STAGING_DIR="$CONFIG_DIR/update-staging"
 PREVIOUS_DIR="$CONFIG_DIR/update-previous"
 
 [[ -d "$STAGING_DIR" ]] || { echo "no staged update found at $STAGING_DIR" >&2; exit 1; }
+[[ -f "$STAGING_DIR/dest-map.txt" ]] || { echo "no staged dest-map.txt -- refusing to guess destinations" >&2; exit 1; }
 
-# Fixed filename -> absolute destination path. Deliberately NOT derived from
-# manifest.json or anything else staged alongside the files -- see header.
-declare -A DEST_FOR=(
-    [coordinator.sh]="$INSTALL_DIR/coordinator.sh"
-    [connect.sh]="$INSTALL_DIR/connect.sh"
-    [network-setup.sh]="$INSTALL_DIR/network-setup.sh"
-    [pair.sh]="$INSTALL_DIR/pair.sh"
-    [support.sh]="$INSTALL_DIR/support.sh"
-    [timezone.sh]="$INSTALL_DIR/timezone.sh"
-    [remote-support-toggle.sh]="$INSTALL_DIR/remote-support-toggle.sh"
-    [crash-reporting.sh]="$INSTALL_DIR/crash-reporting.sh"
-    [slime-id.sh]="$INSTALL_DIR/slime-id.sh"
-    [changelog.sh]="$INSTALL_DIR/changelog.sh"
-    [index.html]="$INSTALL_DIR/lockscreen/index.html"
-    [space-grotesk.woff2]="$INSTALL_DIR/lockscreen/fonts/space-grotesk.woff2"
-    [plus-jakarta-sans.woff2]="$INSTALL_DIR/lockscreen/fonts/plus-jakarta-sans.woff2"
-    [jetbrains-mono.woff2]="$INSTALL_DIR/lockscreen/fonts/jetbrains-mono.woff2"
-    [slimeos-bridge]="$INSTALL_DIR/slimeos-bridge"
-)
+# Build the name -> destination map from staged, already-verified data.
+# Both fields are validated before either is trusted with anything -- name
+# is used to locate the STAGED source file ($STAGING_DIR/$name), dest the
+# INSTALLED destination ($INSTALL_DIR/$dest), so both need the same
+# "must be a plain relative path, no traversal" guard, not just dest.
+# Reject outright rather than merely warn: a rejected entry just means
+# that one file doesn't get copied this round (caught immediately by a
+# human watching this output), not a silent wrong-location read or write.
+declare -A DEST_FOR=()
+while IFS=: read -r name dest; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    if [[ -z "$dest" || "$name" == /* || "$name" == *..* || "$dest" == /* || "$dest" == *..* ]]; then
+        echo "[apply-update] REJECTED unsafe dest-map.txt entry: $name -> $dest" >&2
+        continue
+    fi
+    DEST_FOR["$name"]="$INSTALL_DIR/$dest"
+done < "$STAGING_DIR/dest-map.txt"
+[[ ${#DEST_FOR[@]} -gt 0 ]] || { echo "dest-map.txt parsed to zero safe entries" >&2; exit 1; }
 
 echo "[apply-update] snapshotting current bundle to $PREVIOUS_DIR (rescue-mode restore target only, no automatic rollback)"
 rm -rf "$PREVIOUS_DIR"
@@ -100,6 +116,9 @@ fi
 # so version stays the true "did this fully land" marker either way.
 if [[ -f "$STAGING_DIR/changelog" ]]; then
     install -m 0644 -o root -g root "$STAGING_DIR/changelog" "$CONFIG_DIR/changelog"
+fi
+if [[ -f "$STAGING_DIR/changelog-released-at" ]]; then
+    install -m 0644 -o root -g root "$STAGING_DIR/changelog-released-at" "$CONFIG_DIR/changelog-released-at"
 fi
 
 # Written last, only after every file above has landed -- a helper that

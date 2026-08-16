@@ -126,7 +126,8 @@
                        // there just aren't enough entries (~400) to need one.
                        // No `boot` mode, same as supportSettings/
                        // crashReportSettings.
-       changelogSettings: { mode: 'settings', version: string, changelog: string }
+       changelogSettings: { mode: 'settings', version: string, changelog: string,
+                          releasedAt: string | null, releasedRelative: string | null }
                        // Settings panel's Changelog tab (see
                        // membrane/session/changelog.sh). Purely read-only,
                        // no interactive elements. `version`/`changelog` are
@@ -135,8 +136,15 @@
                        // written once by install.sh and advanced together
                        // by apply-update-helper.sh whenever a real update
                        // applies (see update.sh's do_apply_update()) -- not
-                       // necessarily whatever's newest on `main`. No `boot`
-                       // mode, same as supportSettings/timezoneSettings.
+                       // necessarily whatever's newest on `main`.
+                       // releasedRelative ("3 hours ago") is derived
+                       // server-side from $CONFIG_DIR/changelog-released-at
+                       // via coordinator.sh's own relative_time() -- both
+                       // are null on a device/manifest that predates this
+                       // field, in which case the release-time line is
+                       // omitted entirely rather than showing "never".
+                       // No `boot` mode, same as supportSettings/
+                       // timezoneSettings.
        slimeIdConnecting: { stage }
                        // "Sign in with Slime ID" (see
                        // membrane/session/slime-id.sh) -- reached directly
@@ -1408,13 +1416,21 @@
   // preserves the manifest's own line breaks without needing any markdown
   // rendering.
   function renderChangelogSettings(data){
+    // releasedRelative is null on a device that predates this field, or a
+    // manifest that never set released_at -- omit it entirely rather than
+    // showing a confusing "released never". Inline with the version
+    // heading (not its own block) so presence/absence never affects the
+    // surrounding spacing.
+    var releasedSuffix = data.releasedRelative
+      ? ' <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0;">— released ' + escapeHtml(data.releasedRelative) + '</span>'
+      : '';
     return (
       '<div class="screen" data-screen="changelogSettings">' +
         '<div style="width:100%;max-width:460px;">' +
           '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Changelog</h2>' +
           '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">What changed in the version currently installed on this device.</p>' +
           '<div class="support-connection">' +
-            '<div class="field-label" style="margin-bottom:12px;">Slime OS v' + escapeHtml(data.version || 'unknown') + '</div>' +
+            '<div class="field-label" style="margin-bottom:12px;">Slime OS v' + escapeHtml(data.version || 'unknown') + releasedSuffix + '</div>' +
             '<p style="margin:0;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;">' + escapeHtml(data.changelog || 'No changelog recorded for this install.') + '</p>' +
           '</div>' +
         '</div>' +
@@ -2112,7 +2128,7 @@
       } else if (tab === 'privacy'){
         window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
       } else if (tab === 'changelog'){
-        window.SlimeUI.setState('changelogSettings', { mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.' });
+        window.SlimeUI.setState('changelogSettings', { mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.', releasedAt: null, releasedRelative: '2 hours ago' });
       }
     });
 

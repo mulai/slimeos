@@ -117,6 +117,7 @@ do_apply_update() {
     # field degrades to an empty file, which changelog.sh's own read falls
     # back from gracefully (see its header comment).
     jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null > "$UPDATE_STAGING_DIR/changelog" || true
+    jq -r '.released_at // ""' <<<"$manifest" 2>/dev/null > "$UPDATE_STAGING_DIR/changelog-released-at" || true
 
     local staged_ok=true src sha256 base dest
     while IFS=$'\t' read -r src sha256; do

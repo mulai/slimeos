@@ -292,10 +292,13 @@ leaves the current install untouched, and reports back via a one-shot
 off to `/opt/slimeos/apply-update-helper.sh` via a zero-argument,
 exact-path `sudo -n` grant (`/etc/sudoers.d/51-slimeos-update`, same
 least-privilege pattern as `remote-support-toggle.sh`). That root helper
-does no networking or manifest parsing at all — it copies the already
--verified staged files into place using its own hardcoded filename →
-destination table (never a `dest` field out of the manifest, so a bad
-manifest can corrupt what's installed but never *where* it lands),
+does no networking at all — it copies the already-verified staged files
+into place using a filename → destination map (`membrane/update/dest-map.txt`,
+`name:dest` per line) that is itself an ordinary staged, checksummed bundle
+file, not hardcoded in the helper's own code. Every `dest` (and `name`) is
+validated before use — rejected outright if it starts with `/` or contains
+`..` — so a bad `dest-map.txt` can corrupt what's installed but never
+*where* it lands (still confined under `$INSTALL_DIR`). The helper
 snapshots the previous bundle to `update-previous/` as a manual
 rescue-mode restore point, advances `$CONFIG_DIR/version` as its last file
 operation, then calls `systemctl reboot`. Apply is a full reboot rather
@@ -315,6 +318,23 @@ shipped can only pick this feature up via a manual reinstall.
 `hardware-profiles/*.sh` is also deliberately excluded from the manifest,
 since a profile change additionally needs `detect.sh` re-run to take
 effect.
+
+**Real incident, 2026-08-16 (v0.3.0):** `dest-map.txt` didn't always exist
+— the helper originally had a hardcoded bash associative array instead.
+Adding `changelog.sh` to the bundle meant `coordinator.sh` (an ordinary,
+auto-updating file) shipped a `source changelog.sh` line, but the helper's
+own frozen array had no entry for that filename — the file was correctly
+downloaded and checksum-verified into staging and then silently never
+copied into place, crash-looping the coordinator on both the UTM VM and
+the AMD box (`source: file not found` every 2s, surfaced on-screen as a
+permanent "Reconnecting to Slime OS…"). The exclusion of `update.sh`/
+`apply-update-helper.sh` from the manifest was always meant to cover
+changes to their own *logic*; it hadn't been noticed that it also silently
+froze which *files* the bundle could ever contain. Moving the mapping
+itself into the same generic, checksummed pipeline every other file
+already goes through (while keeping the helper's copy *logic*, and the
+path-safety check, frozen and simple) closes this permanently — a future
+new bundle file only ever needs one new line in `dest-map.txt`.
 
 The manifest also carries a `changelog` field — free text describing what
 changed in that release. `install.sh` seeds it into `$CONFIG_DIR/changelog`

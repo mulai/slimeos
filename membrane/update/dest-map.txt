@@ -1,0 +1,29 @@
+# Slime OS — bundle file -> destination map
+#
+# Read by apply-update-helper.sh at apply time (from the staged, already
+# checksum-verified copy, never from a live/untrusted source). Format:
+# `<staged filename>:<dest, relative to $INSTALL_DIR>`. `#` and blank
+# lines are ignored.
+#
+# This file is itself an ordinary bundle entry in manifest.json -- unlike
+# apply-update-helper.sh's own code, adding a NEW bundle file only ever
+# requires a new line here, which flows to every device through the normal
+# auto-update path. See apply-update-helper.sh's header comment for the
+# incident (2026-08-16, v0.3.0) that this replaced a hardcoded bash array
+# to fix, and the path-safety check that makes trusting this data safe.
+coordinator.sh:coordinator.sh
+connect.sh:connect.sh
+network-setup.sh:network-setup.sh
+pair.sh:pair.sh
+support.sh:support.sh
+timezone.sh:timezone.sh
+remote-support-toggle.sh:remote-support-toggle.sh
+crash-reporting.sh:crash-reporting.sh
+slime-id.sh:slime-id.sh
+changelog.sh:changelog.sh
+index.html:lockscreen/index.html
+space-grotesk.woff2:lockscreen/fonts/space-grotesk.woff2
+plus-jakarta-sans.woff2:lockscreen/fonts/plus-jakarta-sans.woff2
+jetbrains-mono.woff2:lockscreen/fonts/jetbrains-mono.woff2
+slimeos-bridge:slimeos-bridge
+dest-map.txt:dest-map.txt

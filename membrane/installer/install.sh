@@ -370,6 +370,13 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/update.sh"
 chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/update.sh"
 
+# Data-driven filename -> destination map apply-update-helper.sh reads at
+# apply time (see its own header for the 2026-08-16 incident this fixed) --
+# an ordinary bundle file like changelog.sh above, laid down here for
+# consistency even though the helper only ever reads it fresh from staging.
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/update/dest-map.txt" \
+     -o "$INSTALL_DIR/dest-map.txt"
+
 # Privileged apply-update helper (see membrane/update/apply-update-helper.sh's
 # own header) -- deliberately NOT chmod +x'd/chowned to $SESSION_USER the way
 # every script above is: it must stay root:root, invokable only via the
@@ -557,13 +564,17 @@ ok "Version recorded ($SLIMEOS_VERSION)"
 # install the same way apply-update-helper.sh seeds it for an in-kiosk
 # update -- pulled from the same manifest.json the update mechanism itself
 # reads, so there's one source of truth for "what changed in this version,"
-# not a second copy baked into this script. Never blocks the install: any
-# fetch/parse failure just falls back to a generic string, since this is
-# purely informational.
-CHANGELOG_TEXT=$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -m 15 \
-    "$REPO_BASE/membrane/update/manifest.json" 2>/dev/null | jq -r '.changelog // empty' 2>/dev/null || true)
+# not a second copy baked into this script. One fetch, two fields. Never
+# blocks the install: any fetch/parse failure just falls back to a
+# generic string, since this is purely informational.
+MANIFEST_JSON=$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -m 15 \
+    "$REPO_BASE/membrane/update/manifest.json" 2>/dev/null || true)
+CHANGELOG_TEXT=$(jq -r '.changelog // empty' <<<"$MANIFEST_JSON" 2>/dev/null || true)
+RELEASED_AT=$(jq -r '.released_at // empty' <<<"$MANIFEST_JSON" 2>/dev/null || true)
 echo "${CHANGELOG_TEXT:-Fresh install.}" > "$CONFIG_DIR/changelog"
 chmod 644 "$CONFIG_DIR/changelog"
+echo "$RELEASED_AT" > "$CONFIG_DIR/changelog-released-at"
+chmod 644 "$CONFIG_DIR/changelog-released-at"
 ok "Changelog recorded"
 
 # ── 3i. Sudoers + staging dirs: in-kiosk update mechanism ─────────────────────

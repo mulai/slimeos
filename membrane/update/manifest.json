@@ -1,6 +1,7 @@
 {
-  "version": "0.3.0",
-  "changelog": "0.3.0\n- Added a Changelog tab to Settings, showing what changed in the version currently installed on this device.\n- install.sh now retries transient download errors and settles the disk after the FreeRDP rebuild + initramfs regeneration before downloading files, fixing intermittent install failures seen on real hardware.",
+  "version": "0.3.1",
+  "released_at": "2026-08-16T16:09:46Z",
+  "changelog": "0.3.1\n- Fixed a real bug found live tonight: apply-update-helper.sh's destination table was hardcoded and frozen (it cannot auto-update itself), so it never learned about new bundle files like changelog.sh -- new files were downloaded and verified but silently never copied into place, crash-looping the coordinator. The mapping now travels as a checksummed data file (dest-map.txt) through the same pipeline as everything else, so this class of bug cannot recur.\n- The Changelog tab now shows how long ago the installed version was released.",
   "files": [
     {
       "src": "session/coordinator.sh",
@@ -36,7 +37,7 @@
     },
     {
       "src": "session/changelog.sh",
-      "sha256": "3fd020cd052b800c7ee8350bc4d06111959d3484570ca2b3f7f381f80b690788"
+      "sha256": "565866d9cddaf1eb609ea2f7f088cfbf2626db7f89552f5d982e3755f81c92a2"
     },
     {
       "src": "freerdp/connect.sh",
@@ -44,7 +45,7 @@
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "4b9b2e10e6c625e4cfee0636a18781a1f160ba5926ac30514c0ca8d4445f42ef"
+      "sha256": "9797ab15957087dc8a2148505c819219b558194583b24441a216eb4b3a7a120d"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",
@@ -57,6 +58,10 @@
     {
       "src": "lockscreen/fonts/jetbrains-mono.woff2",
       "sha256": "2c32b9b3ee358c119e210f6f5195f9bd34894d78a785ff2e95d60e718e400af4"
+    },
+    {
+      "src": "update/dest-map.txt",
+      "sha256": "b1f137de0981d94dbcfd1fb27284ad27430eb5eceb1b5baaa3a860ffb34fe699"
     }
   ],
   "bridge": {

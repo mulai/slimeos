@@ -13,19 +13,35 @@
 # a real update applies (see update.sh's do_apply_update() and the helper's
 # own header) -- same "only ever advanced as the last step of a fully
 # verified update" guarantee $CONFIG_DIR/version already has. This tab is
-# purely a read-only display of those two files; it never fetches anything
-# itself, so it works identically online or offline.
+# purely a read-only display of those local files; it never fetches
+# anything itself, so it works identically online or offline.
+#
+# $CONFIG_DIR/changelog-released-at (manifest.json's `released_at`, same
+# seed/advance lifecycle as changelog above) is an ISO8601 timestamp of
+# when the installed release was published -- shown as a relative string
+# ("3 hours ago") via relative_time(), already defined in coordinator.sh
+# and directly callable here since this file is sourced into that same
+# process (same reuse coordinator.sh's own brain-picker cards already make
+# of that function for `lastConnected`). Absent/empty (a device that
+# predates this field, or a manifest that never set it) just omits the
+# line client-side rather than showing a confusing "never".
 
 do_changelog() {
     local mode="$1"
-    local version changelog
+    local version changelog released_at released_relative
 
     while true; do
         version=$(cat "$CONFIG_DIR/version" 2>/dev/null || echo "unknown")
         changelog=$(cat "$CONFIG_DIR/changelog" 2>/dev/null || true)
         [[ -n "$changelog" ]] || changelog="No changelog recorded for this install."
+        released_at=$(cat "$CONFIG_DIR/changelog-released-at" 2>/dev/null || true)
+        released_relative=""
+        [[ -n "$released_at" ]] && released_relative=$(relative_time "$released_at")
         emit_state changelogSettings "$(jq -nc --arg mode "$mode" --arg version "$version" --arg changelog "$changelog" \
-            '{mode:$mode, version:$version, changelog:$changelog}')"
+            --arg releasedAt "$released_at" --arg releasedRelative "$released_relative" \
+            '{mode:$mode, version:$version, changelog:$changelog,
+              releasedAt:(if $releasedAt == "" then null else $releasedAt end),
+              releasedRelative:(if $releasedRelative == "" then null else $releasedRelative end)}')"
 
         local line ev_type
         line=$(read_event) || return 0
