@@ -8,7 +8,7 @@
 #     /opt/slimeos/install.sh --preseed-mode
 #
 #   Interactive (run on an existing Debian system):
-#     curl -fsSL https://raw.githubusercontent.com/mulai/slimeos/main/membrane/installer/install.sh | sudo bash
+#     curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors https://raw.githubusercontent.com/mulai/slimeos/main/membrane/installer/install.sh | sudo bash
 
 set -euo pipefail
 
@@ -157,7 +157,7 @@ if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
     log "Installing FreeRDP camera-channel + keyboard-forwarding rebuild..."
     FREERDP_TMP=$(mktemp -d)
     while IFS='  ' read -r sum deb; do
-        curl -fsSL -o "$FREERDP_TMP/$deb" "$FREERDP_REL/$deb"
+        curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "$FREERDP_TMP/$deb" "$FREERDP_REL/$deb"
         echo "$sum  $FREERDP_TMP/$deb" | sha256sum -c - >/dev/null
     done <<'DEBSUMS'
 415b2d3da06df7fe13a7704e5796b9520987334f5883134a8a604a8937685bf0  freerdp3-x11_3.15.0+dfsg-2.1+deb13u3+slimeos6_amd64.deb
@@ -184,7 +184,7 @@ apt-get install -y --no-install-recommends plymouth plymouth-themes
 mkdir -p /usr/share/plymouth/themes/slimeos
 cp -r /usr/share/plymouth/themes/spinner/. /usr/share/plymouth/themes/slimeos/
 rm -f /usr/share/plymouth/themes/slimeos/spinner.plymouth
-curl -fsSL "$REPO_BASE/membrane/plymouth/watermark.png" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/plymouth/watermark.png" \
      -o /usr/share/plymouth/themes/slimeos/watermark.png
 # Built on Debian's stock "spinner" (two-step plugin) theme rather than
 # from scratch: reuses its already-correct throbber/animation frame set
@@ -310,7 +310,7 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$INSTALL_DIR/hardware-profiles" "$INSTALL
 # Download hardware detection and profiles
 # NOTE: add new profile files here as they're validated (see membrane/hardware-profiles/)
 for f in detect.sh 000-generic.sh 001-gigabyte-h97.sh 006-apple-mac-intel.sh 008-gigabyte-78lmt-s2p.sh 009-vmware-guest.sh; do
-    curl -fsSL "$REPO_BASE/membrane/hardware-profiles/$f" \
+    curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/hardware-profiles/$f" \
          -o "$INSTALL_DIR/hardware-profiles/$f"
     chmod +x "$INSTALL_DIR/hardware-profiles/$f"
 done
@@ -320,27 +320,27 @@ done
 # its whiptail menu loop; connect.sh is no longer a standalone entry point,
 # it's `source`d by coordinator.sh as a function library, but is still
 # fetched and chmod +x the same way for manual on-device debugging.
-curl -fsSL "$REPO_BASE/membrane/session/slimeos-session.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/slimeos-session.sh" \
      -o "$INSTALL_DIR/slimeos-session.sh"
-curl -fsSL "$REPO_BASE/membrane/session/coordinator.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/coordinator.sh" \
      -o "$INSTALL_DIR/coordinator.sh"
-curl -fsSL "$REPO_BASE/membrane/freerdp/connect.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/freerdp/connect.sh" \
      -o "$INSTALL_DIR/connect.sh"
-curl -fsSL "$REPO_BASE/membrane/session/network-setup.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/network-setup.sh" \
      -o "$INSTALL_DIR/network-setup.sh"
-curl -fsSL "$REPO_BASE/membrane/session/pair.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/pair.sh" \
      -o "$INSTALL_DIR/pair.sh"
-curl -fsSL "$REPO_BASE/membrane/session/support.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/support.sh" \
      -o "$INSTALL_DIR/support.sh"
-curl -fsSL "$REPO_BASE/membrane/session/timezone.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/timezone.sh" \
      -o "$INSTALL_DIR/timezone.sh"
-curl -fsSL "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
      -o "$INSTALL_DIR/remote-support-toggle.sh"
-curl -fsSL "$REPO_BASE/membrane/session/crash-reporting.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/crash-reporting.sh" \
      -o "$INSTALL_DIR/crash-reporting.sh"
-curl -fsSL "$REPO_BASE/membrane/session/slime-id.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/slime-id.sh" \
      -o "$INSTALL_DIR/slime-id.sh"
-curl -fsSL "$REPO_BASE/membrane/session/update.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
 chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/update.sh"
 
@@ -349,7 +349,7 @@ chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTA
 # every script above is: it must stay root:root, invokable only via the
 # sudoers grant below (section 3g), never directly executable by the
 # unprivileged session user.
-curl -fsSL "$REPO_BASE/membrane/update/apply-update-helper.sh" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/update/apply-update-helper.sh" \
      -o "$INSTALL_DIR/apply-update-helper.sh"
 chmod 700 "$INSTALL_DIR/apply-update-helper.sh"
 
@@ -357,16 +357,16 @@ chmod 700 "$INSTALL_DIR/apply-update-helper.sh"
 # fonts -- zero other network requests at runtime, see the file's own header
 # comment) that cog renders as the Connect screen.
 for f in index.html; do
-    curl -fsSL "$REPO_BASE/membrane/lockscreen/$f" -o "$INSTALL_DIR/lockscreen/$f"
+    curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/lockscreen/$f" -o "$INSTALL_DIR/lockscreen/$f"
 done
 for f in space-grotesk.woff2 plus-jakarta-sans.woff2 jetbrains-mono.woff2; do
-    curl -fsSL "$REPO_BASE/membrane/lockscreen/fonts/$f" -o "$INSTALL_DIR/lockscreen/fonts/$f"
+    curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/lockscreen/fonts/$f" -o "$INSTALL_DIR/lockscreen/fonts/$f"
 done
 
 # Download the slimeos-bridge static binary (committed prebuilt, see
 # membrane/bridge/README.md -- the Membrane never runs a Go toolchain).
 BRIDGE_ARCH="$(dpkg --print-architecture)"
-curl -fsSL "$REPO_BASE/membrane/bridge/bin/slimeos-bridge-linux-${BRIDGE_ARCH}" \
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/bridge/bin/slimeos-bridge-linux-${BRIDGE_ARCH}" \
      -o "$INSTALL_DIR/slimeos-bridge"
 chmod +x "$INSTALL_DIR/slimeos-bridge"
 ok "Slime OS files installed to $INSTALL_DIR"
