@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.2"
+SLIMEOS_VERSION="0.3.3"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -954,6 +954,38 @@ chmod 600 "$CONFIG_DIR/recovery-pin"
 chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/recovery-pin"
 ok "Recovery PIN set (stored in $CONFIG_DIR/recovery-pin)"
 
+# ── 13b. Dedicated recovery account (console-only, never touched by Remote
+#         Support) ─────────────────────────────────────────────────────────
+# $SESSION_USER's actual login password is NOT stable: remote-support-toggle.sh
+# overwrites it with a fresh random value on every Support-tab "on" (by
+# design -- so an old screenshot/chat log of a support session can't be
+# replayed later), and locks the account entirely (`usermod -L`) on every
+# "off", including the off-by-default boot-time reset service. That makes
+# $SESSION_USER useless as a recovery credential the moment Remote Support is
+# ever toggled even once -- discovered live 2026-08-23 when the recovery PIN
+# stopped working on a VT-switched tty (see membrane/session/slimeos-session.sh's
+# `-s` flag) on a device that had used Remote Support earlier that session.
+#
+# This account exists SOLELY so the recovery PIN is a permanent master key
+# ("works until the device is reinstalled", Tommy's own framing) for
+# physical/console access -- tty1's fallback login and tty2-6 (see
+# slimeos-session.sh) -- completely independent of $SESSION_USER's password
+# churn. remote-support-toggle.sh never references this account, so nothing
+# about the Support toggle's lock/rotate behavior can touch it.
+RECOVERY_USER="slime-recovery"
+useradd -m -s /bin/bash -G sudo "$RECOVERY_USER"
+echo "${RECOVERY_USER}:${RECOVERY_PIN}" | chpasswd
+# SSH-only deny -- local tty getty/login doesn't consult sshd_config at all,
+# so this has zero effect on console access, only on remote reachability.
+# Without this, whenever Remote Support happens to be toggled on (sshd
+# running, WireGuard-subnet firewall rule open) for ANY reason, the
+# permanent master-key PIN would also work over SSH -- this keeps the
+# master key strictly physical-console-only, matching what was actually
+# asked for.
+mkdir -p /etc/ssh/sshd_config.d
+echo "DenyUsers ${RECOVERY_USER}" > /etc/ssh/sshd_config.d/50-slimeos-recovery-console-only.conf
+ok "Recovery account set up (console-only, immune to Remote Support toggling)"
+
 # ── 14. Final summary ─────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}  Slime OS Membrane installed successfully!${RESET}"
@@ -964,7 +996,9 @@ echo "  2. Enable VPN:                sudo systemctl enable --now wg-quick@wg0"
 echo "  3. Reboot:                    sudo reboot"
 echo "  4. On the Connect screen, add your Brain's IP address"
 echo ""
-echo -e "  ${YELLOW}Recovery PIN: ${RECOVERY_PIN}${RESET}  (keep this safe — needed for tty1 login)"
+echo -e "  ${YELLOW}Recovery PIN: ${RECOVERY_PIN}${RESET}  (keep this safe — your permanent console login,"
+echo -e "  ${YELLOW}${RESET}  as user '${RECOVERY_USER}', on tty1 or any VT (Ctrl+Alt+F2..F6) — works forever, unaffected"
+echo -e "  ${YELLOW}${RESET}  by Remote Support toggling, until this device is reinstalled)"
 echo ""
 
 if $PRESEED_MODE; then

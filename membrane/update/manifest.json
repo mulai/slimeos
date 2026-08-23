@@ -1,11 +1,11 @@
 {
-  "version": "0.3.2",
-  "released_at": "2026-08-23T03:30:00Z",
-  "changelog": "0.3.2\n- The lock screen now allows switching to a text console (Ctrl+Alt+F2..F6, cage's -s flag) for out-of-band troubleshooting -- logs in with the same recovery PIN already used as tty1's fallback login. Previously the only way to reach a shell on a device you couldn't SSH into (e.g. a dead WireGuard tunnel) was booting from a USB installer into rescue mode.",
+  "version": "0.3.3",
+  "released_at": "2026-08-23T07:00:00Z",
+  "changelog": "0.3.3\n- Fixed a real gap found live the same night 0.3.2 shipped: the recovery PIN was documented as a permanent console login, but tty2-6 (and tty1's own fallback) actually authenticated against the 'slime' account -- whose password is rotated on every Remote Support toggle and locked entirely by default on every boot. The PIN stopped working the moment Remote Support was ever used once. Fresh installs now create a separate 'slime-recovery' account (SSH-disabled, console-login only) whose password is fixed to the recovery PIN forever, untouched by Remote Support state. This is an installer-time fix -- it only applies to devices installed with 0.3.3 or later; already-provisioned devices need a manual retrofit to get the dedicated account (ask for the one-off script).",
   "files": [
     {
       "src": "session/slimeos-session.sh",
-      "sha256": "6ff4e6abe57d437d8a6be6487616ea9cfb4ce93349facef69d8c26f8ea847739"
+      "sha256": "1ff5a09e419007108a0d5e82fe8a0529ab84365b1152f79bf6b4bdc424091a25"
     },
     {
       "src": "session/coordinator.sh",
