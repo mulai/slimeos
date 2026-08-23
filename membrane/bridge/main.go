@@ -302,8 +302,8 @@ func startUpdateTicker(b *bridge) {
 
 // ── Global force-disconnect hotkey (Ctrl+Alt+End, held 3s) ──────────────────
 //
-// Once xfreerdp3 owns the Wayland surface there is no window chrome, no
-// VT-switching (cage runs without -s), and the lock screen page -- which is
+// Once xfreerdp3 owns the Wayland surface there is no window chrome, and
+// the lock screen page -- which is
 // what every other event in this protocol goes through -- has no input
 // focus to receive anything on. This reads raw evdev events directly,
 // below whatever currently has focus, so a stuck RDP session (or any other

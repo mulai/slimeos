@@ -127,10 +127,12 @@ client and one persistent `coordinator.sh` subprocess, restarting the
 latter on crash and resyncing whatever client is attached.
 
 ### Session recovery hotkey (force-disconnect)
-Once `xfreerdp3` owns the Wayland surface there's no window chrome, no
-VT-switching (`cage` deliberately runs without `-s`), and the lock screen
-page — the only thing the JSON-Lines protocol above normally reaches — has
-no input focus. `slimeos-bridge` runs a second goroutine alongside the
+Once `xfreerdp3` owns the Wayland surface there's no window chrome, and the
+lock screen page — the only thing the JSON-Lines protocol above normally
+reaches — has no input focus. (Since 0.3.2, `cage` runs with `-s`, so
+Ctrl+Alt+F2..F6 do reach a real tty login as an out-of-band console — see
+`membrane/session/slimeos-session.sh` — but that's a separate escape hatch
+from the hotkey below, which works even without VT-switching being enabled.) `slimeos-bridge` runs a second goroutine alongside the
 coordinator relay that reads raw evdev events directly from
 `/dev/input/eventN` (below whatever currently has focus, stdlib-only, no
 `EVIOCGRAB` so it never steals input from cage/libinput's own reads): on

@@ -72,7 +72,10 @@ echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Display output detected"
 # ── Launch cage ───────────────────────────────────────────────────────────────
 # cage: minimal Wayland compositor designed for kiosk use
 #   -d = allow drop to shell on exit (disabled in production — remove for security)
-#   -s = allow switching VTs
+#   -s = allow switching VTs (enabled 0.3.2 — Ctrl+Alt+F2..F6 now reach a real
+#        getty login on tty2-6, gated by the same recovery-PIN password as
+#        tty1's fallback login below; needed as an out-of-band console when
+#        the WireGuard tunnel itself is down and SSH can't reach the device)
 # cog (WPE WebKit's kiosk launcher) is the only application cage manages,
 # pointed at the local lock screen bundle. cog talks to slimeos-bridge (a
 # separate, independently-supervised systemd unit — see
@@ -113,4 +116,4 @@ export WEBKIT_FORCE_SANDBOX=0
 # cog's Wayland platform module is named "wl" (libcogplatform-wl.so), not
 # "wayland" -- passing the latter makes cog fail to find any usable platform
 # and abort before ever opening a window.
-exec cage -- cog -P wl "file://$INSTALL_DIR/lockscreen/index.html"
+exec cage -s -- cog -P wl "file://$INSTALL_DIR/lockscreen/index.html"

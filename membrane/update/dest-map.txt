@@ -11,6 +11,7 @@
 # auto-update path. See apply-update-helper.sh's header comment for the
 # incident (2026-08-16, v0.3.0) that this replaced a hardcoded bash array
 # to fix, and the path-safety check that makes trusting this data safe.
+slimeos-session.sh:slimeos-session.sh
 coordinator.sh:coordinator.sh
 connect.sh:connect.sh
 network-setup.sh:network-setup.sh

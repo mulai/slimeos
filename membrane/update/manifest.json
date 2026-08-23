@@ -1,8 +1,12 @@
 {
-  "version": "0.3.1",
-  "released_at": "2026-08-16T16:09:46Z",
-  "changelog": "0.3.1\n- Fixed a real bug found live tonight: apply-update-helper.sh's destination table was hardcoded and frozen (it cannot auto-update itself), so it never learned about new bundle files like changelog.sh -- new files were downloaded and verified but silently never copied into place, crash-looping the coordinator. The mapping now travels as a checksummed data file (dest-map.txt) through the same pipeline as everything else, so this class of bug cannot recur.\n- The Changelog tab now shows how long ago the installed version was released.",
+  "version": "0.3.2",
+  "released_at": "2026-08-23T03:30:00Z",
+  "changelog": "0.3.2\n- The lock screen now allows switching to a text console (Ctrl+Alt+F2..F6, cage's -s flag) for out-of-band troubleshooting -- logs in with the same recovery PIN already used as tty1's fallback login. Previously the only way to reach a shell on a device you couldn't SSH into (e.g. a dead WireGuard tunnel) was booting from a USB installer into rescue mode.",
   "files": [
+    {
+      "src": "session/slimeos-session.sh",
+      "sha256": "6ff4e6abe57d437d8a6be6487616ea9cfb4ce93349facef69d8c26f8ea847739"
+    },
     {
       "src": "session/coordinator.sh",
       "sha256": "f65322b5f9c87bc2f4980103de1509e8eb5d8aac396cb800dd2d99a9149b2043"
@@ -61,7 +65,7 @@
     },
     {
       "src": "update/dest-map.txt",
-      "sha256": "b1f137de0981d94dbcfd1fb27284ad27430eb5eceb1b5baaa3a860ffb34fe699"
+      "sha256": "910bdc2bb57866b4471e27e97511df389ed48d3aed4d9a3fb8025b6f4a110798"
     }
   ],
   "bridge": {

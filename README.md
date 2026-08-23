@@ -147,6 +147,7 @@ All guides live in [`docs/`](docs/) and stay versioned alongside the code they d
 | Gigabyte H97-Gaming 3 / i7-4790 / 16 GB (Win 10) | 001 | UEFI | ✅ Reference device — full install → kiosk → WireGuard tunnel → RDP connect confirmed |
 | Gigabyte GA-78LMT-S2P / AMD FX-6100 / 8 GB (Win 10) | 008 | Legacy BIOS | ✅ Full install → kiosk → tunnel → RDP connect confirmed; mouse input, WiFi onboarding, WireGuard self-pairing (persists across reboot), and power off/restart all confirmed on real hardware |
 | VMware Workstation Pro guest (Windows host) | 009 | Legacy BIOS | ✅ Fresh install auto-detects the profile → kiosk → pairing → RDP to a Windows Brain with audio. Needs "Accelerate 3D graphics" enabled — see the [install guide](docs/install-vmware.md) |
+| Intel NUC6CAYH / Celeron J3455 / 4 GB (Win 10) | 000 | UEFI | ✅ Full install → kiosk → WireGuard tunnel → RDP connect confirmed on real hardware — auto-detects to the Generic profile (no dedicated hardware-profile file yet) |
 | Generic (any arch) | 000 | — | ✅ Fallback — any uncatalogued machine |
 | Huawei Mate 30 Pro (Android) | — | — | 🔄 Phase 2 |
 
