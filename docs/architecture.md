@@ -374,8 +374,16 @@ covered by the auto-update manifest itself.
 ### Security hardening
 - `noexec`, `nosuid` mount flags on `/tmp` and `/var`.
 - AppArmor profile on the FreeRDP process.
-- No local user home directory. All config in `/etc/slimeos/`.
-- SSH disabled. Local console requires a recovery PIN.
+- No persistent user data — all device config lives in `/etc/slimeos/`.
+- SSH disabled by default (off unless explicitly toggled on from Settings,
+  and locked out again on every boot). Local console (tty1, or tty2-6 via
+  `-s`, see the "Session recovery hotkey" section above) requires a
+  recovery PIN — checked against a dedicated
+  `slime-recovery` account (0.3.3+) created only by the installer and never
+  touched by the Remote Support toggle, so it stays valid for the life of
+  the device regardless of SSH/Remote Support state. `slime-recovery` is
+  itself explicitly denied SSH login (`sshd_config.d`), so the PIN only
+  ever grants physical/console access, never remote.
 - `slimeos-bridge` listens on loopback (`127.0.0.1`) only, enforced at its
   own startup — no new network-facing attack surface, no firewall rule
   needed.
