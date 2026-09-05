@@ -33,8 +33,11 @@
 #   {"type":"supportToggle","enabled":..}                  only consumed by do_support, see support.sh
 #   {"type":"crashReportToggle","enabled":..}              only consumed by do_crash_reporting, see crash-reporting.sh
 #   {"type":"timezoneSet","timezone":..}                   only consumed by do_timezone, see timezone.sh
-#   {"type":"settingsTab","tab":"internet"|"pair"|"support"|"privacy"|"timezone"}  only consumed by whichever of
-#     do_network_setup/do_pair/do_support/do_crash_reporting/do_timezone is currently running in `settings` mode —
+#   {"type":"speakerVolumeSet","volume":0-100} | {"type":"speakerTest"}   only consumed by do_speaker_settings, see hardware-test.sh
+#   {"type":"micVolumeSet","volume":0-100} | {"type":"micTest"}           only consumed by do_microphone_settings, see hardware-test.sh
+#   {"type":"cameraPreviewStart"} | {"type":"cameraPreviewStop"}          only consumed by do_camera_settings, see hardware-test.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"timezone"|"changelog"}  only consumed by whichever of
+#     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_timezone/do_changelog is currently running in `settings` mode —
 #     switches the Settings panel to a different tab without leaving it (see the
 #     openSettings case's SETTINGS_NEXT_TAB loop below)
 #   {"type":"crashConsent","granted":true|false}            handled directly here (see the outer dispatch's
@@ -81,7 +84,7 @@
 #     untouched unless every file was verified.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|supportSettings|crashReportSettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|speakerSettings|microphoneSettings|cameraSettings|supportSettings|crashReportSettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null}
 #     `update`, when non-null, is the newer version string from the last successful
 #     do_update_check() (update.sh) — sent on every screen, but index.html only shows the status
@@ -107,7 +110,8 @@
 # form itself needs no backend round-trip); this script only ever emits
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
-# supportSettings/crashReportSettings/timezoneSettings/changelogSettings/
+# speakerSettings/microphoneSettings/cameraSettings/supportSettings/
+# crashReportSettings/timezoneSettings/changelogSettings/
 # slimeIdConnecting/slimeIdEntry/slimeIdError.
 # `empty`/`picker` both additionally carry `signedInEmail` (null unless
 # do_slime_id_login() has ever successfully signed this device in).
@@ -290,6 +294,8 @@ source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout
 source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
 # shellcheck source=changelog.sh
 source "$INSTALL_DIR/changelog.sh" # defines do_changelog()
+# shellcheck source=hardware-test.sh
+source "$INSTALL_DIR/hardware-test.sh" # defines do_speaker_settings(), do_microphone_settings(), do_camera_settings()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -835,12 +841,15 @@ while true; do
             while true; do
                 SETTINGS_NEXT_TAB=""
                 case "$settings_tab" in
-                    internet) do_network_setup settings ;;
-                    pair)     do_pair settings ;;
-                    support)  do_support settings ;;
-                    privacy)  do_crash_reporting settings ;;
-                    timezone) do_timezone settings ;;
-                    changelog) do_changelog settings ;;
+                    internet)   do_network_setup settings ;;
+                    pair)       do_pair settings ;;
+                    speaker)    do_speaker_settings settings ;;
+                    microphone) do_microphone_settings settings ;;
+                    camera)     do_camera_settings settings ;;
+                    support)    do_support settings ;;
+                    privacy)    do_crash_reporting settings ;;
+                    timezone)   do_timezone settings ;;
+                    changelog)  do_changelog settings ;;
                 esac
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"

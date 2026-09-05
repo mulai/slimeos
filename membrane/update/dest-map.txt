@@ -22,6 +22,7 @@ remote-support-toggle.sh:remote-support-toggle.sh
 crash-reporting.sh:crash-reporting.sh
 slime-id.sh:slime-id.sh
 changelog.sh:changelog.sh
+hardware-test.sh:hardware-test.sh
 index.html:lockscreen/index.html
 space-grotesk.woff2:lockscreen/fonts/space-grotesk.woff2
 plus-jakarta-sans.woff2:lockscreen/fonts/plus-jakarta-sans.woff2

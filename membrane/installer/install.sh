@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.3"
+SLIMEOS_VERSION="0.3.4"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -90,7 +90,12 @@ fi
 # -- but a fresh kernel leaves the mixer's Master channel MUTED at 0%, and
 # with no sound server installed, nothing ever unmutes it. alsa-utils
 # provides alsactl for the first-boot init below (slimeos-audio-init) plus
-# its own alsa-restore.service for every boot after.
+# its own alsa-restore.service for every boot after. Its amixer/aplay/
+# arecord/speaker-test also back the Settings > Devices > Speaker/Microphone
+# local test tabs (membrane/session/hardware-test.sh).
+# fswebcam: single-frame JPEG grab from a V4L2 device, for the Settings >
+# Devices > Camera tab's local preview -- nothing else in the base install
+# provides it (ffmpeg/v4l2-ctl aren't pulled in). ~1 MB with libgd.
 log "Installing core dependencies..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl wget git ca-certificates gnupg \
@@ -104,6 +109,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     udisks2 udiskie \
     ntfs-3g exfatprogs \
     alsa-utils \
+    fswebcam \
     openssh-server \
     ${MICROCODE_PKGS} \
     ethtool \
@@ -366,9 +372,14 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
 # update.sh's own header comment on why v1 can't update itself).
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/changelog.sh" \
      -o "$INSTALL_DIR/changelog.sh"
+# hardware-test.sh: Settings > Devices > Speaker/Microphone/Camera local
+# test tabs. Ordinary bundle file (part of the auto-update manifest, same
+# as changelog.sh/timezone.sh) -- `source`d by coordinator.sh.
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/hardware-test.sh" \
+     -o "$INSTALL_DIR/hardware-test.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/update.sh"
 
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --

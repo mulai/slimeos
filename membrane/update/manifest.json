@@ -1,7 +1,7 @@
 {
-  "version": "0.3.3",
-  "released_at": "2026-08-23T07:00:00Z",
-  "changelog": "0.3.3\n- Fixed a real gap found live the same night 0.3.2 shipped: the recovery PIN was documented as a permanent console login, but tty2-6 (and tty1's own fallback) actually authenticated against the 'slime' account -- whose password is rotated on every Remote Support toggle and locked entirely by default on every boot. The PIN stopped working the moment Remote Support was ever used once. Fresh installs now create a separate 'slime-recovery' account (SSH-disabled, console-login only) whose password is fixed to the recovery PIN forever, untouched by Remote Support state. This is an installer-time fix -- it only applies to devices installed with 0.3.3 or later; already-provisioned devices need a manual retrofit to get the dedicated account (ask for the one-off script).",
+  "version": "0.3.4",
+  "released_at": "2026-09-06T00:00:00Z",
+  "changelog": "0.3.4\n- New: Settings has a Devices section -- Speaker, Microphone and Camera -- that checks each one locally, without connecting to a Brain first. Set the speaker volume and play a test tone; set the microphone level and run a 3-second record-and-play-back check; open a webcam preview (it refreshes about once a second -- that's the check, not a fault; video inside a Brain session is full-speed).\n- The Settings panel moved from one crowded row of tabs to a left-hand list grouped into Network, Devices, Support and System.\n- The Camera preview needs a small extra component. Devices installed with 0.3.4 or later have it already; on an older device the Camera tab will say so, and Speaker and Microphone still work.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -9,7 +9,7 @@
     },
     {
       "src": "session/coordinator.sh",
-      "sha256": "f65322b5f9c87bc2f4980103de1509e8eb5d8aac396cb800dd2d99a9149b2043"
+      "sha256": "940ebe09884043a4b52eeda6ac24e5449193a7ef748360dc9af1c3476e0fc12d"
     },
     {
       "src": "session/network-setup.sh",
@@ -44,12 +44,16 @@
       "sha256": "565866d9cddaf1eb609ea2f7f088cfbf2626db7f89552f5d982e3755f81c92a2"
     },
     {
+      "src": "session/hardware-test.sh",
+      "sha256": "ad40fa88a063a2abe516a0e41bd5b7c502a17ec116fd3495383d323bc4d54b0a"
+    },
+    {
       "src": "freerdp/connect.sh",
       "sha256": "db142895a670e384c12047f97381a8d9baf7c204a2d38e99a9e7bd3eb5bea917"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "9797ab15957087dc8a2148505c819219b558194583b24441a216eb4b3a7a120d"
+      "sha256": "c430e029a0f37d8e21751909a5734927b17f80824ff9670c09edf7f80154931a"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",
@@ -65,7 +69,7 @@
     },
     {
       "src": "update/dest-map.txt",
-      "sha256": "910bdc2bb57866b4471e27e97511df389ed48d3aed4d9a3fb8025b6f4a110798"
+      "sha256": "2f0ab0760aa69094e6aade4b922f5199397e98a320445851330a2b49f23f7944"
     }
   ],
   "bridge": {

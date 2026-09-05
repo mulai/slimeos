@@ -87,6 +87,47 @@
        pairError:      { message, detail, mode }
                        // No secured/re-enter-password concept here (one
                        // secret field, not two) — just Try again / Back.
+       speakerSettings: { mode: 'settings', card: string | null,
+                          volume: number | null, error: string | null }
+                       // Settings panel's Devices > Speaker tab (see
+                       // membrane/session/hardware-test.sh). Purely LOCAL --
+                       // no Brain/RDP involved. `card` is the ALSA card name
+                       // the same default_playback_card() logic connect.sh
+                       // uses for RDP audio picked; null (with `error` set)
+                       // if no playback device exists. `volume` is the
+                       // current Master (or PCM) mixer %, re-read every
+                       // emit. Emits 'slime:speaker-volume-set' {volume} on
+                       // slider release and 'slime:speaker-test' {} for the
+                       // built-in test tone.
+       microphoneSettings: { mode: 'settings', card: string | null,
+                          volume: number | null, testing: bool,
+                          testResult: 'ok' | 'error' | null,
+                          error: string | null }
+                       // Settings panel's Devices > Microphone tab. Same
+                       // local-only shape as speakerSettings. `card` prefers
+                       // a dedicated USB mic over a webcam's mic (connect.sh's
+                       // usb_capture_card()), falling back to the onboard
+                       // capture card. The mic test is a single bounded
+                       // ~3-4s action: record 3s, play it straight back on
+                       // the speaker -- `testing:true` is emitted while it
+                       // runs, then `testResult` on completion (this is NOT
+                       // a live VU meter). Emits 'slime:mic-volume-set'
+                       // {volume} and 'slime:mic-test' {}.
+       cameraSettings: { mode: 'settings', available: bool, previewing: bool,
+                          frameDataUrl: string | null, error: string | null }
+                       // Settings panel's Devices > Camera tab. `available`
+                       // = a /dev/video* node exists AND the snapshot tool
+                       // (fswebcam) is installed (already-provisioned
+                       // devices predate it being in install.sh, so `error`
+                       // explains a present-but-unusable camera). While
+                       // `previewing`, the backend polls fswebcam ~1x/sec
+                       // and re-emits a fresh `frameDataUrl`
+                       // (data:image/jpeg;base64,...) -- a plain <img src>,
+                       // same raster-data-URI route slimeIdEntry's QR uses
+                       // to sidestep this WebKit build's foreign-content /
+                       // getUserMedia quirks. Emits
+                       // 'slime:camera-preview-start' {} /
+                       // 'slime:camera-preview-stop' {}.
        supportSettings: { mode: 'settings', enabled: bool,
                           connection: {host, port, username, password} | null,
                           error: string | null, version: string }
@@ -245,7 +286,7 @@
    'slime:cancel-connect'  {}
 
    'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
-   'slime:settings-tab'    { tab }                        // Settings panel's tab bar -- tab: 'internet'|'pair'|'support'|'privacy'|'timezone'|'changelog'
+   'slime:settings-tab'    { tab }                        // Settings panel's left nav -- tab: 'internet'|'pair'|'speaker'|'microphone'|'camera'|'support'|'privacy'|'timezone'|'changelog'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -259,6 +300,12 @@
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
+   'slime:speaker-volume-set' { volume }                   // Devices > Speaker tab -- 0-100, fired on slider release
+   'slime:speaker-test'    {}                              // Devices > Speaker tab -- play the built-in test tone
+   'slime:mic-volume-set'  { volume }                      // Devices > Microphone tab -- 0-100, fired on slider release
+   'slime:mic-test'        {}                              // Devices > Microphone tab -- record 3s + play back
+   'slime:camera-preview-start' {}                         // Devices > Camera tab -- begin ~1fps local preview
+   'slime:camera-preview-stop'  {}                         // Devices > Camera tab -- stop the preview
 
    'slime:crash-report'    { message, stack, state }       // auto-fired by window.onerror/unhandledrejection,
      never by a user action -- the page always fires this regardless of the
@@ -520,25 +567,50 @@
 
   /* -------- settings panel (gear icon) -------- */
   .settings-panel{
-    width:100%;max-width:640px;max-height:min(680px,86vh);
+    width:100%;max-width:840px;max-height:min(680px,86vh);
     background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:20px;
     display:flex;flex-direction:column;overflow:hidden;
     box-shadow:0 30px 60px -20px rgba(0,0,0,0.55);
   }
-  .settings-panel-header{display:flex;align-items:center;justify-content:space-between;padding:22px 26px 0;flex-shrink:0;}
+  .settings-panel-header{display:flex;align-items:center;justify-content:space-between;padding:22px 26px 14px;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,0.08);}
   .settings-title{margin:0;font-family:var(--font-display);font-weight:700;font-size:19px;color:#F2F6FB;}
   .settings-close{background:none;border:none;color:var(--text-muted);font-size:20px;line-height:1;padding:6px 10px;border-radius:8px;}
   .settings-close:hover{color:#fff;background:rgba(255,255,255,0.08);}
-  .settings-tabs{display:flex;gap:4px;padding:16px 26px 0;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;}
-  .settings-tab{background:none;border:none;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:10px 10px 0 0;position:relative;top:1px;border-bottom:2px solid transparent;}
-  .settings-tab:hover{color:#C9D3DF;}
-  .settings-tab.active{color:var(--mint);border-bottom-color:var(--mint);}
+
+  /* Left-hand nav (replaced the old cramped horizontal .settings-tabs row --
+     with ~9 destinations across Network/Devices/Support/System groups a
+     single wrapping row got unreadable). Groups are always expanded: at
+     this count every destination stays one click away and there's no
+     accordion state to build. */
+  .settings-shell{display:flex;flex:1;min-height:0;}
+  .settings-sidebar{width:198px;flex-shrink:0;border-right:1px solid rgba(255,255,255,0.08);padding:16px 12px 20px;overflow-y:auto;}
+  .settings-nav-group + .settings-nav-group{margin-top:18px;}
+  .settings-nav-label{font-family:var(--font-mono);font-size:9.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--text-faint);padding:0 10px;margin-bottom:6px;}
+  .settings-tab{background:none;border:none;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13.5px;}
+  /* laid out as a vertical list item, not a tab -- colour/active states
+     reused from the row version, just re-oriented. */
+  .settings-sidebar .settings-tab{display:block;width:100%;text-align:left;font-size:13px;padding:8px 10px;border-radius:8px;margin-bottom:2px;}
+  .settings-sidebar .settings-tab:hover{color:#C9D3DF;background:rgba(255,255,255,0.04);}
+  .settings-sidebar .settings-tab.active{color:var(--mint);background:rgba(0,194,168,0.1);}
   .settings-body{flex:1;overflow-y:auto;padding:6px 8px 8px;}
   /* wifiList/pairEntry/supportSettings render their normal full-page
      `.screen` markup unchanged (see render()'s isSettingsPanel wrapping) --
      this reclaims that layout to fit inside the panel body instead of
      assuming the full viewport. */
   .settings-body .screen{min-height:0;height:auto;padding:18px 18px 26px;justify-content:flex-start;animation:none;}
+
+  /* Devices tabs (Speaker/Microphone/Camera -- see hardware-test.sh). */
+  .hw-slider-row{display:flex;align-items:center;gap:14px;margin:4px 0 6px;}
+  input[type=range].hw-slider{-webkit-appearance:none;appearance:none;flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.16);accent-color:var(--teal);outline:none;}
+  input[type=range].hw-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;border-radius:50%;background:var(--teal);border:none;cursor:pointer;}
+  input[type=range].hw-slider::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--teal);border:none;cursor:pointer;}
+  .hw-slider-value{font-family:var(--font-mono);font-size:13px;color:var(--mint);min-width:44px;text-align:right;}
+  .hw-status{margin-top:14px;font-size:12.5px;line-height:1.6;color:var(--text-muted);min-height:1.2em;}
+  .hw-status.ok{color:var(--mint);}
+  .hw-status.err{color:var(--error);}
+  .hw-camera-frame,.hw-camera-placeholder{width:100%;max-width:400px;height:300px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;display:block;}
+  .hw-camera-frame{object-fit:cover;}
+  .hw-camera-placeholder{display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:13px;text-align:center;padding:0 20px;}
 
   .support-toggle-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:14px 16px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;}
   .support-toggle-row input{width:18px;height:18px;accent-color:var(--teal);}
@@ -878,19 +950,23 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
-  var SETTINGS_TABS = [
-    { id: 'internet', label: 'Internet' },
-    { id: 'pair', label: 'Pairing' },
-    { id: 'support', label: 'Support' },
-    { id: 'timezone', label: 'Timezone' },
-    { id: 'privacy', label: 'Privacy' },
-    { id: 'changelog', label: 'Changelog' }
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
+  // Left-hand nav, grouped. Was a flat horizontal row of tabs; with the
+  // Devices group added it needed a sidebar with parent/child grouping.
+  // Groups are always expanded -- see the .settings-sidebar CSS comment.
+  var SETTINGS_NAV = [
+    { group: 'Network', items: [ { id: 'internet', label: 'Wi-Fi & Internet' }, { id: 'pair', label: 'Pairing' } ] },
+    { group: 'Devices', items: [ { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
+    { group: 'Support', items: [ { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
+    { group: 'System', items: [ { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] }
   ];
 
   function settingsTabForState(state){
     if (state === 'pairEntry' || state === 'pairConnecting' || state === 'pairError') return 'pair';
+    if (state === 'speakerSettings') return 'speaker';
+    if (state === 'microphoneSettings') return 'microphone';
+    if (state === 'cameraSettings') return 'camera';
     if (state === 'supportSettings') return 'support';
     if (state === 'crashReportSettings') return 'privacy';
     if (state === 'timezoneSettings') return 'timezone';
@@ -900,13 +976,22 @@
 
   function renderSettingsShell(state, innerHtml){
     var activeTab = settingsTabForState(state);
-    var showTabs = !!SETTINGS_TOP_STATES[state];
+    // Only the top-level screen of each tab shows the nav -- a half-done
+    // wifi/pair sub-flow (wifiPassword, pairConnecting, ...) keeps it hidden
+    // so `back` there steps within the flow rather than looking like it
+    // should switch tabs. Same states as before, just a sidebar now.
+    var showNav = !!SETTINGS_TOP_STATES[state];
     // wifiConnecting/pairConnecting are transient, no-button screens by
     // design (see their own render*() comments) -- no close affordance
     // there either, same reasoning.
     var showClose = state !== 'wifiConnecting' && state !== 'pairConnecting';
-    var tabsHtml = SETTINGS_TABS.map(function(t){
-      return '<button type="button" class="settings-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '">' + t.label + '</button>';
+    var navHtml = SETTINGS_NAV.map(function(g){
+      return '<div class="settings-nav-group">' +
+        '<div class="settings-nav-label">' + g.group + '</div>' +
+        g.items.map(function(t){
+          return '<button type="button" class="settings-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '">' + t.label + '</button>';
+        }).join('') +
+      '</div>';
     }).join('');
     return (
       '<div class="screen" data-screen="settings">' +
@@ -915,8 +1000,9 @@
             '<h2 class="settings-title">Settings</h2>' +
             (showClose ? '<button type="button" class="settings-close" id="btnSettingsClose" title="Close" aria-label="Close">&times;</button>' : '') +
           '</div>' +
-          (showTabs ? '<div class="settings-tabs" role="tablist">' + tabsHtml + '</div>' : '') +
-          '<div class="settings-body">' + innerHtml + '</div>' +
+          (showNav
+            ? '<div class="settings-shell"><div class="settings-sidebar">' + navHtml + '</div><div class="settings-body">' + innerHtml + '</div></div>'
+            : '<div class="settings-body">' + innerHtml + '</div>') +
         '</div>' +
       '</div>'
     );
@@ -948,6 +1034,13 @@
     renderUpdateIcon();
   }
 
+  // Signature of the last full render of the Camera tab (everything about it
+  // EXCEPT the frame). While previewing, the backend re-emits cameraSettings
+  // ~1x/sec with only a new frameDataUrl -- a full screenRoot re-render each
+  // time visibly rebuilds the whole panel (sidebar, header, scroll pos) and
+  // flickers. When only the frame changed, swap the <img src> in place.
+  var lastCameraSig = null;
+
   function renderImpl(){
     var state = current.state, data = current.data || {};
     // See #tzDropdownRoot's own HTML comment: it's a floating overlay
@@ -955,6 +1048,19 @@
     // own explicit teardown on every re-render rather than getting wiped
     // for free by screenRoot.innerHTML being replaced below.
     document.getElementById('tzDropdownRoot').innerHTML = '';
+
+    if (state === 'cameraSettings' && data.frameDataUrl){
+      var camSig = 'a' + (data.available ? 1 : 0) + 'p' + (data.previewing ? 1 : 0) + 'e' + (data.error || '');
+      var camImg = document.getElementById('hwCameraFrame');
+      if (camImg && camImg.tagName === 'IMG' && camSig === lastCameraSig){
+        camImg.src = data.frameDataUrl;
+        return; // render() still runs renderUpdateIcon() after this
+      }
+      lastCameraSig = camSig;
+    } else {
+      lastCameraSig = null;
+    }
+
     var html = '';
     if (state === 'empty') html = renderEmpty(data);
     else if (state === 'picker') html = renderPicker(data);
@@ -972,6 +1078,9 @@
     else if (state === 'pairEntry') html = renderPairEntry(data);
     else if (state === 'pairConnecting') html = renderPairConnecting(data);
     else if (state === 'pairError') html = renderPairError(data);
+    else if (state === 'speakerSettings') html = renderSpeakerSettings(data);
+    else if (state === 'microphoneSettings') html = renderMicrophoneSettings(data);
+    else if (state === 'cameraSettings') html = renderCameraSettings(data);
     else if (state === 'supportSettings') html = renderSupportSettings(data);
     else if (state === 'timezoneSettings') html = renderTimezoneSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
@@ -1344,6 +1453,91 @@
     );
   }
 
+  // Speaker / Microphone / Camera tabs -- all LOCAL hardware checks, no
+  // Brain involved (see membrane/session/hardware-test.sh). Modeled on
+  // renderSupportSettings/renderTimezoneSettings: heading + blurb + a
+  // narrow control column, restrained empty states when the device isn't
+  // there.
+  function renderHwSettingsFrame(screen, title, blurb, inner){
+    return (
+      '<div class="screen" data-screen="' + screen + '">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">' + title + '</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">' + blurb + '</p>' +
+          inner +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderHwVolumeControl(idPrefix, volume){
+    // No usable mixer control -- show nothing rather than a dead slider.
+    if (volume == null) return '';
+    var v = Math.max(0, Math.min(100, volume | 0));
+    return (
+      '<label class="field-label">Volume</label>' +
+      '<div class="hw-slider-row">' +
+        '<input type="range" min="0" max="100" step="1" value="' + v + '" class="hw-slider" id="field' + idPrefix + 'Volume">' +
+        '<span class="hw-slider-value" id="hw' + idPrefix + 'VolumeValue">' + v + '%</span>' +
+      '</div>'
+    );
+  }
+
+  function renderSpeakerSettings(data){
+    var inner;
+    if (!data.card){
+      inner = '<p style="font-size:13px;color:var(--text-dim);">' + escapeHtml(data.error || 'No speaker detected on this device.') + '</p>';
+    } else {
+      inner =
+        renderHwVolumeControl('Speaker', data.volume) +
+        '<button type="button" class="btn-secondary" id="btnSpeakerTest" style="margin-top:8px;">Play test sound</button>' +
+        '<p class="hw-status' + (data.error ? ' err' : '') + '" id="hwSpeakerStatus">' + escapeHtml(data.error || '') + '</p>';
+    }
+    return renderHwSettingsFrame('speakerSettings', 'Speaker',
+      'Set the output volume and play a short test tone. This is your Membrane’s own speaker — a Brain session has its own separate volume.',
+      inner);
+  }
+
+  function renderMicrophoneSettings(data){
+    var inner;
+    if (!data.card){
+      inner = '<p style="font-size:13px;color:var(--text-dim);">' + escapeHtml(data.error || 'No microphone detected on this device.') + '</p>';
+    } else {
+      var status = '', cls = '';
+      if (data.testing){ status = 'Recording 3 seconds, then playing it back…'; }
+      else if (data.testResult === 'ok'){ status = 'Recorded and played back cleanly — the microphone works.'; cls = ' ok'; }
+      else if (data.error){ status = data.error; cls = ' err'; }
+      inner =
+        renderHwVolumeControl('Mic', data.volume) +
+        '<button type="button" class="btn-secondary" id="btnMicTest" style="margin-top:8px;"' + (data.testing ? ' disabled' : '') + '>Test microphone</button>' +
+        '<p class="hw-status' + cls + '" id="hwMicStatus">' + escapeHtml(status) + '</p>';
+    }
+    return renderHwSettingsFrame('microphoneSettings', 'Microphone',
+      'Set the input level and run a quick check: it records three seconds from the mic and plays it straight back on the speaker.',
+      inner);
+  }
+
+  function renderCameraSettings(data){
+    var inner;
+    if (!data.available){
+      inner = '<div class="hw-camera-placeholder">' + escapeHtml(data.error || 'No camera detected on this device.') + '</div>';
+    } else {
+      var previewing = !!data.previewing;
+      inner =
+        (data.frameDataUrl
+          ? '<img class="hw-camera-frame" id="hwCameraFrame" alt="Camera preview" src="' + data.frameDataUrl + '">'
+          : '<div class="hw-camera-placeholder" id="hwCameraFrame">' + (previewing ? 'Starting preview…' : 'Preview is off.') + '</div>') +
+        '<button type="button" class="btn-secondary" id="btnCameraPreview" style="margin-top:12px;">' +
+          (previewing ? 'Stop preview' : 'Start preview') +
+        '</button>' +
+        '<p style="margin:12px 0 0;font-size:11.5px;color:var(--text-faint);">The preview refreshes about once a second — that’s just how this check works, not a fault with the camera. Inside a Brain session the video is full-speed.</p>' +
+        '<p class="hw-status' + (data.error ? ' err' : '') + '" id="hwCameraStatus">' + escapeHtml(data.error || '') + '</p>';
+    }
+    return renderHwSettingsFrame('cameraSettings', 'Camera',
+      'Show a preview from the webcam so you can confirm it’s working and pointed the right way, before a Brain session ever uses it.',
+      inner);
+  }
+
   function renderSupportSettings(data){
     var enabled = !!data.enabled;
     var conn = data.connection;
@@ -1500,6 +1694,19 @@
   function bindScreen(state, data){
     try { bindScreenImpl(state, data); }
     catch (err) { reportCaughtError(err); }
+  }
+
+  // Shared by the Speaker/Microphone tabs (hardware-test.sh): live-update
+  // the "NN%" readout while dragging, but only emit the set event on
+  // release ('change') so a drag across the track isn't hundreds of
+  // amixer calls. No-ops cleanly if the slider isn't in the DOM (the tab
+  // rendered its no-device empty state instead).
+  function bindHwVolumeSlider(sliderId, valueId, eventName){
+    var slider = document.getElementById(sliderId);
+    if (!slider) return;
+    var out = document.getElementById(valueId);
+    on(slider, 'input', function(){ if (out) out.textContent = slider.value + '%'; });
+    on(slider, 'change', function(){ emit(eventName, { volume: parseInt(slider.value, 10) }); });
   }
 
   function bindScreenImpl(state, data){
@@ -1678,6 +1885,22 @@
     else if (state === 'pairError'){
       on(document.getElementById('btnPairTryAgain'), 'click', function(){ emit('slime:retry'); });
       on(document.getElementById('btnBackFromPairError'), 'click', function(){ emit('slime:back'); });
+    }
+    else if (state === 'speakerSettings'){
+      bindHwVolumeSlider('fieldSpeakerVolume', 'hwSpeakerVolumeValue', 'slime:speaker-volume-set');
+      var btnSpk = document.getElementById('btnSpeakerTest');
+      if (btnSpk) on(btnSpk, 'click', function(){ emit('slime:speaker-test', {}); });
+    }
+    else if (state === 'microphoneSettings'){
+      bindHwVolumeSlider('fieldMicVolume', 'hwMicVolumeValue', 'slime:mic-volume-set');
+      var btnMic = document.getElementById('btnMicTest');
+      if (btnMic) on(btnMic, 'click', function(){ emit('slime:mic-test', {}); });
+    }
+    else if (state === 'cameraSettings'){
+      var btnCam = document.getElementById('btnCameraPreview');
+      if (btnCam) on(btnCam, 'click', function(){
+        emit(data.previewing ? 'slime:camera-preview-stop' : 'slime:camera-preview-start', {});
+      });
     }
     else if (state === 'supportSettings'){
       on(document.getElementById('fieldSupportToggle'), 'change', function(e){
@@ -2085,7 +2308,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:mic-volume-set','slime:mic-test','slime:camera-preview-start','slime:camera-preview-stop','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2109,6 +2332,27 @@
     var demoCrashReportEnabled = false;
     var demoTimezone = 'UTC';
     var demoSignedInEmail = null;
+    var demoSpeakerVolume = 65;
+    var demoMicVolume = 50;
+    var demoMicTesting = false;
+    var demoMicTestResult = null;
+    var demoCameraPreviewing = false;
+    var demoCameraFrame = null;
+    // A tiny 4:3 solid-colour JPEG data URI, swapped on each poll tick so
+    // the demo preview visibly "updates" -- stands in for a real fswebcam
+    // grab. (Colours cycle; content is irrelevant.)
+    var DEMO_CAM_FRAMES = [
+      'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#123"/><circle cx="200" cy="150" r="70" fill="#00C2A8"/><text x="200" y="270" fill="#8aa" font-size="14" text-anchor="middle" font-family="monospace">demo preview</text></svg>'),
+      'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#132"/><circle cx="220" cy="140" r="70" fill="#00F2FE"/><text x="200" y="270" fill="#8aa" font-size="14" text-anchor="middle" font-family="monospace">demo preview</text></svg>')
+    ];
+    var demoCamTimer = null;
+    var demoCamFrameIdx = 0;
+    function demoCameraState(){
+      return { mode: 'settings', available: true, previewing: demoCameraPreviewing, frameDataUrl: demoCameraFrame, error: null };
+    }
+    function demoStopCamTimer(){
+      if (demoCamTimer){ clearInterval(demoCamTimer); demoCamTimer = null; }
+    }
 
     document.addEventListener('slime:open-settings', function(){
       demoWifiMode = 'settings';
@@ -2121,6 +2365,13 @@
         window.SlimeUI.setState('wifiList', { networks: demoNetworks, scanning: false, mode: 'settings', connectionType: 'ethernet', connectionSsid: '', skippable: false });
       } else if (tab === 'pair'){
         window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
+      } else if (tab === 'speaker'){
+        window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+      } else if (tab === 'microphone'){
+        window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: demoMicTesting, testResult: demoMicTestResult, error: null });
+      } else if (tab === 'camera'){
+        demoStopCamTimer();
+        window.SlimeUI.setState('cameraSettings', demoCameraState());
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
       } else if (tab === 'timezone'){
@@ -2151,6 +2402,49 @@
     document.addEventListener('slime:timezone-set', function(e){
       demoTimezone = e.detail.timezone;
       window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
+    });
+
+    document.addEventListener('slime:speaker-volume-set', function(e){
+      demoSpeakerVolume = e.detail.volume | 0;
+      window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+    });
+
+    document.addEventListener('slime:speaker-test', function(){
+      window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+    });
+
+    document.addEventListener('slime:mic-volume-set', function(e){
+      demoMicVolume = e.detail.volume | 0;
+      window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: false, testResult: demoMicTestResult, error: null });
+    });
+
+    document.addEventListener('slime:mic-test', function(){
+      demoMicTesting = true; demoMicTestResult = null;
+      window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: true, testResult: null, error: null });
+      setTimeout(function(){
+        demoMicTesting = false; demoMicTestResult = 'ok';
+        if (current.state === 'microphoneSettings'){
+          window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: false, testResult: 'ok', error: null });
+        }
+      }, 3200);
+    });
+
+    document.addEventListener('slime:camera-preview-start', function(){
+      demoCameraPreviewing = true;
+      demoStopCamTimer();
+      demoCamTimer = setInterval(function(){
+        if (current.state !== 'cameraSettings' || !demoCameraPreviewing){ demoStopCamTimer(); return; }
+        demoCameraFrame = DEMO_CAM_FRAMES[demoCamFrameIdx++ % DEMO_CAM_FRAMES.length];
+        window.SlimeUI.setState('cameraSettings', demoCameraState());
+      }, 1000);
+      window.SlimeUI.setState('cameraSettings', demoCameraState());
+    });
+
+    document.addEventListener('slime:camera-preview-stop', function(){
+      demoCameraPreviewing = false;
+      demoCameraFrame = null;
+      demoStopCamTimer();
+      window.SlimeUI.setState('cameraSettings', demoCameraState());
     });
 
     function startDemoSlimeId(){
@@ -2339,6 +2633,12 @@
       'slime:pair-skip': 'pairSkip',
       'slime:support-toggle': 'supportToggle',
       'slime:timezone-set': 'timezoneSet',
+      'slime:speaker-volume-set': 'speakerVolumeSet',
+      'slime:speaker-test': 'speakerTest',
+      'slime:mic-volume-set': 'micVolumeSet',
+      'slime:mic-test': 'micTest',
+      'slime:camera-preview-start': 'cameraPreviewStart',
+      'slime:camera-preview-stop': 'cameraPreviewStop',
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',
