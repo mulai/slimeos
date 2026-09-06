@@ -15,7 +15,7 @@
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
-            'crashReportSettings' | 'timezoneSettings' | 'changelogSettings' |
+            'crashReportSettings' | 'displaySettings' | 'timezoneSettings' | 'changelogSettings' |
             'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
        empty:        { signedInEmail: string | null }
@@ -158,6 +158,19 @@
                        // decision is instead made via the one-shot
                        // 'showCrashConsent' message below, before the user
                        // has ever opened Settings at all.
+       displaySettings: { mode: 'settings', uiScale: '1'|'1.25'|'1.5'|'2',
+                          resolution: 'auto'|'1920x1080'|'1280x720',
+                          audioOutput: 'auto'|'analog'|'hdmi',
+                          audioOutputs: string[], error: string | null }
+                       // Settings panel's Display & Sound tab (see
+                       // membrane/session/display-settings.sh). Three
+                       // segmented pick-one rows; `audioOutputs` is the
+                       // subset of ids this hardware can actually do (hdmi
+                       // only when an HDMI/DP audio device exists). uiScale
+                       // is echoed back on setStatus and applied as a page
+                       // zoom; the other two land in the prefs file and
+                       // take effect on the next Brain connect. No `boot`
+                       // mode, same as supportSettings/timezoneSettings.
        timezoneSettings: { mode: 'settings', current: string,
                           timezones: string[], error: string | null }
                        // Settings panel's Timezone tab (see
@@ -299,6 +312,8 @@
    'slime:pair-skip'       {}                             // boot mode only
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
+   'slime:display-set'     { uiScale, resolution, audioOutput }  // Settings > Display & Sound -- always the whole
+                                                          // current triplet, fired on any segmented-row change
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
    'slime:speaker-volume-set' { volume }                   // Devices > Speaker tab -- 0-100, fired on slider release
    'slime:speaker-test'    {}                              // Devices > Speaker tab -- play the built-in test tone
@@ -487,6 +502,13 @@
   .tz-option{padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);cursor:pointer;}
   .tz-option.active{background:rgba(0,194,168,0.15);color:var(--mint);}
   .tz-empty{padding:9px 12px;font-size:13px;color:var(--text-dim);}
+
+  /* Display & Sound tab: segmented pick-one rows. In-page buttons, not a
+     native <select> -- same foreign-surface avoidance as .tz-combobox
+     above. */
+  .seg-group{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px;}
+  .seg-btn{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--text-muted);background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 16px;cursor:pointer;outline:none;user-select:none;}
+  .seg-btn.active{color:#04221f;background:linear-gradient(150deg,#00F2FE,#00C2A8);border-color:transparent;}
 
   button{cursor:pointer;}
   button:focus-visible, [tabindex]:focus-visible, a:focus-visible{outline:2px solid var(--mint);outline-offset:3px;}
@@ -858,6 +880,22 @@
       pendingUpdateVersion = opts.update || null;
       renderUpdateIcon();
     }
+    if ('uiScale' in opts){
+      applyUiScale(opts.uiScale);
+    }
+  }
+
+  // MEMBRANE_UI_SCALE from the Display & Sound tab, carried on every
+  // setStatus (see coordinator.sh). Applied as a CSS zoom on the document
+  // root so every screen -- lock, picker, Settings, the static
+  // sessionActive backdrop -- scales together. `zoom` (not transform:
+  // scale) so layout genuinely reflows to the smaller effective viewport,
+  // which is the point on a 4K panel where 1:1 text is unreadable. The RDP
+  // window is a separate Wayland surface and is unaffected -- that's what
+  // the Brain-resolution control is for.
+  function applyUiScale(scale){
+    var z = parseFloat(scale);
+    document.documentElement.style.zoom = (z && z > 0 && z !== 1) ? String(z) : '';
   }
 
   // Shown only on the idle empty/picker screens, even though the backend
@@ -953,8 +991,8 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, timezoneSettings:1, changelogSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1 };
   // Left-hand nav, grouped. Was a flat horizontal row of tabs; with the
   // Devices group added it needed a sidebar with parent/child grouping.
   // Groups are always expanded -- see the .settings-sidebar CSS comment.
@@ -962,7 +1000,7 @@
     { group: 'Network', items: [ { id: 'internet', label: 'Wi-Fi & Internet' }, { id: 'pair', label: 'Pairing' } ] },
     { group: 'Devices', items: [ { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
     { group: 'Support', items: [ { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
-    { group: 'System', items: [ { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] }
+    { group: 'System', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] }
   ];
 
   function settingsTabForState(state){
@@ -972,6 +1010,7 @@
     if (state === 'cameraSettings') return 'camera';
     if (state === 'supportSettings') return 'support';
     if (state === 'crashReportSettings') return 'privacy';
+    if (state === 'displaySettings') return 'display';
     if (state === 'timezoneSettings') return 'timezone';
     if (state === 'changelogSettings') return 'changelog';
     return 'internet';
@@ -1085,6 +1124,7 @@
     else if (state === 'microphoneSettings') html = renderMicrophoneSettings(data);
     else if (state === 'cameraSettings') html = renderCameraSettings(data);
     else if (state === 'supportSettings') html = renderSupportSettings(data);
+    else if (state === 'displaySettings') html = renderDisplaySettings(data);
     else if (state === 'timezoneSettings') html = renderTimezoneSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
     else if (state === 'changelogSettings') html = renderChangelogSettings(data);
@@ -1591,6 +1631,42 @@
     );
   }
 
+  // Settings > Display & Sound (see display-settings.sh). Three
+  // segmented pick-one rows. Selecting any option emits the whole current
+  // triplet as slime:display-set -- the backend validates + persists, then
+  // re-emits displaySettings so the authoritative selection is what
+  // finally renders.
+  function renderDisplaySettings(data){
+    var scale = data.uiScale || '1';
+    var resolution = data.resolution || 'auto';
+    var audio = data.audioOutput || 'auto';
+    var outputs = (data.audioOutputs && data.audioOutputs.length) ? data.audioOutputs : ['auto', 'analog'];
+    var error = data.error;
+    var SCALE_OPTS = [['1', 'Normal'], ['1.25', 'Large'], ['1.5', 'Larger'], ['2', 'Largest']];
+    var RES_OPTS = [['auto', 'Automatic'], ['1920x1080', '1920 × 1080'], ['1280x720', '1280 × 720']];
+    var AUDIO_LABELS = { auto: 'Automatic', analog: 'Headphones / speakers', hdmi: 'TV / HDMI' };
+    var audioOpts = outputs.map(function(id){ return [id, AUDIO_LABELS[id] || id]; });
+    function seg(name, opts, sel, af){
+      return '<div class="seg-group" data-seg="' + name + '">' + opts.map(function(o, i){
+        return '<div class="seg-btn' + (o[0] === sel ? ' active' : '') + '" role="button" tabindex="0"' +
+               (af && i === 0 ? ' data-autofocus' : '') +
+               ' data-val="' + escapeHtml(o[0]) + '">' + escapeHtml(o[1]) + '</div>';
+      }).join('') + '</div>';
+    }
+    return (
+      '<div class="screen" data-screen="displaySettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Display &amp; Sound</h2>' +
+          '<p style="margin:0 0 22px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Tune this Membrane for the screen it’s plugged into. Display size changes right away; the Brain settings apply the next time you connect.</p>' +
+          '<label class="field-label">Display size</label>' + seg('uiScale', SCALE_OPTS, scale, true) +
+          '<label class="field-label">Brain resolution</label>' + seg('resolution', RES_OPTS, resolution) +
+          '<label class="field-label">Sound output</label>' + seg('audioOutput', audioOpts, audio) +
+          (error ? '<p style="margin:4px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderCrashReportSettings(data){
     var enabled = !!data.enabled;
     return (
@@ -1935,6 +2011,32 @@
     }
     else if (state === 'supportSettings'){
       bindToggleRow('rowSupportToggle', 'fieldSupportToggle', 'lblSupportToggle', 'Remote Support is', 'slime:support-toggle');
+    }
+    else if (state === 'displaySettings'){
+      var segCurrent = function(name){
+        var b = screenRoot.querySelector('.seg-group[data-seg="' + name + '"] .seg-btn.active');
+        return b ? b.getAttribute('data-val') : null;
+      };
+      Array.prototype.forEach.call(screenRoot.querySelectorAll('.seg-btn'), function(btn){
+        var choose = function(){
+          if (btn.classList.contains('active')) return;
+          var group = btn.parentNode;
+          // Optimistic highlight so the tap feels instant; the backend
+          // re-emits displaySettings right after and this rebuilds anyway.
+          Array.prototype.forEach.call(group.querySelectorAll('.seg-btn'), function(b){
+            b.classList.toggle('active', b === btn);
+          });
+          emit('slime:display-set', {
+            uiScale: segCurrent('uiScale'),
+            resolution: segCurrent('resolution'),
+            audioOutput: segCurrent('audioOutput')
+          });
+        };
+        on(btn, 'click', choose);
+        on(btn, 'keydown', function(e){
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){ e.preventDefault(); choose(); }
+        });
+      });
     }
     else if (state === 'timezoneSettings'){
       var tzInput = document.getElementById('fieldTimezone');
@@ -2289,6 +2391,7 @@
     else if (s === 'pairError') emit('slime:back');
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'supportSettings') emit('slime:back');
+    else if (s === 'displaySettings') emit('slime:back');
     else if (s === 'timezoneSettings') emit('slime:back');
     else if (s === 'crashReportSettings') emit('slime:back');
     else if (s === 'slimeIdEntry') emit('slime:back');
@@ -2335,7 +2438,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:mic-volume-set','slime:mic-test','slime:camera-preview-start','slime:camera-preview-stop','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:mic-volume-set','slime:mic-test','slime:camera-preview-start','slime:camera-preview-stop','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2357,6 +2460,9 @@
     var demoSupportEnabled = false;
     var demoSupportConnection = null;
     var demoCrashReportEnabled = false;
+    var demoUiScale = '1';
+    var demoResolution = 'auto';
+    var demoAudioOutput = 'auto';
     var demoTimezone = 'UTC';
     var demoSignedInEmail = null;
     var demoSpeakerVolume = 65;
@@ -2401,6 +2507,8 @@
         window.SlimeUI.setState('cameraSettings', demoCameraState());
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
+      } else if (tab === 'display'){
+        window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], error: null });
       } else if (tab === 'timezone'){
         window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
       } else if (tab === 'privacy'){
@@ -2419,6 +2527,15 @@
         password: Math.random().toString(36).slice(2, 10)
       } : null;
       window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null });
+    });
+
+    document.addEventListener('slime:display-set', function(e){
+      var d = e.detail || {};
+      if (d.uiScale) demoUiScale = d.uiScale;
+      if (d.resolution) demoResolution = d.resolution;
+      if (d.audioOutput) demoAudioOutput = d.audioOutput;
+      window.SlimeUI.setStatus({ uiScale: demoUiScale });
+      window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], error: null });
     });
 
     document.addEventListener('slime:crash-report-toggle', function(e){
@@ -2659,6 +2776,7 @@
       'slime:pair-submit': 'pairSubmit',
       'slime:pair-skip': 'pairSkip',
       'slime:support-toggle': 'supportToggle',
+      'slime:display-set': 'displaySet',
       'slime:timezone-set': 'timezoneSet',
       'slime:speaker-volume-set': 'speakerVolumeSet',
       'slime:speaker-test': 'speakerTest',
@@ -2699,7 +2817,7 @@
         var msg;
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
         if (msg.type === 'setState') window.SlimeUI.setState(msg.state, msg.data);
-        else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel, update: msg.update });
+        else if (msg.type === 'setStatus') window.SlimeUI.setStatus({ clock: msg.clock, tunnel: msg.tunnel, update: msg.update, uiScale: msg.uiScale });
         else if (msg.type === 'showCrashConsent') showCrashConsentModal();
         else if (msg.type === 'showSaveBrainPrompt') showSaveBrainPromptModal(msg.data);
         else if (msg.type === 'showRecoveryPin') showRecoveryPinModal((msg.data || {}).pin);

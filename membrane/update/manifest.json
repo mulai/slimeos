@@ -1,7 +1,7 @@
 {
-  "version": "0.3.5",
-  "released_at": "2026-09-06T12:00:00Z",
-  "changelog": "0.3.5\n- Fixed: a Brain's sound now comes out of a TV or monitor connected over HDMI or DisplayPort. Before, audio was always sent to the analog headphone jack even when nothing was plugged into it, so anything playing in a Brain session was silent on an HDMI screen. This is automatic; to force a choice, set AUDIO_OUTPUT to analog or hdmi in /etc/slimeos/config. The Settings speaker and microphone tests now play through the same output.\n- Fixed: on the Remote Support and Privacy screens in Settings, the on/off box couldn't be switched by clicking the box itself (only its label text worked). The whole row is now clickable.",
+  "version": "0.3.6",
+  "released_at": "2026-09-06T18:00:00Z",
+  "changelog": "0.3.6\n- New: Settings has a Display & Sound tab. Display size enlarges the Membrane's own screens straight away — handy on a big 4K TV where the text is otherwise tiny. Brain resolution and Sound output (Automatic / Headphones / TV over HDMI) apply the next time you connect to a Brain.\n- The sound-output choice from 0.3.5 is now a visible setting instead of a config-file-only option.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -9,7 +9,7 @@
     },
     {
       "src": "session/coordinator.sh",
-      "sha256": "940ebe09884043a4b52eeda6ac24e5449193a7ef748360dc9af1c3476e0fc12d"
+      "sha256": "f5ff315a89c553a093b5c6f72b5f085bdd1b9098cb98bcf3b6db1d4a58e9e179"
     },
     {
       "src": "session/network-setup.sh",
@@ -48,12 +48,16 @@
       "sha256": "da701f5a60d89344e94f678cbf5041967e2bbeaccf7d1b0dcb28095bffa25d97"
     },
     {
+      "src": "session/display-settings.sh",
+      "sha256": "dde6fefdee673e411392b5522bccac704d732c0c83cefc894a782d8ae9106c6b"
+    },
+    {
       "src": "freerdp/connect.sh",
       "sha256": "816b9e5de779fbd52e219385ff12161b175ffbdb3407240d7aa04e6fe874938e"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "3b2f61b170ff7bb1c00787af7e5a40731b44975b1ded87cbba98c8af128a9089"
+      "sha256": "0b4b7a6dae3641c334ff00fb5b592394882f3a1d288d8659914c071420f283d2"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",
@@ -69,7 +73,7 @@
     },
     {
       "src": "update/dest-map.txt",
-      "sha256": "2f0ab0760aa69094e6aade4b922f5199397e98a320445851330a2b49f23f7944"
+      "sha256": "50fc6c266746b0b21ddee4a9dd0e603e87fb7f0e2def126bd242a3ef6c4c4180"
     }
   ],
   "bridge": {

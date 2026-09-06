@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.5"
+SLIMEOS_VERSION="0.3.6"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -377,9 +377,14 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
 # as changelog.sh/timezone.sh) -- `source`d by coordinator.sh.
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/hardware-test.sh" \
      -o "$INSTALL_DIR/hardware-test.sh"
+# display-settings.sh: Settings > Display & Sound tab (UI zoom / Brain
+# resolution / sound output). Ordinary bundle file, same as hardware-test.sh
+# -- `source`d by coordinator.sh.
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/display-settings.sh" \
+     -o "$INSTALL_DIR/display-settings.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/update.sh"
 
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --
@@ -632,6 +637,11 @@ if [[ ! -f "$CONFIG_DIR/config" ]]; then
 # Session-wide display/network preferences. Brains themselves (host, port,
 # username) are managed from the on-screen Connect screen, saved to
 # /etc/slimeos/brains.json — no need to edit this file for that.
+#
+# The values below are admin defaults. Settings > Display & Sound writes
+# its own overrides for MEMBRANE_UI_SCALE / RDP_WIDTH / RDP_HEIGHT /
+# AUDIO_OUTPUT to /etc/slimeos/brains/display-prefs, which is sourced after
+# this file — so an on-screen choice wins over anything set here.
 
 # RDP display resolution (leave blank for fullscreen/auto)
 RDP_WIDTH=""

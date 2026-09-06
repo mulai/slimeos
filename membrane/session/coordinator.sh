@@ -36,8 +36,9 @@
 #   {"type":"speakerVolumeSet","volume":0-100} | {"type":"speakerTest"}   only consumed by do_speaker_settings, see hardware-test.sh
 #   {"type":"micVolumeSet","volume":0-100} | {"type":"micTest"}           only consumed by do_microphone_settings, see hardware-test.sh
 #   {"type":"cameraPreviewStart"} | {"type":"cameraPreviewStop"}          only consumed by do_camera_settings, see hardware-test.sh
-#   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"timezone"|"changelog"}  only consumed by whichever of
-#     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_timezone/do_changelog is currently running in `settings` mode —
+#   {"type":"displaySet","uiScale":..,"resolution":..,"audioOutput":..}   only consumed by do_display_settings, see display-settings.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"display"|"timezone"|"changelog"}  only consumed by whichever of
+#     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_display_settings/do_timezone/do_changelog is currently running in `settings` mode —
 #     switches the Settings panel to a different tab without leaving it (see the
 #     openSettings case's SETTINGS_NEXT_TAB loop below)
 #   {"type":"crashConsent","granted":true|false}            handled directly here (see the outer dispatch's
@@ -84,8 +85,10 @@
 #     untouched unless every file was verified.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|speakerSettings|microphoneSettings|cameraSettings|supportSettings|crashReportSettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
-#   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|speakerSettings|microphoneSettings|cameraSettings|supportSettings|crashReportSettings|displaySettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
+#   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null,"uiScale":string|null}
+#     `uiScale` is MEMBRANE_UI_SCALE from the Display & Sound tab (default "1"); the page applies it
+#     as a CSS zoom on the whole UI. Like `clock`, one value per connect/resync is enough.
 #     `update`, when non-null, is the newer version string from the last successful
 #     do_update_check() (update.sh) — sent on every screen, but index.html only shows the status
 #     strip's update icon while idle (empty/picker), so tapping it can never race a blocking
@@ -111,7 +114,7 @@
 # empty/picker/credentials/connecting/error/reconnecting/wifiList/
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
 # speakerSettings/microphoneSettings/cameraSettings/supportSettings/
-# crashReportSettings/timezoneSettings/changelogSettings/
+# crashReportSettings/displaySettings/timezoneSettings/changelogSettings/
 # slimeIdConnecting/slimeIdEntry/slimeIdError.
 # `empty`/`picker` both additionally carry `signedInEmail` (null unless
 # do_slime_id_login() has ever successfully signed this device in).
@@ -138,7 +141,7 @@ FREERDP_LOG_FILE="/var/log/slimeos/connect.log"
 log() { echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] [coordinator] $*" >&2; }
 
 emit_state()  { jq -nc --arg state "$1" --argjson data "$2" '{type:"setState", state:$state, data:$data}'; }
-emit_status() { jq -nc --arg clock "$1" --arg tunnel "$2" --arg update "$3" '{type:"setStatus", clock:$clock, tunnel:$tunnel, update:(if $update == "" then null else $update end)}'; }
+emit_status() { jq -nc --arg clock "$1" --arg tunnel "$2" --arg update "$3" --arg scale "${4:-}" '{type:"setStatus", clock:$clock, tunnel:$tunnel, update:(if $update == "" then null else $update end), uiScale:(if $scale == "" then null else $scale end)}'; }
 
 # Sends the current real clock + tunnel + pending-update state. The page
 # auto-advances the clock locally every 30s after that (see index.html), so
@@ -154,7 +157,11 @@ send_status() {
     else
         tunnel="down"
     fi
-    emit_status "$clock" "$tunnel" "$update_available_version"
+    # MEMBRANE_UI_SCALE (Display & Sound tab) rides along on every status
+    # push -- the page applies it as a CSS zoom on the whole UI, so one
+    # correct value per client connect/resync is enough, same "page
+    # free-runs from the last value it got" reasoning as the clock above.
+    emit_status "$clock" "$tunnel" "$update_available_version" "${MEMBRANE_UI_SCALE:-1}"
 }
 
 # Used to gate the automatic network-setup screen (see network_checked
@@ -269,10 +276,29 @@ if [[ -f "$CONFIG_DIR/config" ]]; then
     source "$CONFIG_DIR/config"
 fi
 
-RES_FLAGS="/f" # fullscreen
-if [[ -n "${RDP_WIDTH:-}" && -n "${RDP_HEIGHT:-}" ]]; then
-    RES_FLAGS="/w:${RDP_WIDTH} /h:${RDP_HEIGHT}"
+# The Settings > Display & Sound tab's saved choices (see display-settings.sh)
+# -- MEMBRANE_UI_SCALE / AUDIO_OUTPUT / RDP_WIDTH / RDP_HEIGHT. Sourced AFTER
+# config so a user choice made on-screen wins over the admin-edited default.
+# Lives in $CRED_DIR (not next to config) because that's the one directory
+# the unprivileged session already owns and can rewrite on every
+# already-installed device -- config itself is root-writable only.
+DISPLAY_PREFS_FILE="$CRED_DIR/display-prefs"
+if [[ -f "$DISPLAY_PREFS_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$DISPLAY_PREFS_FILE"
 fi
+
+# Recomputed (not just set once) so a Brain-resolution change from the
+# Display & Sound tab takes effect on the very next connect without a
+# restart -- do_display_settings() calls this again after it rewrites the
+# prefs file.
+compute_res_flags() {
+    RES_FLAGS="/f" # fullscreen
+    if [[ -n "${RDP_WIDTH:-}" && -n "${RDP_HEIGHT:-}" ]]; then
+        RES_FLAGS="/w:${RDP_WIDTH} /h:${RDP_HEIGHT}"
+    fi
+}
+compute_res_flags
 
 MIN_SESSION_SECONDS=60
 
@@ -296,6 +322,8 @@ source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
 source "$INSTALL_DIR/changelog.sh" # defines do_changelog()
 # shellcheck source=hardware-test.sh
 source "$INSTALL_DIR/hardware-test.sh" # defines do_speaker_settings(), do_microphone_settings(), do_camera_settings()
+# shellcheck source=display-settings.sh
+source "$INSTALL_DIR/display-settings.sh" # defines do_display_settings()
 
 # Gates the automatic (boot-mode) network-setup / pairing screens to once
 # per coordinator process, not once per _clientConnected -- that event also
@@ -848,6 +876,7 @@ while true; do
                     camera)     do_camera_settings settings ;;
                     support)    do_support settings ;;
                     privacy)    do_crash_reporting settings ;;
+                    display)    do_display_settings settings ;;
                     timezone)   do_timezone settings ;;
                     changelog)  do_changelog settings ;;
                 esac
