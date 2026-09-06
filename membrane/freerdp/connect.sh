@@ -92,6 +92,64 @@ default_playback_card() {
     return 1
 }
 
+# Refines default_playback_card() to a specific playback DEVICE, printed as
+# "<card-name>|<hdmi-device-number>" (the device number is empty for the
+# ordinary analog case). Honours AUDIO_OUTPUT from /etc/slimeos/config:
+#   auto (default) — if the chosen card also drives a live HDMI/DisplayPort
+#                    monitor (valid ELD), send sound to that monitor's
+#                    audio device instead of the card's analog device 0
+#   analog         — always device 0 (the analog jack)
+#   hdmi           — the card's first HDMI device even without a valid ELD,
+#                    for gear that never reports one
+#
+# Why this exists: ALSA's `CARD=<name>` with no device always resolves to
+# device 0 — the analog jack — even with nothing plugged in, so on a
+# one-codec box like the NUC6CAYH (a single `PCH` card: analog dev 0, HDMI
+# dev 3/7/8) a Brain's audio played to a dead headphone jack while the 4K
+# picture was on a TV over DisplayPort. Confirmed + fixed live 2026-09-06.
+# `aplay -l` stamps each HDMI device's ELD monitor name into its label, so
+# the row whose "[label]" is that monitor name (not the generic "HDMI N")
+# is the connected output.
+playback_target() {
+    local card idx want="${AUDIO_OUTPUT:-auto}" f mon line d lbl
+    card=$(default_playback_card) || return 1
+    if [[ "$want" == "analog" ]]; then
+        printf '%s|' "$card"
+        return 0
+    fi
+    idx=$(awk '{gsub(/\[/, "", $2)} $2 == c {print $1; exit}' c="$card" /proc/asound/cards 2>/dev/null)
+    if [[ -n "$idx" ]]; then
+        mon=""
+        if [[ "$want" == "auto" ]]; then
+            for f in /proc/asound/card"$idx"/eld*; do
+                [[ -e "$f" ]] || continue
+                grep -q "^monitor_present[[:space:]]*1" "$f" 2>/dev/null || continue
+                grep -q "^eld_valid[[:space:]]*1" "$f" 2>/dev/null || continue
+                mon=$(sed -n 's/^monitor_name[[:space:]]*//p' "$f" | head -1)
+                [[ -n "$mon" ]] && break
+            done
+            [[ -n "$mon" ]] || { printf '%s|' "$card"; return 0; }
+        fi
+        while IFS= read -r line; do
+            case "$line" in
+                *" device "*": HDMI "*) ;;
+                *) continue ;;
+            esac
+            case "$line" in
+                *": $card ["*) ;;
+                *) continue ;;
+            esac
+            d=${line#*device }; d=${d%%:*}
+            lbl=${line##*[}; lbl=${lbl%]*}
+            if [[ "$want" == "hdmi" ]] || [[ "$lbl" == "$mon" ]]; then
+                printf '%s|%s' "$card" "$d"
+                return 0
+            fi
+        done < <(aplay -l 2>/dev/null)
+    fi
+    printf '%s|' "$card"
+}
+
 # Wake a managed cloud Brain before attempting RDP. The hub's power
 # service (brain/power, http://10.10.0.1:7677 — plain HTTP over the
 # tunnel, so Membrane clock drift can't break a TLS handshake here)
@@ -464,10 +522,41 @@ do_connect() {
             # correctly, and plays standard 48kHz/S16_LE/stereo (what RDP
             # audio negotiates) without needing plughw's format
             # conversion — verified with speaker-test before switching.
-            local sound_flag="/sound:sys:alsa" playback_card
-            if playback_card=$(default_playback_card); then
-                sound_flag="/sound:sys:alsa,dev:hw:CARD=${playback_card}"
-                log "Playback ALSA card '${playback_card}' selected"
+            local sound_flag="/sound:sys:alsa" sound_alsa_env="" pt pt_card pt_dev
+            if pt=$(playback_target); then
+                pt_card=${pt%%|*}
+                pt_dev=${pt#*|}
+                if [[ -n "$pt_dev" ]]; then
+                    # A live HDMI/DisplayPort monitor's audio device.
+                    # FreeRDP's rdpsnd reuses this dev: string for
+                    # snd_mixer_attach() too, and any ",DEV=n" component
+                    # makes snd_ctl_open() fail ("Invalid CTL"), which
+                    # kills the whole rdpsnd channel — same failure class
+                    # as plughw: (see the note above), re-confirmed live
+                    # 2026-09-06. So route through a named PCM whose CTL
+                    # half is a plain per-card `type hw`: PCM -> the HDMI
+                    # device, mixer -> the card. Supplementary config; base
+                    # names (hw:, plughw:, the mic path) still resolve via
+                    # the <confdir> include. ALSA_CONFIG_PATH is scoped to
+                    # the xfreerdp3 child only.
+                    local alsa_cfg="${TMPDIR:-/tmp}/slimeos-rdp-alsa.conf"
+                    if printf '%s\n' \
+                        '<confdir:/alsa.conf>' \
+                        "pcm.slimeos_rdp_out { type plug; slave.pcm \"hw:CARD=${pt_card},DEV=${pt_dev}\" }" \
+                        "ctl.slimeos_rdp_out { type hw; card \"${pt_card}\" }" \
+                        > "$alsa_cfg" 2>/dev/null
+                    then
+                        sound_flag="/sound:sys:alsa,dev:slimeos_rdp_out"
+                        sound_alsa_env="env ALSA_CONFIG_PATH=$alsa_cfg"
+                        log "Playback -> HDMI/DP audio on card '${pt_card}' device ${pt_dev}"
+                    else
+                        sound_flag="/sound:sys:alsa,dev:hw:CARD=${pt_card}"
+                        log "Playback card '${pt_card}' (couldn't write HDMI ALSA config, using analog)"
+                    fi
+                else
+                    sound_flag="/sound:sys:alsa,dev:hw:CARD=${pt_card}"
+                    log "Playback ALSA card '${pt_card}' selected"
+                fi
             fi
 
             # Webcam redirection (MS-RDPECAM, /dvc:rdpecam) — ON by
@@ -514,7 +603,7 @@ do_connect() {
             # before trying this again — see membrane/freerdp/
             # action-noop.sh's own header for the postmortem.
             set +e
-            xfreerdp3 \
+            ${sound_alsa_env} xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
                 /u:"${slime_username}" \
                 /p:"${rdp_pass}" \

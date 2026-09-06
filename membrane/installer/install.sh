@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.4"
+SLIMEOS_VERSION="0.3.5"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -636,6 +636,12 @@ if [[ ! -f "$CONFIG_DIR/config" ]]; then
 # RDP display resolution (leave blank for fullscreen/auto)
 RDP_WIDTH=""
 RDP_HEIGHT=""
+
+# Sound output: auto | analog | hdmi
+# "auto" sends a Brain's sound to a connected HDMI/DisplayPort TV or
+# monitor when one is present (otherwise the analog jack); "analog" and
+# "hdmi" force one regardless.
+AUDIO_OUTPUT="auto"
 
 # Connection quality profile: auto | lan | broadband | wan
 # "auto" lets FreeRDP measure the real path; "lan" (the old default) told

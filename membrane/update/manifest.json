@@ -1,7 +1,7 @@
 {
-  "version": "0.3.4",
-  "released_at": "2026-09-06T00:00:00Z",
-  "changelog": "0.3.4\n- New: Settings has a Devices section -- Speaker, Microphone and Camera -- that checks each one locally, without connecting to a Brain first. Set the speaker volume and play a test tone; set the microphone level and run a 3-second record-and-play-back check; open a webcam preview (it refreshes about once a second -- that's the check, not a fault; video inside a Brain session is full-speed).\n- The Settings panel moved from one crowded row of tabs to a left-hand list grouped into Network, Devices, Support and System.\n- The Camera preview needs a small extra component. Devices installed with 0.3.4 or later have it already; on an older device the Camera tab will say so, and Speaker and Microphone still work.",
+  "version": "0.3.5",
+  "released_at": "2026-09-06T12:00:00Z",
+  "changelog": "0.3.5\n- Fixed: a Brain's sound now comes out of a TV or monitor connected over HDMI or DisplayPort. Before, audio was always sent to the analog headphone jack even when nothing was plugged into it, so anything playing in a Brain session was silent on an HDMI screen. This is automatic; to force a choice, set AUDIO_OUTPUT to analog or hdmi in /etc/slimeos/config. The Settings speaker and microphone tests now play through the same output.\n- Fixed: on the Remote Support and Privacy screens in Settings, the on/off box couldn't be switched by clicking the box itself (only its label text worked). The whole row is now clickable.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -45,15 +45,15 @@
     },
     {
       "src": "session/hardware-test.sh",
-      "sha256": "ad40fa88a063a2abe516a0e41bd5b7c502a17ec116fd3495383d323bc4d54b0a"
+      "sha256": "da701f5a60d89344e94f678cbf5041967e2bbeaccf7d1b0dcb28095bffa25d97"
     },
     {
       "src": "freerdp/connect.sh",
-      "sha256": "db142895a670e384c12047f97381a8d9baf7c204a2d38e99a9e7bd3eb5bea917"
+      "sha256": "816b9e5de779fbd52e219385ff12161b175ffbdb3407240d7aa04e6fe874938e"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "c430e029a0f37d8e21751909a5734927b17f80824ff9670c09edf7f80154931a"
+      "sha256": "3b2f61b170ff7bb1c00787af7e5a40731b44975b1ded87cbba98c8af128a9089"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",

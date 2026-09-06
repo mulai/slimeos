@@ -48,6 +48,23 @@ hw_mixer_set_pct() {
     amixer -c "$card" sset "$ctl_b" "${pct}%" >/dev/null 2>&1
 }
 
+# The `plughw:` PCM string for local test playback -- the same output
+# connect.sh routes a Brain's audio to (see playback_target() there), so
+# "Test speaker" and the mic round-trip play where the user actually hears
+# the Brain: a live HDMI/DisplayPort monitor's audio when there is one,
+# otherwise the card's analog device. Prints nothing and returns 1 if no
+# playback card exists at all.
+hw_playback_pcm() {
+    local pt dev
+    pt=$(playback_target 2>/dev/null) || return 1
+    dev=${pt#*|}
+    if [[ -n "$dev" ]]; then
+        printf 'plughw:CARD=%s,DEV=%s' "${pt%%|*}" "$dev"
+    else
+        printf 'plughw:CARD=%s' "${pt%%|*}"
+    fi
+}
+
 # Blocking read of one event line, but give up after $1 seconds and return 2
 # so the caller can do periodic work (grab a webcam frame) between events.
 # Return 1 on real EOF, same as coordinator.sh's read_event(). Used only by
@@ -116,10 +133,12 @@ do_speaker_settings() {
                     error="No speaker was found on this device."
                     continue
                 fi
-                log "Speaker test tone on card '$card'"
+                local pcm
+                pcm=$(hw_playback_pcm) || pcm="plughw:CARD=${card}"
+                log "Speaker test tone on '$pcm'"
                 local output exit_code
                 set +e
-                output=$(speaker-test -D "plughw:CARD=${card}" -c2 -twav -l1 2>&1)
+                output=$(speaker-test -D "$pcm" -c2 -twav -l1 2>&1)
                 exit_code=$?
                 set -e
                 if [[ $exit_code -ne 0 ]]; then
@@ -212,12 +231,14 @@ do_microphone_settings() {
                     '{mode:$mode, card:$card,
                       volume:(if $volume == "" then null else ($volume | tonumber) end),
                       testing:true, testResult:null, error:null}')"
-                log "Mic test: record 3s from '$card', play back on '$play_card'"
+                local play_pcm
+                play_pcm=$(hw_playback_pcm) || play_pcm="plughw:CARD=${play_card}"
+                log "Mic test: record 3s from '$card', play back on '$play_pcm'"
                 local tmp output exit_code
                 tmp=$(mktemp /tmp/slimeos-mictest.XXXXXX.wav)
                 set +e
                 output=$(arecord -D "plughw:CARD=${card}" -f cd -d 3 -q "$tmp" 2>&1 \
-                    && aplay -D "plughw:CARD=${play_card}" -q "$tmp" 2>&1)
+                    && aplay -D "$play_pcm" -q "$tmp" 2>&1)
                 exit_code=$?
                 set -e
                 rm -f "$tmp"

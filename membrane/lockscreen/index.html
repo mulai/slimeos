@@ -612,8 +612,11 @@
   .hw-camera-frame{object-fit:cover;}
   .hw-camera-placeholder{display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:13px;text-align:center;padding:0 20px;}
 
-  .support-toggle-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:14px 16px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;}
-  .support-toggle-row input{width:18px;height:18px;accent-color:var(--teal);}
+  .support-toggle-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:14px 16px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;user-select:none;outline:none;}
+  /* The inner checkbox is a display-only tick -- the whole row is the
+     control (see bindToggleRow). pointer-events:none keeps every click on
+     the row itself so there's exactly one toggle and no native/JS race. */
+  .support-toggle-row input{width:18px;height:18px;accent-color:var(--teal);pointer-events:none;}
   .support-connection{margin-top:20px;background:#0d1217;border:1px solid rgba(0,194,168,0.25);border-radius:12px;padding:18px;}
   .support-connection dl{margin:0;font-family:var(--font-mono);font-size:13px;color:var(--text);display:grid;grid-template-columns:auto 1fr;gap:6px 14px;}
   .support-connection dt{color:var(--text-dim);}
@@ -1547,10 +1550,10 @@
         '<div style="width:100%;max-width:460px;">' +
           '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Remote Support</h2>' +
           '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Let the Slime OS support team connect to this device over SSH to help troubleshoot. Off by default, and reachable only over the WireGuard tunnel — the access details below change every time you switch this on.</p>' +
-          '<label class="support-toggle-row">' +
-            '<input type="checkbox" id="fieldSupportToggle" data-autofocus' + (enabled ? ' checked' : '') + '>' +
-            '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Remote Support is ' + (enabled ? 'on' : 'off') + '</span>' +
-          '</label>' +
+          '<div class="support-toggle-row" id="rowSupportToggle" role="switch" tabindex="0" data-autofocus aria-checked="' + (enabled ? 'true' : 'false') + '">' +
+            '<input type="checkbox" id="fieldSupportToggle" tabindex="-1" aria-hidden="true"' + (enabled ? ' checked' : '') + '>' +
+            '<span id="lblSupportToggle" style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Remote Support is ' + (enabled ? 'on' : 'off') + '</span>' +
+          '</div>' +
           (error ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
           (enabled && conn ? (
             '<div class="support-connection">' +
@@ -1595,10 +1598,10 @@
         '<div style="width:100%;max-width:460px;">' +
           '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Privacy</h2>' +
           '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Automatically send anonymous error reports to help us fix bugs faster. No personal data, network details, or anything you’ve typed is ever included.</p>' +
-          '<label class="support-toggle-row">' +
-            '<input type="checkbox" id="fieldCrashReportToggle" data-autofocus' + (enabled ? ' checked' : '') + '>' +
-            '<span style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Anonymous error reporting is ' + (enabled ? 'on' : 'off') + '</span>' +
-          '</label>' +
+          '<div class="support-toggle-row" id="rowCrashReportToggle" role="switch" tabindex="0" data-autofocus aria-checked="' + (enabled ? 'true' : 'false') + '">' +
+            '<input type="checkbox" id="fieldCrashReportToggle" tabindex="-1" aria-hidden="true"' + (enabled ? ' checked' : '') + '>' +
+            '<span id="lblCrashReportToggle" style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Anonymous error reporting is ' + (enabled ? 'on' : 'off') + '</span>' +
+          '</div>' +
         '</div>' +
       '</div>'
     );
@@ -1707,6 +1710,34 @@
     var out = document.getElementById(valueId);
     on(slider, 'input', function(){ if (out) out.textContent = slider.value + '%'; });
     on(slider, 'change', function(){ emit(eventName, { volume: parseInt(slider.value, 10) }); });
+  }
+
+  // Remote Support / Privacy toggles (renderSupportSettings,
+  // renderCrashReportSettings). A bare <input type=checkbox> is
+  // interactive only through the platform's native click, and this repo's
+  // target hardware drops those clicks on some widgets (see the
+  // mousedown->click synthesis note above) -- the reported symptom was a
+  // dead checkbox whose label text still toggled. So the ROW is the
+  // control: a [tabindex] switch the synthesis path already covers, with
+  // the inner checkbox display-only (pointer-events:none) just mirroring
+  // state for the visual tick. One code path flips it, so no native/JS
+  // double-toggle.
+  function bindToggleRow(rowId, boxId, labelId, labelPrefix, eventName){
+    var row = document.getElementById(rowId);
+    if (!row) return;
+    var box = document.getElementById(boxId);
+    var label = document.getElementById(labelId);
+    function flip(){
+      var next = !box.checked;
+      box.checked = next;
+      row.setAttribute('aria-checked', next ? 'true' : 'false');
+      if (label) label.textContent = labelPrefix + ' ' + (next ? 'on' : 'off');
+      emit(eventName, { enabled: next });
+    }
+    on(row, 'click', flip);
+    on(row, 'keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){ e.preventDefault(); flip(); }
+    });
   }
 
   function bindScreenImpl(state, data){
@@ -1903,9 +1934,7 @@
       });
     }
     else if (state === 'supportSettings'){
-      on(document.getElementById('fieldSupportToggle'), 'change', function(e){
-        emit('slime:support-toggle', { enabled: e.target.checked });
-      });
+      bindToggleRow('rowSupportToggle', 'fieldSupportToggle', 'lblSupportToggle', 'Remote Support is', 'slime:support-toggle');
     }
     else if (state === 'timezoneSettings'){
       var tzInput = document.getElementById('fieldTimezone');
@@ -2006,9 +2035,7 @@
       });
     }
     else if (state === 'crashReportSettings'){
-      on(document.getElementById('fieldCrashReportToggle'), 'change', function(e){
-        emit('slime:crash-report-toggle', { enabled: e.target.checked });
-      });
+      bindToggleRow('rowCrashReportToggle', 'fieldCrashReportToggle', 'lblCrashReportToggle', 'Anonymous error reporting is', 'slime:crash-report-toggle');
     }
     /* slimeIdConnecting has no interactive elements -- same reasoning as
        wifiConnecting/pairConnecting above. */
