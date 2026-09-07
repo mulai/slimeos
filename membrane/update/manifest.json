@@ -1,7 +1,7 @@
 {
-  "version": "0.3.10",
-  "released_at": "2026-09-07T23:30:00Z",
-  "changelog": "0.3.10\n- Send Feedback now reminds you, before you send, that your message is posted to a public issue tracker — so don't include passwords or personal details.",
+  "version": "0.3.11",
+  "released_at": "2026-09-08T01:00:00Z",
+  "changelog": "0.3.11\n- Fix: pressing \"Check for updates\" (and other in-place Settings actions) no longer flashes the whole Settings panel — only the part that changed redraws.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -61,7 +61,7 @@
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "fe5ea04e7786a16c2943c856f337d9bba794c27b15bd724c0cc9833bc9690349"
+      "sha256": "4051d7d8699537c537cc3a76a1e33d9d2150493fbf8a525c892f786b0f4248c9"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",

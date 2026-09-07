@@ -1147,6 +1147,17 @@
   // flickers. When only the frame changed, swap the <img src> in place.
   var lastCameraSig = null;
 
+  // Signature of the last settings-panel *shell* we painted: state + active
+  // tab + whether the nav/close chrome shows. When a backend re-emit carries
+  // the SAME signature -- changelog's "Check for updates" round-trip
+  // (checking -> checked), feedback's idle -> sending -> sent, a Display
+  // segmented-row toggle -- only the tab body changed, but replacing the
+  // whole screenRoot rebuilds the sidebar + header and visibly flickers
+  // (issue #8). Same class of problem the Camera frame fast-path above
+  // already dodges; here we swap just .settings-body's contents and leave
+  // the sidebar DOM (and its already-bound listeners) untouched.
+  var lastSettingsSig = null;
+
   function renderImpl(){
     var state = current.state, data = current.data || {};
     // See #tzDropdownRoot's own HTML comment: it's a floating overlay
@@ -1198,7 +1209,29 @@
     else if (state === 'slimeIdError') html = renderSlimeIdError(data);
 
     var isSettingsPanel = SETTINGS_STATES[state] && data.mode === 'settings';
-    if (isSettingsPanel) html = renderSettingsShell(state, html);
+    if (isSettingsPanel){
+      // showNav mirrors renderSettingsShell()'s SETTINGS_TOP_STATES check;
+      // showClose mirrors its wifiConnecting/pairConnecting exclusion --
+      // any change to either forces the full rebuild below.
+      var sig = state + '|' + settingsTabForState(state) + '|' +
+                (SETTINGS_TOP_STATES[state] ? 1 : 0) + '|' +
+                (state !== 'wifiConnecting' && state !== 'pairConnecting' ? 1 : 0);
+      var body = screenRoot.querySelector('.settings-body');
+      if (body && sig === lastSettingsSig){
+        // `html` is still the pre-shell inner markup here. Swapping only the
+        // body destroys the old content nodes (and their listeners) and we
+        // re-bind the fresh ones; the sidebar/header keep the listeners
+        // bindSettingsShell() gave them on the last full render.
+        body.innerHTML = html;
+        bindScreen(state, data);
+        autofocus(state);
+        return; // render() still runs renderUpdateIcon() after this
+      }
+      lastSettingsSig = sig;
+      html = renderSettingsShell(state, html);
+    } else {
+      lastSettingsSig = null;
+    }
 
     screenRoot.innerHTML = html;
     bindScreen(state, data);
