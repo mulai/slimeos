@@ -1901,9 +1901,11 @@
   }
 
   // Settings > Help > Send Feedback (see membrane/session/feedback.sh).
-  // One screen, switched on data.status. The disclosure line is deliberate:
-  // people should see, before they hit Send, that some non-identifying
-  // environment facts ride along -- no surprises.
+  // One screen, switched on data.status. Two disclosure lines, both
+  // deliberate and shown before Send: (1) the message goes to a PUBLIC
+  // issue tracker, so don't paste secrets (issue #7); (2) a fixed set of
+  // non-identifying environment facts rides along -- no surprises. The
+  // server still runs scrubPii() regardless; these are the heads-up.
   function renderFeedbackSettings(data){
     var status = data.status || 'idle';
     var category = data.category || 'bug';
@@ -1946,9 +1948,13 @@
       '<div class="seg-group" data-seg="feedbackCategory" style="margin-bottom:18px;">' + chips + '</div>' +
       '<label class="field-label" for="fieldFeedbackMessage">Your message</label>' +
       '<textarea class="field" id="fieldFeedbackMessage" rows="5" maxlength="4000" ' +
-        'placeholder="What happened, what you expected, and anything that helps us reproduce it." ' +
+        'placeholder="What happened, what you expected, and anything that helps us reproduce it. Please don&#39;t include passwords, personal details, or anything private." ' +
         'data-autofocus></textarea>' +
-      '<p style="margin:12px 0 0;font-size:11.5px;line-height:1.6;color:var(--text-faint);">' +
+      '<p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:var(--text-muted);">' +
+        'Your message is posted to a <strong style="color:var(--text);">public</strong> issue tracker — don’t include ' +
+        'passwords, personal details, or anything you wouldn’t want shown publicly.' +
+      '</p>' +
+      '<p style="margin:8px 0 0;font-size:11.5px;line-height:1.6;color:var(--text-faint);">' +
         'Attached automatically: this device’s Slime OS version (v' + escapeHtml(version) + '), hardware profile, ' +
         'kernel, RAM, the active connection type &amp; MTU, tunnel status and a coarse guess at your Brain’s OS. ' +
         'No SSIDs, IP or MAC addresses, keys, hostnames or PINs — and nothing you haven’t typed above.' +
