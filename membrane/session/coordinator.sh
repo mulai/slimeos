@@ -359,6 +359,22 @@ pin_shown=false
 # 'setStatus' entries.
 update_available_version=""
 
+# Also set/cleared by do_update_check() alongside update_available_version:
+# the newer release's changelog text and ISO8601 release date, for the
+# Settings > Changelog tab's "what's new" preview (do_changelog(), which is
+# sourced into this same process). Always empty whenever
+# update_available_version is. The idle picker's status strip never reads
+# these.
+update_available_changelog=""
+update_available_released_at=""
+
+# Set to "1" by do_update_check() only when it couldn't reach or parse the
+# manifest at all -- distinct from reaching it and finding no newer version.
+# do_changelog() uses this to tell a user-initiated "Check for updates"
+# apart ("couldn't check" vs "you're up to date"); the background
+# _updateTick path ignores it and just retries on the next tick.
+update_check_failed=""
+
 # One-shot recovery-PIN reveal (see install.sh's "Recovery PIN" section and
 # index.html's 'showRecoveryPin' doc comment) -- sequenced to run only after
 # the crash-consent question (above) is resolved, one way or another, so the

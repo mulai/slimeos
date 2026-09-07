@@ -51,16 +51,35 @@ version_gt() {
 # only surface on the next incidental transition.
 do_update_check() {
     local manifest remote_version local_version
-    manifest=$(curl -fsS -m 10 "$MANIFEST_URL" 2>/dev/null) || { log "Update check: manifest fetch failed (non-fatal)"; return 0; }
+    manifest=$(curl -fsS -m 10 "$MANIFEST_URL" 2>/dev/null) || {
+        log "Update check: manifest fetch failed (non-fatal)"
+        # A transient network failure must NOT wipe a previously-found
+        # update -- leave update_available_* as they were, just flag that
+        # this particular check didn't complete (do_changelog reads it).
+        update_check_failed="1"
+        return 0
+    }
     remote_version=$(jq -r '.version // empty' <<<"$manifest" 2>/dev/null || echo "")
-    [[ -n "$remote_version" ]] || { log "Update check: manifest missing/unreadable version field"; return 0; }
+    [[ -n "$remote_version" ]] || {
+        log "Update check: manifest missing/unreadable version field"
+        update_check_failed="1"
+        return 0
+    }
+    update_check_failed=""
     local_version=$(cat "$CONFIG_DIR/version" 2>/dev/null || echo "0.0.0")
 
     if version_gt "$remote_version" "$local_version"; then
         [[ "$remote_version" != "$update_available_version" ]] && log "Update available: $local_version -> $remote_version"
         update_available_version="$remote_version"
+        # Stashed for the Settings > Changelog "what's new" preview only --
+        # the status strip icon needs just the version. Manifest field is
+        # already in hand, so this costs nothing extra.
+        update_available_changelog=$(jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null || echo "")
+        update_available_released_at=$(jq -r '.released_at // ""' <<<"$manifest" 2>/dev/null || echo "")
     else
         update_available_version=""
+        update_available_changelog=""
+        update_available_released_at=""
     fi
     send_status
 }

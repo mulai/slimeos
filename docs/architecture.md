@@ -346,10 +346,25 @@ failure so it can never block an install), and `apply-update-helper.sh`
 advances it alongside `$CONFIG_DIR/version` whenever a real update applies.
 The Settings panel's Changelog tab (`membrane/session/changelog.sh`,
 `do_changelog()`, same boot-mode-less shape as `support.sh`/`timezone.sh`)
-is a purely read-only display of those two local files — it shows what's
-*installed*, not necessarily whatever's newest on `main`, and unlike
+shows what's *installed* (a read-only display of those two local files),
+not necessarily whatever's newest on `main`, and unlike
 `update.sh`/`apply-update-helper.sh` it's an ordinary bundle file, fully
-covered by the auto-update manifest itself.
+covered by the auto-update manifest itself. Below that it also carries a
+**Software updates** section (issue #6): "Check for updates" fires
+`slime:check-update` → `do_changelog`'s `checkUpdate` case → `do_update_check()`,
+and when a newer release is found its notes are shown inline with an
+"Update now" button that fires `slime:apply-update` straight into
+`do_apply_update()` — the same working-modal → `updateApplying`/`updateFailed`
+path the idle-picker status-strip icon uses. `do_changelog` is the only
+inner event loop wired to handle `applyUpdate` directly; every other
+`do_*` still drops it (why the status-strip icon stays gated to the two
+idle screens). `do_update_check()` stashes the pending release's changelog
+text and a `update_check_failed` flag into coordinator.sh module vars for
+this tab; because `update.sh` is excluded from the manifest, an
+auto-updated (not reinstalled) device carries the older `update.sh` and
+degrades cleanly — the apply path still works, just without the notes
+preview and without distinguishing "couldn't reach the server" from
+"up to date".
 
 ### Key files
 | File | Purpose |
@@ -366,7 +381,7 @@ covered by the auto-update manifest itself.
 | `membrane/session/network-setup.sh` | WiFi/Ethernet onboarding function library (`do_network_setup`), sourced by coordinator.sh |
 | `membrane/session/pair.sh` | WireGuard self-pairing function library (`do_pair`), sourced by coordinator.sh |
 | `membrane/session/update.sh` | In-kiosk update check + apply function library (`do_update_check`, `do_apply_update`), sourced by coordinator.sh |
-| `membrane/session/changelog.sh` | Settings panel's Changelog tab (`do_changelog`), sourced by coordinator.sh — read-only display of `$CONFIG_DIR/version`/`$CONFIG_DIR/changelog` |
+| `membrane/session/changelog.sh` | Settings panel's Changelog tab (`do_changelog`), sourced by coordinator.sh — installed-release display of `$CONFIG_DIR/version`/`$CONFIG_DIR/changelog` plus a Software updates section (check now / update now, delegating to `update.sh`) |
 | `membrane/update/manifest.json` | Versioned bundle manifest (one version number, per-file sha256, plus a free-text `changelog` field) published on `main`, fetched by update.sh |
 | `membrane/update/apply-update-helper.sh` | Privileged, zero-argument root helper (deployed to `/opt/slimeos/apply-update-helper.sh`) that copies a verified staged update into place and reboots — invoked via a scoped sudoers grant, never directly |
 | `slimeos-automount.service` (written by install.sh) | Runs `udiskie` headlessly so USB drives auto-mount under `/media/<user>` for connect.sh's `/drive` redirect |

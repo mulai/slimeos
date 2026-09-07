@@ -1,7 +1,7 @@
 {
-  "version": "0.3.8",
-  "released_at": "2026-09-07T18:00:00Z",
-  "changelog": "0.3.8\n- New: Settings › Help › Send Feedback. Report a bug, ask for a feature, or flag something that isn't working — it goes straight to the Slime OS team and opens a tracked issue.\n- Each report carries a small, non-identifying snapshot of this device (Slime OS version, hardware profile, kernel, RAM, connection type and MTU, tunnel status, a coarse guess at your Brain's OS) so an issue can be pinned down without a back-and-forth. No SSIDs, IP or MAC addresses, keys, hostnames or PINs are ever included.",
+  "version": "0.3.9",
+  "released_at": "2026-09-07T21:00:00Z",
+  "changelog": "0.3.9\n- New: Settings › Changelog has a Software updates section. Check for a newer version on the spot and install it right there, instead of waiting for the update badge to show up on the Brain picker.\n- When an update is waiting, you can read what's in it before you choose to install.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -9,7 +9,7 @@
     },
     {
       "src": "session/coordinator.sh",
-      "sha256": "ce7118f41e18ced19eb9b40a2e3ae2eec676c6115fb6d024368574c7188e6876"
+      "sha256": "3d777df02acfa9d65c43de22e08422f4c4beb21c634ddbaef9ad74bd31257ef3"
     },
     {
       "src": "session/network-setup.sh",
@@ -41,7 +41,7 @@
     },
     {
       "src": "session/changelog.sh",
-      "sha256": "565866d9cddaf1eb609ea2f7f088cfbf2626db7f89552f5d982e3755f81c92a2"
+      "sha256": "b8b370650f13dc1b9c13d941889ac56c9472e126c0659f53728c48ea0eb2f499"
     },
     {
       "src": "session/feedback.sh",
@@ -61,7 +61,7 @@
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "806c4e7b488b7160e0f10351ae87ae961c4ab3a4fbec95b0cda3001c20fdb1f9"
+      "sha256": "5c2c9b7fa7ba9479146580d0cf29a2122e3ba6add2ec4bb7e998389929d609ca"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",

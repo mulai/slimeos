@@ -195,10 +195,12 @@
                        // No `boot` mode, same as supportSettings/
                        // crashReportSettings.
        changelogSettings: { mode: 'settings', version: string, changelog: string,
-                          releasedAt: string | null, releasedRelative: string | null }
+                          releasedAt: string | null, releasedRelative: string | null,
+                          checkState: ''|'checking'|'checked', checkFailed: bool,
+                          updateAvailable: string | null, updateChangelog: string | null,
+                          updateReleasedRelative: string | null }
                        // Settings panel's Changelog tab (see
-                       // membrane/session/changelog.sh). Purely read-only,
-                       // no interactive elements. `version`/`changelog` are
+                       // membrane/session/changelog.sh). `version`/`changelog` are
                        // the CURRENTLY INSTALLED release's own values --
                        // $CONFIG_DIR/version and $CONFIG_DIR/changelog,
                        // written once by install.sh and advanced together
@@ -211,6 +213,17 @@
                        // are null on a device/manifest that predates this
                        // field, in which case the release-time line is
                        // omitted entirely rather than showing "never".
+                       // The "Software updates" block below it drives the
+                       // update flow directly (issue #6): 'slime:check-update'
+                       // re-checks `main`; when updateAvailable is set,
+                       // updateChangelog/updateReleasedRelative describe that
+                       // pending release and an "Update now" button fires
+                       // 'slime:apply-update' (same working-modal ->
+                       // updateApplying/updateFailed path the picker icon
+                       // uses). checkState is '' until the user checks once
+                       // this session, 'checking' during the fetch,
+                       // 'checked' after; checkFailed distinguishes
+                       // "couldn't reach the server" from "up to date".
                        // No `boot` mode, same as supportSettings/
                        // timezoneSettings.
        feedbackSettings: { mode: 'settings', status: 'idle'|'sending'|'sent'|'error',
@@ -346,6 +359,9 @@
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
    'slime:feedback-submit' { category, message }           // Settings > Help > Send Feedback -- category: 'bug'|'feature'|'other'
    'slime:feedback-reset'  {}                              // "Send another" on the post-submit confirmation
+   'slime:check-update'    {}                              // "Check for updates" in Settings > Changelog -- re-fetches the
+                                                          // manifest off `main` (do_changelog's checkUpdate case ->
+                                                          // do_update_check). Safe to drop on any other screen.
    'slime:speaker-volume-set' { volume }                   // Devices > Speaker tab -- 0-100, fired on slider release
    'slime:speaker-test'    {}                              // Devices > Speaker tab -- play the built-in test tone
    'slime:speaker-device-set' { device }                   // Devices > Speaker tab -- ALSA card id, '' = Automatic
@@ -376,13 +392,14 @@
    'slime:recovery-pin-ack' {}                             // answer to the one-shot showRecoveryPin
      overlay (single acknowledgement button, no choice to make) -- never shown again once acked.
 
-   'slime:apply-update'    {}                              // "Update now" in the update-available
+   'slime:apply-update'    {}                              // "Update now" -- from the update-available
      modal (status strip icon, idle empty/picker screens only -- see setStatus's `update` field
-     above). Deliberately not reachable from any other screen: coordinator.sh's inner do_* event
-     loops (Settings tabs, an active connect attempt, etc.) don't recognize 'applyUpdate' and would
-     silently drop it, the same bug class powerShutdown/powerRestart/crashReport were explicitly
-     patched to avoid -- gating the icon's visibility client-side to the two states where the outer
-     dispatch loop is guaranteed to be listening sidesteps that without touching every do_* file.
+     above) OR from the Settings > Changelog tab's "Software updates" block. The status-strip icon
+     is still gated client-side to the two idle screens because coordinator.sh's OTHER inner do_*
+     event loops (an active connect attempt, most Settings tabs) don't recognize 'applyUpdate' and
+     would silently drop it -- the same bug class powerShutdown/powerRestart/crashReport were
+     patched to avoid. do_changelog() is the one inner loop that DOES handle it (calls
+     do_apply_update() directly), so emitting it from changelogSettings is safe.
 
    Network setup reuses 'slime:retry' / 'slime:reenter-password' / 'slime:back'
    for the wifiError screen and 'slime:back' for backing out of wifiList in
@@ -1804,11 +1821,12 @@
     );
   }
 
-  // Read-only, no fields/toggles -- shows what changed in the version
-  // CURRENTLY INSTALLED (see changelog.sh's own header comment on why this
-  // can differ from whatever's newest on `main`). white-space:pre-wrap
-  // preserves the manifest's own line breaks without needing any markdown
-  // rendering.
+  // The installed-version card is read-only -- shows what changed in the
+  // version CURRENTLY INSTALLED (see changelog.sh's own header comment on
+  // why this can differ from whatever's newest on `main`). white-space:
+  // pre-wrap preserves the manifest's own line breaks without needing any
+  // markdown rendering. The "Software updates" block below it is the only
+  // interactive part: "Check for updates" / "Update now" (issue #6).
   function renderChangelogSettings(data){
     // releasedRelative is null on a device that predates this field, or a
     // manifest that never set released_at -- omit it entirely rather than
@@ -1818,6 +1836,55 @@
     var releasedSuffix = data.releasedRelative
       ? ' <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0;">— released ' + escapeHtml(data.releasedRelative) + '</span>'
       : '';
+
+    var updatesBlock;
+    if (data.updateAvailable){
+      // A newer release is staged on `main` (found by a background tick or
+      // the check button). Show its notes + a one-tap apply. The button
+      // reuses the exact showUpdateWorkingModal()/'slime:apply-update'
+      // path the status-strip icon's modal uses -- see bindScreen below.
+      var upRel = data.updateReleasedRelative
+        ? '<div style="margin:0 0 10px;font-size:12px;color:var(--text-faint);">released ' + escapeHtml(data.updateReleasedRelative) + '</div>'
+        : '';
+      var upNotes = data.updateChangelog
+        ? '<p style="margin:0;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;">' + escapeHtml(data.updateChangelog) + '</p>'
+        : '<p style="margin:0;font-size:13px;color:var(--text-muted);">Release notes weren’t included with this update.</p>';
+      updatesBlock =
+        '<div class="support-connection" style="margin-top:16px;border-color:rgba(122,224,168,0.35);">' +
+          '<div class="field-label" style="margin-bottom:6px;color:var(--mint);">Update available — Slime OS v' + escapeHtml(data.updateAvailable) + '</div>' +
+          upRel + upNotes +
+          '<button class="btn-primary" id="btnChangelogUpdateNow" style="margin-top:16px;width:100%;padding:11px;box-shadow:none;">Update now</button>' +
+          '<p style="margin:10px 0 0;font-size:12px;line-height:1.5;color:var(--text-faint);">Any active session will disconnect and the device will restart.</p>' +
+        '</div>';
+    } else if (data.checkState === 'checking'){
+      updatesBlock =
+        '<div class="support-connection" style="margin-top:16px;">' +
+          '<div class="field-label" style="margin-bottom:12px;">Software updates</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;color:var(--text-dim);font-size:13px;">' +
+            '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span>' +
+            '<span>Checking for updates…</span>' +
+          '</div>' +
+        '</div>';
+    } else {
+      var statusLine, btnLabel;
+      if (data.checkState === 'checked' && data.checkFailed){
+        statusLine = 'Couldn’t reach the update server. Check your connection and try again.';
+        btnLabel = 'Try again';
+      } else if (data.checkState === 'checked'){
+        statusLine = 'You’re on the latest version. Last checked just now.';
+        btnLabel = 'Check again';
+      } else {
+        statusLine = 'This device installs updates on its own. You can also check right now.';
+        btnLabel = 'Check for updates';
+      }
+      updatesBlock =
+        '<div class="support-connection" style="margin-top:16px;">' +
+          '<div class="field-label" style="margin-bottom:10px;">Software updates</div>' +
+          '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text-muted);">' + escapeHtml(statusLine) + '</p>' +
+          '<button class="btn-secondary" id="btnChangelogCheck" style="margin-top:14px;width:100%;">' + btnLabel + '</button>' +
+        '</div>';
+    }
+
     return (
       '<div class="screen" data-screen="changelogSettings">' +
         '<div style="width:100%;max-width:460px;">' +
@@ -1827,6 +1894,7 @@
             '<div class="field-label" style="margin-bottom:12px;">Slime OS v' + escapeHtml(data.version || 'unknown') + releasedSuffix + '</div>' +
             '<p style="margin:0;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;">' + escapeHtml(data.changelog || 'No changelog recorded for this install.') + '</p>' +
           '</div>' +
+          updatesBlock +
         '</div>' +
       '</div>'
     );
@@ -2358,6 +2426,18 @@
         });
       }
     }
+    else if (state === 'changelogSettings'){
+      var clCheck = document.getElementById('btnChangelogCheck');
+      if (clCheck) on(clCheck, 'click', function(){ emit('slime:check-update'); });
+      var clUpdate = document.getElementById('btnChangelogUpdateNow');
+      if (clUpdate) on(clUpdate, 'click', function(){
+        // Same handoff as showUpdateModal's "Update now": put up the
+        // buttonless working modal, then let the backend answer with
+        // 'updateApplying' (reboot overlay) or 'updateFailed' (modal).
+        showUpdateWorkingModal();
+        emit('slime:apply-update');
+      });
+    }
     /* slimeIdConnecting has no interactive elements -- same reasoning as
        wifiConnecting/pairConnecting above. */
     else if (state === 'slimeIdEntry'){
@@ -2657,7 +2737,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2748,7 +2828,8 @@
       } else if (tab === 'privacy'){
         window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
       } else if (tab === 'changelog'){
-        window.SlimeUI.setState('changelogSettings', { mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.', releasedAt: null, releasedRelative: '2 hours ago' });
+        demoChangelogCheck = '';
+        window.SlimeUI.setState('changelogSettings', demoChangelogState());
       } else if (tab === 'feedback'){
         window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'idle', category: 'bug', error: null, issueUrl: null, version: '0.1.0-demo' });
       }
@@ -2764,6 +2845,29 @@
 
     document.addEventListener('slime:feedback-reset', function(){
       window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'idle', category: 'bug', error: null, issueUrl: null, version: '0.1.0-demo' });
+    });
+
+    // Demo: pretend `main` is one release ahead so both the "check" and
+    // the "update available" states are reachable with ?demo=1.
+    var demoChangelogCheck = '';
+    function demoChangelogState(){
+      var available = demoChangelogCheck === 'checked';
+      return {
+        mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.',
+        releasedAt: null, releasedRelative: '2 hours ago',
+        checkState: demoChangelogCheck, checkFailed: false,
+        updateAvailable: available ? '0.2.0-demo' : null,
+        updateChangelog: available ? '0.2.0-demo\n- New: demo of the in-Settings update flow.\n- Fix: assorted demo polish.' : null,
+        updateReleasedRelative: available ? 'just now' : null
+      };
+    }
+    document.addEventListener('slime:check-update', function(){
+      demoChangelogCheck = 'checking';
+      window.SlimeUI.setState('changelogSettings', demoChangelogState());
+      setTimeout(function(){
+        demoChangelogCheck = 'checked';
+        window.SlimeUI.setState('changelogSettings', demoChangelogState());
+      }, 900);
     });
 
     document.addEventListener('slime:support-toggle', function(e){
@@ -3056,6 +3160,7 @@
       'slime:crash-report-toggle': 'crashReportToggle',
       'slime:feedback-submit': 'feedbackSubmit',
       'slime:feedback-reset': 'feedbackReset',
+      'slime:check-update': 'checkUpdate',
       'slime:slime-id-start': 'slimeIdStart',
       'slime:slime-id-logout': 'slimeIdLogout',
       'slime:save-brain-consent': 'saveBrainConsent',
