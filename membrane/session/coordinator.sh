@@ -33,9 +33,10 @@
 #   {"type":"supportToggle","enabled":..}                  only consumed by do_support, see support.sh
 #   {"type":"crashReportToggle","enabled":..}              only consumed by do_crash_reporting, see crash-reporting.sh
 #   {"type":"timezoneSet","timezone":..}                   only consumed by do_timezone, see timezone.sh
-#   {"type":"speakerVolumeSet","volume":0-100} | {"type":"speakerTest"}   only consumed by do_speaker_settings, see hardware-test.sh
-#   {"type":"micVolumeSet","volume":0-100} | {"type":"micTest"}           only consumed by do_microphone_settings, see hardware-test.sh
-#   {"type":"cameraPreviewStart"} | {"type":"cameraPreviewStop"}          only consumed by do_camera_settings, see hardware-test.sh
+#   {"type":"speakerVolumeSet","volume":0-100} | {"type":"speakerTest"} | {"type":"speakerDeviceSet","device":"<alsa card>"|""}   only consumed by do_speaker_settings, see hardware-test.sh
+#   {"type":"micVolumeSet","volume":0-100} | {"type":"micTest"} | {"type":"micDeviceSet","device":"<alsa card>"|""}               only consumed by do_microphone_settings, see hardware-test.sh
+#   {"type":"cameraPreviewStart"} | {"type":"cameraPreviewStop"} | {"type":"cameraDeviceSet","device":"/dev/videoN"|""}           only consumed by do_camera_settings, see hardware-test.sh
+#     (the *DeviceSet events persist an explicit device override to $DEVICE_PREFS_FILE; "" clears it back to Automatic)
 #   {"type":"displaySet","uiScale":..,"resolution":..,"audioOutput":..}   only consumed by do_display_settings, see display-settings.sh
 #   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"display"|"timezone"|"changelog"}  only consumed by whichever of
 #     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_display_settings/do_timezone/do_changelog is currently running in `settings` mode —
@@ -286,6 +287,20 @@ DISPLAY_PREFS_FILE="$CRED_DIR/display-prefs"
 if [[ -f "$DISPLAY_PREFS_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$DISPLAY_PREFS_FILE"
+fi
+
+# The Settings > Speaker / Microphone / Camera tabs' explicit device
+# overrides (see hardware-test.sh's dev_write_prefs) -- SPEAKER_CARD_OVERRIDE
+# / MIC_CARD_OVERRIDE / CAMERA_DEV_OVERRIDE, each an ALSA card name / video
+# node path, or empty for "Automatic". Same $CRED_DIR-not-config placement
+# and post-config source order as display-prefs above, and for the same
+# reason: an on-screen choice must win over the admin default and the write
+# must work unprivileged on every already-installed device. connect.sh
+# (sourced below) reads these in default_playback_card() / mic_redirect_card().
+DEVICE_PREFS_FILE="$CRED_DIR/device-prefs"
+if [[ -f "$DEVICE_PREFS_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$DEVICE_PREFS_FILE"
 fi
 
 # Recomputed (not just set once) so a Brain-resolution change from the

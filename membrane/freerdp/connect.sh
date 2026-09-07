@@ -40,6 +40,48 @@ is_webcam_audio_card() {
     return 1
 }
 
+# --- Device overrides (Settings > Devices tabs) -------------------------
+# SPEAKER_CARD_OVERRIDE / MIC_CARD_OVERRIDE / CAMERA_DEV_OVERRIDE come from
+# $CRED_DIR/device-prefs, sourced by coordinator.sh after config (same
+# unprivileged-prefs pattern as display-prefs). Each is either empty --
+# "Automatic", meaning fall through to the detection heuristics below, the
+# default and what every device shipped before 0.3.7 does -- or an explicit
+# choice a user locked in on the Speaker/Microphone/Camera tab because the
+# heuristic picked the wrong device (the Aug-2026 webcam-mic-over-dongle
+# incident is the motivating case). An override that names hardware no
+# longer present is ignored and detection takes over again, so unplugging
+# an overridden mic degrades to "best guess" rather than silence.
+
+# True if ALSA card NAME $1 is present right now AND exposes a $2-type
+# substream ('p' = playback, 'c' = capture). Used to validate an override
+# before trusting it -- a stale name (device unplugged, box swapped) fails
+# this and the caller falls back to auto. /proc/asound is authoritative and
+# needs no alsa-utils, same as the helpers below.
+card_present_with() {
+    local want="$1" kind="$2" idx name
+    while read -r idx name; do
+        [[ "$name" == "$want" ]] || continue
+        compgen -G "/proc/asound/card${idx}/pcm*${kind}" >/dev/null && return 0
+        return 1
+    done < <(awk '{gsub(/\[/, "", $2); print $1, $2}' /proc/asound/cards 2>/dev/null)
+    return 1
+}
+
+# The capture card do_connect()'s /microphone redirection should target:
+# an explicit MIC_CARD_OVERRIDE when set and still present, otherwise the
+# dedicated-USB-mic heuristic (usb_capture_card). Deliberately does NOT
+# fall back to an onboard card when both are absent -- do_connect() then
+# uses a bare `/microphone:sys:alsa` (ALSA's own default), exactly the
+# pre-override behaviour on an onboard-only box. The Microphone *tab*
+# (hardware-test.sh) has its own richer fallback for display/test purposes.
+mic_redirect_card() {
+    if [[ -n "${MIC_CARD_OVERRIDE:-}" ]] && card_present_with "$MIC_CARD_OVERRIDE" c; then
+        printf '%s' "$MIC_CARD_OVERRIDE"
+        return 0
+    fi
+    usb_capture_card
+}
+
 # First ALSA card that is both USB and capture-capable. USB microphones
 # enumerate as their own ALSA card, but ALSA's *default* capture device
 # stays pointed at the onboard input (typically an empty rear mic jack) --
@@ -82,6 +124,12 @@ usb_capture_card() {
 # Mirrors usb_capture_card's approach: walk cards in index order, return
 # the first one with a pcm*p node (i.e. actually has a playback substream).
 default_playback_card() {
+    # An explicit Speaker-tab choice wins, but only while that card is
+    # still plugged in and really has a playback substream.
+    if [[ -n "${SPEAKER_CARD_OVERRIDE:-}" ]] && card_present_with "$SPEAKER_CARD_OVERRIDE" p; then
+        printf '%s' "$SPEAKER_CARD_OVERRIDE"
+        return 0
+    fi
     local idx name
     while read -r idx name; do
         if compgen -G "/proc/asound/card${idx}/pcm*p" >/dev/null; then
@@ -477,7 +525,8 @@ do_connect() {
             export DISPLAY="${x11_socket:+:${x11_socket#X}}"
             export DISPLAY="${DISPLAY:-:0}"
 
-            # Prefer a USB microphone when one is present (see
+            # An explicit Microphone-tab choice first, else prefer a USB
+            # microphone when one is present (see mic_redirect_card /
             # usb_capture_card above). Re-checked every attempt like the
             # DISPLAY discovery, so a mic plugged in mid-retry-loop is
             # picked up without restarting anything. Card NAME, not
@@ -499,10 +548,14 @@ do_connect() {
             # imperfect one. Reverted same day. Do not re-add an explicit
             # rate: here without first confirming format negotiation still
             # succeeds (check connect.log for audin_process_open errors).
-            local mic_flag="/microphone:sys:alsa" usb_mic
-            if usb_mic=$(usb_capture_card); then
-                mic_flag="/microphone:sys:alsa,dev:plughw:CARD=${usb_mic}"
-                log "USB microphone detected (ALSA card '${usb_mic}') — redirecting it"
+            local mic_flag="/microphone:sys:alsa" mic_card
+            if mic_card=$(mic_redirect_card); then
+                mic_flag="/microphone:sys:alsa,dev:plughw:CARD=${mic_card}"
+                if [[ -n "${MIC_CARD_OVERRIDE:-}" && "$mic_card" == "$MIC_CARD_OVERRIDE" ]]; then
+                    log "Microphone: redirecting ALSA card '${mic_card}' (Settings override)"
+                else
+                    log "Microphone: USB capture card '${mic_card}' detected — redirecting it"
+                fi
             fi
 
             # See default_playback_card above — picks the first ALSA card

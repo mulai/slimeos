@@ -88,32 +88,42 @@
                        // No secured/re-enter-password concept here (one
                        // secret field, not two) — just Try again / Back.
        speakerSettings: { mode: 'settings', card: string | null,
+                          cards: [{id,label}], selected: string | null,
                           volume: number | null, error: string | null }
                        // Settings panel's Devices > Speaker tab (see
                        // membrane/session/hardware-test.sh). Purely LOCAL --
                        // no Brain/RDP involved. `card` is the ALSA card name
                        // the same default_playback_card() logic connect.sh
                        // uses for RDP audio picked; null (with `error` set)
-                       // if no playback device exists. `volume` is the
-                       // current Master (or PCM) mixer %, re-read every
-                       // emit. Emits 'slime:speaker-volume-set' {volume} on
-                       // slider release and 'slime:speaker-test' {} for the
-                       // built-in test tone.
+                       // if no playback device exists. `cards` is every
+                       // playback-capable card for the "Device" picker;
+                       // `selected` is the user's explicit override (null =
+                       // Automatic). `volume` is the current Master (or PCM)
+                       // mixer %, re-read every emit. Emits
+                       // 'slime:speaker-volume-set' {volume} on slider
+                       // release, 'slime:speaker-test' {} for the built-in
+                       // test tone, and 'slime:speaker-device-set' {device}
+                       // ('' = back to Automatic).
        microphoneSettings: { mode: 'settings', card: string | null,
+                          cards: [{id,label}], selected: string | null,
                           volume: number | null, testing: bool,
                           testResult: 'ok' | 'error' | null,
                           error: string | null }
                        // Settings panel's Devices > Microphone tab. Same
                        // local-only shape as speakerSettings. `card` prefers
-                       // a dedicated USB mic over a webcam's mic (connect.sh's
-                       // usb_capture_card()), falling back to the onboard
-                       // capture card. The mic test is a single bounded
-                       // ~3-4s action: record 3s, play it straight back on
-                       // the speaker -- `testing:true` is emitted while it
-                       // runs, then `testResult` on completion (this is NOT
-                       // a live VU meter). Emits 'slime:mic-volume-set'
-                       // {volume} and 'slime:mic-test' {}.
+                       // an explicit `selected` override, then a dedicated
+                       // USB mic over a webcam's mic (connect.sh's
+                       // usb_capture_card()), then the onboard capture card.
+                       // `cards` lists every capture-capable card for the
+                       // picker. The mic test is a single bounded ~3-4s
+                       // action: record 3s, play it straight back on the
+                       // speaker -- `testing:true` is emitted while it runs,
+                       // then `testResult` on completion (this is NOT a live
+                       // VU meter). Emits 'slime:mic-volume-set' {volume},
+                       // 'slime:mic-test' {}, and 'slime:mic-device-set'
+                       // {device} ('' = back to Automatic).
        cameraSettings: { mode: 'settings', available: bool, previewing: bool,
+                          devices: [{id,label}], selected: string | null,
                           frameDataUrl: string | null, error: string | null }
                        // Settings panel's Devices > Camera tab. `available`
                        // = a /dev/video* node exists AND the snapshot tool
@@ -125,9 +135,13 @@
                        // (data:image/jpeg;base64,...) -- a plain <img src>,
                        // same raster-data-URI route slimeIdEntry's QR uses
                        // to sidestep this WebKit build's foreign-content /
-                       // getUserMedia quirks. Emits
+                       // getUserMedia quirks. `devices` lists every
+                       // /dev/video* node for the "Device" picker;
+                       // `selected` steers the local preview only (a Brain
+                       // sees every camera). Emits
                        // 'slime:camera-preview-start' {} /
-                       // 'slime:camera-preview-stop' {}.
+                       // 'slime:camera-preview-stop' {} /
+                       // 'slime:camera-device-set' {device} ('' = Automatic).
        supportSettings: { mode: 'settings', enabled: bool,
                           connection: {host, port, username, password} | null,
                           error: string | null, version: string }
@@ -317,10 +331,13 @@
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
    'slime:speaker-volume-set' { volume }                   // Devices > Speaker tab -- 0-100, fired on slider release
    'slime:speaker-test'    {}                              // Devices > Speaker tab -- play the built-in test tone
+   'slime:speaker-device-set' { device }                   // Devices > Speaker tab -- ALSA card id, '' = Automatic
    'slime:mic-volume-set'  { volume }                      // Devices > Microphone tab -- 0-100, fired on slider release
    'slime:mic-test'        {}                              // Devices > Microphone tab -- record 3s + play back
+   'slime:mic-device-set'  { device }                      // Devices > Microphone tab -- ALSA card id, '' = Automatic
    'slime:camera-preview-start' {}                         // Devices > Camera tab -- begin ~1fps local preview
    'slime:camera-preview-stop'  {}                         // Devices > Camera tab -- stop the preview
+   'slime:camera-device-set' { device }                   // Devices > Camera tab -- /dev/videoN, '' = Automatic (preview only)
 
    'slime:crash-report'    { message, stack, state }       // auto-fired by window.onerror/unhandledrejection,
      never by a user action -- the page always fires this regardless of the
@@ -633,6 +650,12 @@
   .hw-camera-frame,.hw-camera-placeholder{width:100%;max-width:400px;height:300px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;display:block;}
   .hw-camera-frame{object-fit:cover;}
   .hw-camera-placeholder{display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:13px;text-align:center;padding:0 20px;}
+  /* "Device" picker on each Devices tab -- reuses .seg-group/.seg-btn from
+     Display & Sound. Tighter bottom gap than the Display & Sound rows since
+     a Volume slider or camera frame follows immediately. */
+  .hw-device-seg{margin-bottom:10px;}
+  .hw-device-hint{margin:2px 0 16px;font-size:12px;line-height:1.55;color:var(--text-faint);}
+  .hw-device-hint strong{color:var(--text-muted);font-weight:600;}
 
   .support-toggle-row{display:flex;align-items:center;gap:12px;cursor:pointer;padding:14px 16px;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:12px;user-select:none;outline:none;}
   /* The inner checkbox is a display-only tick -- the whole row is the
@@ -1526,18 +1549,88 @@
     );
   }
 
+  // Label for a device id from a state.cards / state.devices list.
+  function hwLabelFor(list, id){
+    if (!id) return '';
+    for (var i = 0; i < (list || []).length; i++){
+      if (list[i] && list[i].id === id) return list[i].label;
+    }
+    return id;
+  }
+
+  // "Device" picker shared by the Speaker/Microphone/Camera tabs. Segmented
+  // pick-one control (same .seg-group as Display & Sound -- no native
+  // <select>). options: [{id,label}] from state. selected: state.selected
+  // (null/'' = Automatic). effectiveLabel: friendly name of the device the
+  // backend actually resolved to, shown as a hint. evName: slime: event to
+  // emit on change, with { device: id } ('' clears back to Automatic).
+  // Renders just a one-line "Using X" hint when there's only one device and
+  // no manual override -- nothing to choose between, but still worth
+  // confirming which device that is (the whole point of this feature).
+  function renderHwDevicePicker(options, selected, effectiveLabel, evName){
+    options = options || [];
+    var sel = selected || '';
+    var multi = options.length >= 2;
+    if (!multi && !sel){
+      return effectiveLabel
+        ? '<p class="hw-device-hint">Using <strong>' + escapeHtml(effectiveLabel) + '</strong>.</p>'
+        : '';
+    }
+    var opts = [['', 'Automatic']];
+    var seen = {};
+    options.forEach(function(o){ seen[o.id] = true; opts.push([o.id, o.label]); });
+    // A saved override whose hardware is currently unplugged: keep it
+    // visible and selectable so the user can see it and switch back.
+    if (sel && !seen[sel]) opts.splice(1, 0, [sel, sel + ' — not connected']);
+    var btns = opts.map(function(o){
+      return '<div class="seg-btn' + (o[0] === sel ? ' active' : '') + '" role="button" tabindex="0"' +
+             ' data-val="' + escapeHtml(o[0]) + '">' + escapeHtml(o[1]) + '</div>';
+    }).join('');
+    var hint = (!sel && effectiveLabel)
+      ? '<p class="hw-device-hint">Using <strong>' + escapeHtml(effectiveLabel) + '</strong> — chosen automatically.</p>'
+      : '';
+    return (
+      '<label class="field-label">Device</label>' +
+      '<div class="seg-group hw-device-seg" data-seg="device" data-ev="' + escapeHtml(evName) + '">' + btns + '</div>' +
+      hint
+    );
+  }
+
+  // Wire the shared device picker inside whichever Devices tab just
+  // rendered. Optimistic active-class swap like renderDisplaySettings's
+  // seg rows; the backend re-emits authoritative state right after.
+  function bindHwDevicePicker(){
+    var grp = screenRoot.querySelector('.seg-group.hw-device-seg');
+    if (!grp) return;
+    var evName = grp.getAttribute('data-ev');
+    Array.prototype.forEach.call(grp.querySelectorAll('.seg-btn'), function(btn){
+      var choose = function(){
+        if (btn.classList.contains('active')) return;
+        Array.prototype.forEach.call(grp.querySelectorAll('.seg-btn'), function(b){
+          b.classList.toggle('active', b === btn);
+        });
+        emit(evName, { device: btn.getAttribute('data-val') });
+      };
+      on(btn, 'click', choose);
+      on(btn, 'keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){ e.preventDefault(); choose(); }
+      });
+    });
+  }
+
   function renderSpeakerSettings(data){
     var inner;
     if (!data.card){
       inner = '<p style="font-size:13px;color:var(--text-dim);">' + escapeHtml(data.error || 'No speaker detected on this device.') + '</p>';
     } else {
       inner =
+        renderHwDevicePicker(data.cards, data.selected, hwLabelFor(data.cards, data.card), 'slime:speaker-device-set') +
         renderHwVolumeControl('Speaker', data.volume) +
         '<button type="button" class="btn-secondary" id="btnSpeakerTest" style="margin-top:8px;">Play test sound</button>' +
         '<p class="hw-status' + (data.error ? ' err' : '') + '" id="hwSpeakerStatus">' + escapeHtml(data.error || '') + '</p>';
     }
     return renderHwSettingsFrame('speakerSettings', 'Speaker',
-      'Set the output volume and play a short test tone. This is your Membrane’s own speaker — a Brain session has its own separate volume.',
+      'Pick the output, set the volume, and play a short test tone. This is your Membrane’s own speaker — a Brain session has its own separate volume.',
       inner);
   }
 
@@ -1551,12 +1644,13 @@
       else if (data.testResult === 'ok'){ status = 'Recorded and played back cleanly — the microphone works.'; cls = ' ok'; }
       else if (data.error){ status = data.error; cls = ' err'; }
       inner =
+        renderHwDevicePicker(data.cards, data.selected, hwLabelFor(data.cards, data.card), 'slime:mic-device-set') +
         renderHwVolumeControl('Mic', data.volume) +
         '<button type="button" class="btn-secondary" id="btnMicTest" style="margin-top:8px;"' + (data.testing ? ' disabled' : '') + '>Test microphone</button>' +
         '<p class="hw-status' + cls + '" id="hwMicStatus">' + escapeHtml(status) + '</p>';
     }
     return renderHwSettingsFrame('microphoneSettings', 'Microphone',
-      'Set the input level and run a quick check: it records three seconds from the mic and plays it straight back on the speaker.',
+      'Pick the input, set the level, and run a quick check: it records three seconds from the mic and plays it straight back on the speaker. If a webcam’s built-in mic gets picked instead of your real microphone, choose the right one here.',
       inner);
   }
 
@@ -1566,14 +1660,16 @@
       inner = '<div class="hw-camera-placeholder">' + escapeHtml(data.error || 'No camera detected on this device.') + '</div>';
     } else {
       var previewing = !!data.previewing;
+      var camId = data.selected || (data.devices && data.devices[0] && data.devices[0].id) || '';
       inner =
+        renderHwDevicePicker(data.devices, data.selected, hwLabelFor(data.devices, camId), 'slime:camera-device-set') +
         (data.frameDataUrl
           ? '<img class="hw-camera-frame" id="hwCameraFrame" alt="Camera preview" src="' + data.frameDataUrl + '">'
           : '<div class="hw-camera-placeholder" id="hwCameraFrame">' + (previewing ? 'Starting preview…' : 'Preview is off.') + '</div>') +
         '<button type="button" class="btn-secondary" id="btnCameraPreview" style="margin-top:12px;">' +
           (previewing ? 'Stop preview' : 'Start preview') +
         '</button>' +
-        '<p style="margin:12px 0 0;font-size:11.5px;color:var(--text-faint);">The preview refreshes about once a second — that’s just how this check works, not a fault with the camera. Inside a Brain session the video is full-speed.</p>' +
+        '<p style="margin:12px 0 0;font-size:11.5px;color:var(--text-faint);">The preview refreshes about once a second — that’s just how this check works, not a fault with the camera. Inside a Brain session the video is full-speed. A Brain sees every camera; this choice only sets which one the preview shows.</p>' +
         '<p class="hw-status' + (data.error ? ' err' : '') + '" id="hwCameraStatus">' + escapeHtml(data.error || '') + '</p>';
     }
     return renderHwSettingsFrame('cameraSettings', 'Camera',
@@ -1994,16 +2090,19 @@
       on(document.getElementById('btnBackFromPairError'), 'click', function(){ emit('slime:back'); });
     }
     else if (state === 'speakerSettings'){
+      bindHwDevicePicker();
       bindHwVolumeSlider('fieldSpeakerVolume', 'hwSpeakerVolumeValue', 'slime:speaker-volume-set');
       var btnSpk = document.getElementById('btnSpeakerTest');
       if (btnSpk) on(btnSpk, 'click', function(){ emit('slime:speaker-test', {}); });
     }
     else if (state === 'microphoneSettings'){
+      bindHwDevicePicker();
       bindHwVolumeSlider('fieldMicVolume', 'hwMicVolumeValue', 'slime:mic-volume-set');
       var btnMic = document.getElementById('btnMicTest');
       if (btnMic) on(btnMic, 'click', function(){ emit('slime:mic-test', {}); });
     }
     else if (state === 'cameraSettings'){
+      bindHwDevicePicker();
       var btnCam = document.getElementById('btnCameraPreview');
       if (btnCam) on(btnCam, 'click', function(){
         emit(data.previewing ? 'slime:camera-preview-stop' : 'slime:camera-preview-start', {});
@@ -2438,7 +2537,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:mic-volume-set','slime:mic-test','slime:camera-preview-start','slime:camera-preview-stop','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2480,8 +2579,23 @@
     ];
     var demoCamTimer = null;
     var demoCamFrameIdx = 0;
+    // Multi-device demo fixtures so the "Device" picker is exercised in
+    // demo mode -- the mic list deliberately includes a webcam's own mic,
+    // the case this picker exists to rescue.
+    var demoSpeakerDevice = '';
+    var demoMicDevice = '';
+    var demoCameraDevice = '';
+    var DEMO_SPEAKER_CARDS = [{ id: 'SB', label: 'HDA ATI SB' }, { id: 'NVidia', label: 'HDA NVidia (HDMI)' }];
+    var DEMO_MIC_CARDS = [{ id: 'Device', label: 'USB PnP Sound Device' }, { id: 'C920', label: 'HD Pro Webcam C920' }];
+    var DEMO_CAM_DEVICES = [{ id: '/dev/video0', label: 'HD Pro Webcam C920' }, { id: '/dev/video2', label: 'USB2.0 HD UVC WebCam' }];
+    function demoSpeakerState(){
+      return { mode: 'settings', card: demoSpeakerDevice || 'SB', cards: DEMO_SPEAKER_CARDS, selected: demoSpeakerDevice || null, volume: demoSpeakerVolume, error: null };
+    }
+    function demoMicState(){
+      return { mode: 'settings', card: demoMicDevice || 'Device', cards: DEMO_MIC_CARDS, selected: demoMicDevice || null, volume: demoMicVolume, testing: demoMicTesting, testResult: demoMicTestResult, error: null };
+    }
     function demoCameraState(){
-      return { mode: 'settings', available: true, previewing: demoCameraPreviewing, frameDataUrl: demoCameraFrame, error: null };
+      return { mode: 'settings', available: true, previewing: demoCameraPreviewing, devices: DEMO_CAM_DEVICES, selected: demoCameraDevice || null, frameDataUrl: demoCameraFrame, error: null };
     }
     function demoStopCamTimer(){
       if (demoCamTimer){ clearInterval(demoCamTimer); demoCamTimer = null; }
@@ -2499,9 +2613,9 @@
       } else if (tab === 'pair'){
         window.SlimeUI.setState('pairEntry', { mode: 'settings', skippable: false });
       } else if (tab === 'speaker'){
-        window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+        window.SlimeUI.setState('speakerSettings', demoSpeakerState());
       } else if (tab === 'microphone'){
-        window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: demoMicTesting, testResult: demoMicTestResult, error: null });
+        window.SlimeUI.setState('microphoneSettings', demoMicState());
       } else if (tab === 'camera'){
         demoStopCamTimer();
         window.SlimeUI.setState('cameraSettings', demoCameraState());
@@ -2550,27 +2664,43 @@
 
     document.addEventListener('slime:speaker-volume-set', function(e){
       demoSpeakerVolume = e.detail.volume | 0;
-      window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+      window.SlimeUI.setState('speakerSettings', demoSpeakerState());
     });
 
     document.addEventListener('slime:speaker-test', function(){
-      window.SlimeUI.setState('speakerSettings', { mode: 'settings', card: 'SB', volume: demoSpeakerVolume, error: null });
+      window.SlimeUI.setState('speakerSettings', demoSpeakerState());
+    });
+
+    document.addEventListener('slime:speaker-device-set', function(e){
+      demoSpeakerDevice = e.detail.device || '';
+      window.SlimeUI.setState('speakerSettings', demoSpeakerState());
     });
 
     document.addEventListener('slime:mic-volume-set', function(e){
       demoMicVolume = e.detail.volume | 0;
-      window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: false, testResult: demoMicTestResult, error: null });
+      window.SlimeUI.setState('microphoneSettings', demoMicState());
     });
 
     document.addEventListener('slime:mic-test', function(){
       demoMicTesting = true; demoMicTestResult = null;
-      window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: true, testResult: null, error: null });
+      window.SlimeUI.setState('microphoneSettings', demoMicState());
       setTimeout(function(){
         demoMicTesting = false; demoMicTestResult = 'ok';
         if (current.state === 'microphoneSettings'){
-          window.SlimeUI.setState('microphoneSettings', { mode: 'settings', card: 'Device', volume: demoMicVolume, testing: false, testResult: 'ok', error: null });
+          window.SlimeUI.setState('microphoneSettings', demoMicState());
         }
       }, 3200);
+    });
+
+    document.addEventListener('slime:mic-device-set', function(e){
+      demoMicDevice = e.detail.device || '';
+      window.SlimeUI.setState('microphoneSettings', demoMicState());
+    });
+
+    document.addEventListener('slime:camera-device-set', function(e){
+      demoCameraDevice = e.detail.device || '';
+      demoCameraPreviewing = false; demoCameraFrame = null; demoStopCamTimer();
+      window.SlimeUI.setState('cameraSettings', demoCameraState());
     });
 
     document.addEventListener('slime:camera-preview-start', function(){
@@ -2780,10 +2910,13 @@
       'slime:timezone-set': 'timezoneSet',
       'slime:speaker-volume-set': 'speakerVolumeSet',
       'slime:speaker-test': 'speakerTest',
+      'slime:speaker-device-set': 'speakerDeviceSet',
       'slime:mic-volume-set': 'micVolumeSet',
       'slime:mic-test': 'micTest',
+      'slime:mic-device-set': 'micDeviceSet',
       'slime:camera-preview-start': 'cameraPreviewStart',
       'slime:camera-preview-stop': 'cameraPreviewStop',
+      'slime:camera-device-set': 'cameraDeviceSet',
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',

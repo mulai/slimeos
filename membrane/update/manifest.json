@@ -1,7 +1,7 @@
 {
-  "version": "0.3.6",
-  "released_at": "2026-09-06T18:00:00Z",
-  "changelog": "0.3.6\n- New: Settings has a Display & Sound tab. Display size enlarges the Membrane's own screens straight away — handy on a big 4K TV where the text is otherwise tiny. Brain resolution and Sound output (Automatic / Headphones / TV over HDMI) apply the next time you connect to a Brain.\n- The sound-output choice from 0.3.5 is now a visible setting instead of a config-file-only option.",
+  "version": "0.3.7",
+  "released_at": "2026-09-07T12:00:00Z",
+  "changelog": "0.3.7\n- New: the Speaker, Microphone and Camera tabs each have a Device picker. Leave it on Automatic and Slime OS detects the right one; switch it when detection guesses wrong — e.g. a webcam's built-in microphone getting used instead of your real mic.\n- The Speaker and Microphone choices carry into your Brain sessions too. The Camera choice sets which camera the local preview shows (a Brain still sees every connected camera).\n- Each tab now shows which device is actually in use, even with nothing to change.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -9,7 +9,7 @@
     },
     {
       "src": "session/coordinator.sh",
-      "sha256": "f5ff315a89c553a093b5c6f72b5f085bdd1b9098cb98bcf3b6db1d4a58e9e179"
+      "sha256": "82bbce4d297e392fcdadaf200efb0c5901db4fff08b30284c426e1d7c5114cdd"
     },
     {
       "src": "session/network-setup.sh",
@@ -45,7 +45,7 @@
     },
     {
       "src": "session/hardware-test.sh",
-      "sha256": "da701f5a60d89344e94f678cbf5041967e2bbeaccf7d1b0dcb28095bffa25d97"
+      "sha256": "07cbd4e6c7004a41a6b313da88b6bc059e411d9115be95c39cc842427d7e6e36"
     },
     {
       "src": "session/display-settings.sh",
@@ -53,11 +53,11 @@
     },
     {
       "src": "freerdp/connect.sh",
-      "sha256": "816b9e5de779fbd52e219385ff12161b175ffbdb3407240d7aa04e6fe874938e"
+      "sha256": "a9d63e0f20c91a94ef6b93c1fd5bf00c04e559a66ef8414df1bbff283b122971"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "0b4b7a6dae3641c334ff00fb5b592394882f3a1d288d8659914c071420f283d2"
+      "sha256": "7332fe7168853fd12b387f106cbbbd0048da7b5c369284d12e51f30814c370b6"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",

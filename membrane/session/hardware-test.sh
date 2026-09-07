@@ -65,6 +65,115 @@ hw_playback_pcm() {
     fi
 }
 
+# --- Device pickers (Speaker/Microphone/Camera "Device" dropdowns) ------
+# Each tab lets the user pin an explicit device when detection guesses
+# wrong (the webcam-mic-over-USB-dongle case). The choice persists to
+# $DEVICE_PREFS_FILE (a shell KEY="value" fragment in $CRED_DIR, sourced by
+# coordinator.sh after config -- same unprivileged-prefs mechanism as
+# display-settings.sh) and is honoured by connect.sh's default_playback_card
+# / mic_redirect_card and by this file's own resolvers below. Empty value =
+# "Automatic".
+
+# "<idx>\t<name>\t<longname>" for every ALSA card. <name> is the bracketed
+# short id connect.sh keys on (what an override stores); <longname> is the
+# human string after " - " on the card line, for the picker label.
+hw_alsa_cards_tsv() {
+    awk '
+        /^[[:space:]]*[0-9]+[[:space:]]*\[/ {
+            idx=$0;  sub(/[[:space:]]*\[.*/, "", idx);        gsub(/[[:space:]]/, "", idx)
+            name=$0; sub(/^[^[]*\[/, "", name); sub(/\].*/, "", name); sub(/[[:space:]]+$/, "", name)
+            desc=$0; sub(/^[^]]*\][[:space:]]*:[[:space:]]*/, "", desc)
+            long=desc; if (long ~ / - /) sub(/^.* - /, "", long)
+            print idx "\t" name "\t" long
+        }
+    ' /proc/asound/cards 2>/dev/null
+}
+
+# JSON array of {id,label} for every ALSA card exposing a $1-type substream
+# ('p' playback / 'c' capture). "[]" when the box has none. Order matches
+# /proc/asound/cards (i.e. the order connect.sh's heuristics walk).
+hw_cards_json() {
+    local kind="$1" idx name long first=1
+    printf '['
+    while IFS=$'\t' read -r idx name long; do
+        compgen -G "/proc/asound/card${idx}/pcm*${kind}" >/dev/null || continue
+        [[ -n "$long" ]] || long="$name"
+        (( first )) || printf ','
+        first=0
+        jq -nc --arg id "$name" --arg label "$long" '{id:$id,label:$label}' | tr -d '\n'
+    done < <(hw_alsa_cards_tsv)
+    printf ']'
+}
+
+# JSON array of {id,label} for every /dev/video* node (id is the full path,
+# label the driver's name from sysfs). UVC webcams expose a capture node
+# and a metadata node -- both are listed; the first is normally the right
+# one and stays the Automatic pick.
+hw_video_devices_json() {
+    local dev base name first=1
+    printf '['
+    for dev in /dev/video*; do
+        [[ -e "$dev" ]] || continue
+        base=${dev##*/}
+        name=$(cat "/sys/class/video4linux/${base}/name" 2>/dev/null || true)
+        [[ -n "$name" ]] || name="$base"
+        (( first )) || printf ','
+        first=0
+        jq -nc --arg id "$dev" --arg label "$name" '{id:$id,label:$label}' | tr -d '\n'
+    done
+    printf ']'
+}
+
+# The capture card the Microphone tab shows and tests: an explicit
+# MIC_CARD_OVERRIDE when set and still present, else the dedicated-USB-mic
+# heuristic, else the first onboard capture card. Richer fallback than
+# connect.sh's mic_redirect_card on purpose -- the tab always wants
+# *something* to show, connect.sh prefers ALSA's own default over pinning
+# an onboard card.
+hw_mic_card() {
+    if [[ -n "${MIC_CARD_OVERRIDE:-}" ]] && card_present_with "$MIC_CARD_OVERRIDE" c; then
+        printf '%s' "$MIC_CARD_OVERRIDE"
+        return 0
+    fi
+    usb_capture_card 2>/dev/null && return 0
+    hw_first_capture_card 2>/dev/null
+}
+
+# The /dev/video* node the Camera preview should open: an explicit,
+# still-present CAMERA_DEV_OVERRIDE, else the first node. (RDP webcam
+# redirection exposes *every* node to the Brain and Windows picks, so this
+# override only steers the local preview -- the tab's blurb says so.)
+hw_cam_device() {
+    if [[ -n "${CAMERA_DEV_OVERRIDE:-}" && -e "${CAMERA_DEV_OVERRIDE}" ]]; then
+        printf '%s' "$CAMERA_DEV_OVERRIDE"
+        return 0
+    fi
+    local d
+    for d in /dev/video*; do
+        [[ -e "$d" ]] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+
+# Atomically rewrite $DEVICE_PREFS_FILE with all three override keys from
+# the current environment (the caller has already updated whichever one
+# changed). Same-dir temp + mv so a crash mid-write can't leave
+# coordinator.sh sourcing a half file next boot. Mirrors dp_write_prefs()
+# in display-settings.sh.
+dev_write_prefs() {
+    local tmp
+    tmp=$(mktemp "${DEVICE_PREFS_FILE}.XXXXXX") || return 1
+    {
+        echo "# Slime OS — per-device overrides (Settings > Speaker / Microphone / Camera)."
+        echo "# Managed by hardware-test.sh; an empty value means Automatic (detect)."
+        echo "SPEAKER_CARD_OVERRIDE=\"${SPEAKER_CARD_OVERRIDE:-}\""
+        echo "MIC_CARD_OVERRIDE=\"${MIC_CARD_OVERRIDE:-}\""
+        echo "CAMERA_DEV_OVERRIDE=\"${CAMERA_DEV_OVERRIDE:-}\""
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$DEVICE_PREFS_FILE" || { rm -f "$tmp"; return 1; }
+}
+
 # Blocking read of one event line, but give up after $1 seconds and return 2
 # so the caller can do periodic work (grab a webcam frame) between events.
 # Return 1 on real EOF, same as coordinator.sh's read_event(). Used only by
@@ -99,9 +208,12 @@ do_speaker_settings() {
         fi
 
         emit_state speakerSettings "$(jq -nc --arg mode "$mode" --arg card "$card" \
-            --arg volume "$volume" --arg error "$error" \
+            --arg volume "$volume" --arg selected "${SPEAKER_CARD_OVERRIDE:-}" \
+            --argjson cards "$(hw_cards_json p)" --arg error "$error" \
             '{mode:$mode,
               card:(if $card == "" then null else $card end),
+              cards:$cards,
+              selected:(if $selected == "" then null else $selected end),
               volume:(if $volume == "" then null else ($volume | tonumber) end),
               error:(if $error == "" then null else $error end)}')"
         error=""
@@ -127,6 +239,22 @@ do_speaker_settings() {
                     log "amixer sset failed on card '$card'"
                     error="Couldn't change the speaker volume right now."
                 fi
+                ;;
+            speakerDeviceSet)
+                local want
+                want=$(jq -r '.device // ""' <<<"$line")
+                if [[ -n "$want" ]] && ! card_present_with "$want" p; then
+                    log "speakerDeviceSet rejected: '$want' absent or has no playback stream"
+                    error="That speaker isn't available."
+                    continue
+                fi
+                SPEAKER_CARD_OVERRIDE="$want"
+                if ! dev_write_prefs; then
+                    log "speakerDeviceSet: failed to write $DEVICE_PREFS_FILE"
+                    error="Couldn't save that choice. Try again."
+                    continue
+                fi
+                log "Speaker device -> '${want:-automatic}'"
                 ;;
             speakerTest)
                 if [[ -z "$card" ]]; then
@@ -167,13 +295,11 @@ do_microphone_settings() {
 
     while true; do
         local card="" volume=""
-        card=$(usb_capture_card 2>/dev/null) || card=""
-        # usb_capture_card() only ever returns a USB capture card; fall back
-        # to the onboard capture card the same index-order way connect.sh's
-        # mic path implicitly does via ALSA's own default when no USB mic is
-        # present. Here we make it explicit so the tab still has something to
-        # show (and set) on a webcam-only / onboard-only box.
-        [[ -n "$card" ]] || card=$(hw_first_capture_card 2>/dev/null) || card=""
+        # hw_mic_card(): explicit MIC_CARD_OVERRIDE if still present, else
+        # the dedicated-USB-mic heuristic, else the first onboard capture
+        # card -- so the tab always has something to show/set even on a
+        # webcam-only / onboard-only box.
+        card=$(hw_mic_card) || card=""
         if [[ -n "$card" ]]; then
             volume=$(hw_mixer_get_pct "$card" Capture) \
                 || volume=$(hw_mixer_get_pct "$card" Mic) \
@@ -181,9 +307,13 @@ do_microphone_settings() {
         fi
 
         emit_state microphoneSettings "$(jq -nc --arg mode "$mode" --arg card "$card" \
-            --arg volume "$volume" --arg error "$error" --arg testResult "$test_result" \
+            --arg volume "$volume" --arg selected "${MIC_CARD_OVERRIDE:-}" \
+            --argjson cards "$(hw_cards_json c)" \
+            --arg error "$error" --arg testResult "$test_result" \
             '{mode:$mode,
               card:(if $card == "" then null else $card end),
+              cards:$cards,
+              selected:(if $selected == "" then null else $selected end),
               volume:(if $volume == "" then null else ($volume | tonumber) end),
               testing:false,
               testResult:(if $testResult == "" then null else $testResult end),
@@ -212,6 +342,22 @@ do_microphone_settings() {
                     log "amixer sset (capture) failed on card '$card'"
                     error="Couldn't change the microphone level right now."
                 fi
+                ;;
+            micDeviceSet)
+                local want
+                want=$(jq -r '.device // ""' <<<"$line")
+                if [[ -n "$want" ]] && ! card_present_with "$want" c; then
+                    log "micDeviceSet rejected: '$want' absent or has no capture stream"
+                    error="That microphone isn't available."
+                    continue
+                fi
+                MIC_CARD_OVERRIDE="$want"
+                if ! dev_write_prefs; then
+                    log "micDeviceSet: failed to write $DEVICE_PREFS_FILE"
+                    error="Couldn't save that choice. Try again."
+                    continue
+                fi
+                log "Microphone device -> '${want:-automatic}'"
                 ;;
             micTest)
                 if [[ -z "$card" ]]; then
@@ -329,8 +475,11 @@ do_camera_settings() {
 
         emit_state cameraSettings "$(jq -nc --arg mode "$mode" \
             --argjson available "$available" --argjson previewing "$previewing" \
+            --argjson devices "$(hw_video_devices_json)" --arg selected "${CAMERA_DEV_OVERRIDE:-}" \
             --arg frame "$frame_data_url" --arg error "$error" \
             '{mode:$mode, available:$available, previewing:$previewing,
+              devices:$devices,
+              selected:(if $selected == "" then null else $selected end),
               frameDataUrl:(if $frame == "" then null else $frame end),
               error:(if $error == "" then null else $error end)}')"
         error=""
@@ -376,10 +525,13 @@ do_camera_settings() {
                     error="No camera was found on this device."
                     continue
                 fi
-                # Clear any prior process/file, then start the loop grabber.
+                # Clear any prior process/file, then start the loop grabber
+                # on the chosen (or first) /dev/video node.
                 hw_cam_kill "$cam_pid"; cam_pid=""; rm -f "$framefile"
+                local cam_dev
+                cam_dev=$(hw_cam_device) || cam_dev="/dev/video0"
                 set +e
-                fswebcam -q -d /dev/video0 -r 640x480 --no-banner --jpeg 80 \
+                fswebcam -q -d "$cam_dev" -r 640x480 --no-banner --jpeg 80 \
                     --loop 1 "$framefile" >/dev/null 2>&1 &
                 cam_pid=$!
                 set -e
@@ -390,6 +542,28 @@ do_camera_settings() {
                 hw_cam_kill "$cam_pid"; cam_pid=""; rm -f "$framefile"
                 previewing="false"
                 frame_data_url=""
+                ;;
+            cameraDeviceSet)
+                local want
+                want=$(jq -r '.device // ""' <<<"$line")
+                if [[ -n "$want" ]] && { [[ ! "$want" =~ ^/dev/video[0-9]+$ ]] || [[ ! -e "$want" ]]; }; then
+                    log "cameraDeviceSet rejected: '$want' not a present /dev/video node"
+                    error="That camera isn't available."
+                    continue
+                fi
+                CAMERA_DEV_OVERRIDE="$want"
+                if ! dev_write_prefs; then
+                    log "cameraDeviceSet: failed to write $DEVICE_PREFS_FILE"
+                    error="Couldn't save that choice. Try again."
+                    continue
+                fi
+                # A running preview is on the old node -- drop it so the next
+                # Start preview opens the newly chosen one.
+                if [[ "$previewing" == "true" ]]; then
+                    hw_cam_kill "$cam_pid"; cam_pid=""; rm -f "$framefile"
+                    previewing="false"; frame_data_url=""
+                fi
+                log "Camera device -> '${want:-automatic}'"
                 ;;
             settingsTab)
                 [[ "$mode" == "settings" ]] || continue
