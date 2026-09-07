@@ -520,6 +520,11 @@
   input.field{width:100%;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;font-size:14.5px;color:var(--text);outline:none;margin-bottom:18px;}
   input.field:focus-visible{border-color:var(--teal);outline:2px solid rgba(0,194,168,0.35);outline-offset:1px;}
   input.field.error{border-color:var(--error);}
+  /* Same look as input.field but for multi-line entry -- the selector above
+     is input-only, so a bare <textarea class="field"> would otherwise fall
+     back to the UA's white monospace ~20-col box (see the Send Feedback tab). */
+  textarea.field{display:block;width:100%;background:#0d1217;border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;font-family:inherit;font-size:14.5px;line-height:1.5;color:var(--text);outline:none;margin-bottom:18px;resize:none;min-height:132px;}
+  textarea.field:focus-visible{border-color:var(--teal);outline:2px solid rgba(0,194,168,0.35);outline-offset:1px;}
 
   /* Timezone tab's combobox -- deliberately NOT a native <select>: its
      platform popup is a foreign surface outside cage/cog's normal
@@ -1874,7 +1879,7 @@
       '<label class="field-label" for="fieldFeedbackMessage">Your message</label>' +
       '<textarea class="field" id="fieldFeedbackMessage" rows="5" maxlength="4000" ' +
         'placeholder="What happened, what you expected, and anything that helps us reproduce it." ' +
-        'style="resize:none;line-height:1.5;min-height:120px;" data-autofocus></textarea>' +
+        'data-autofocus></textarea>' +
       '<p style="margin:12px 0 0;font-size:11.5px;line-height:1.6;color:var(--text-faint);">' +
         'Attached automatically: this device’s Slime OS version (v' + escapeHtml(version) + '), hardware profile, ' +
         'kernel, RAM, the active connection type &amp; MTU, tunnel status and a coarse guess at your Brain’s OS. ' +
