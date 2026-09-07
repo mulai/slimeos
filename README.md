@@ -209,6 +209,12 @@ PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) — read
 - Brain infra → label `brain`
 - Android → label `android`
 
+Membrane users can also file a bug or feature request straight from the
+device — **Settings › Help › Send Feedback**. It opens a GitHub issue
+(label `user-feedback`) with a small, non-identifying environment snapshot
+attached (Slime OS version, hardware profile, connection type + MTU, a
+coarse Brain-OS guess); no SSIDs, addresses, keys, hostnames or PINs.
+
 This project follows a [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---

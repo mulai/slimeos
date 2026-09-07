@@ -38,8 +38,9 @@
 #   {"type":"cameraPreviewStart"} | {"type":"cameraPreviewStop"} | {"type":"cameraDeviceSet","device":"/dev/videoN"|""}           only consumed by do_camera_settings, see hardware-test.sh
 #     (the *DeviceSet events persist an explicit device override to $DEVICE_PREFS_FILE; "" clears it back to Automatic)
 #   {"type":"displaySet","uiScale":..,"resolution":..,"audioOutput":..}   only consumed by do_display_settings, see display-settings.sh
-#   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"display"|"timezone"|"changelog"}  only consumed by whichever of
-#     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_display_settings/do_timezone/do_changelog is currently running in `settings` mode —
+#   {"type":"feedbackSubmit","category":"bug"|"feature"|"other","message":..} | {"type":"feedbackReset"}   only consumed by do_feedback, see feedback.sh
+#   {"type":"settingsTab","tab":"internet"|"pair"|"speaker"|"microphone"|"camera"|"support"|"privacy"|"display"|"timezone"|"changelog"|"feedback"}  only consumed by whichever of
+#     do_network_setup/do_pair/do_speaker_settings/do_microphone_settings/do_camera_settings/do_support/do_crash_reporting/do_display_settings/do_timezone/do_changelog/do_feedback is currently running in `settings` mode —
 #     switches the Settings panel to a different tab without leaving it (see the
 #     openSettings case's SETTINGS_NEXT_TAB loop below)
 #   {"type":"crashConsent","granted":true|false}            handled directly here (see the outer dispatch's
@@ -86,7 +87,7 @@
 #     untouched unless every file was verified.
 #
 # Write (stdout), one JSON object per line — mirrors window.SlimeUI 1:1:
-#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|speakerSettings|microphoneSettings|cameraSettings|supportSettings|crashReportSettings|displaySettings|timezoneSettings|changelogSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
+#   {"type":"setState","state":"empty|picker|addBrain|credentials|connecting|error|reconnecting|wifiList|wifiPassword|wifiConnecting|wifiError|pairEntry|pairConnecting|pairError|speakerSettings|microphoneSettings|cameraSettings|supportSettings|crashReportSettings|displaySettings|timezoneSettings|changelogSettings|feedbackSettings|slimeIdConnecting|slimeIdEntry|slimeIdError","data":{...}}
 #   {"type":"setStatus","clock":"HH:MM","tunnel":"up|down|connecting","update":string|null,"uiScale":string|null}
 #     `uiScale` is MEMBRANE_UI_SCALE from the Display & Sound tab (default "1"); the page applies it
 #     as a CSS zoom on the whole UI. Like `clock`, one value per connect/resync is enough.
@@ -116,7 +117,7 @@
 # wifiPassword/wifiConnecting/wifiError/pairEntry/pairConnecting/pairError/
 # speakerSettings/microphoneSettings/cameraSettings/supportSettings/
 # crashReportSettings/displaySettings/timezoneSettings/changelogSettings/
-# slimeIdConnecting/slimeIdEntry/slimeIdError.
+# feedbackSettings/slimeIdConnecting/slimeIdEntry/slimeIdError.
 # `empty`/`picker` both additionally carry `signedInEmail` (null unless
 # do_slime_id_login() has ever successfully signed this device in).
 # `picker`'s brain entries additionally carry `remote` (true for a Slime
@@ -335,6 +336,8 @@ source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout
 source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
 # shellcheck source=changelog.sh
 source "$INSTALL_DIR/changelog.sh" # defines do_changelog()
+# shellcheck source=feedback.sh
+source "$INSTALL_DIR/feedback.sh" # defines do_feedback()
 # shellcheck source=hardware-test.sh
 source "$INSTALL_DIR/hardware-test.sh" # defines do_speaker_settings(), do_microphone_settings(), do_camera_settings()
 # shellcheck source=display-settings.sh
@@ -894,6 +897,7 @@ while true; do
                     display)    do_display_settings settings ;;
                     timezone)   do_timezone settings ;;
                     changelog)  do_changelog settings ;;
+                    feedback)   do_feedback settings ;;
                 esac
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"

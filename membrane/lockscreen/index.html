@@ -15,7 +15,7 @@
             'connecting' | 'error' | 'reconnecting' | 'disconnected' |
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
-            'crashReportSettings' | 'displaySettings' | 'timezoneSettings' | 'changelogSettings' |
+            'crashReportSettings' | 'displaySettings' | 'timezoneSettings' | 'changelogSettings' | 'feedbackSettings' |
             'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
      data per state:
        empty:        { signedInEmail: string | null }
@@ -213,6 +213,21 @@
                        // omitted entirely rather than showing "never".
                        // No `boot` mode, same as supportSettings/
                        // timezoneSettings.
+       feedbackSettings: { mode: 'settings', status: 'idle'|'sending'|'sent'|'error',
+                          category: 'bug'|'feature'|'other', error: string | null,
+                          issueUrl: string | null, version: string }
+                       // Settings panel's Help > Send Feedback tab (see
+                       // membrane/session/feedback.sh). One screen, four
+                       // statuses: 'idle' shows the category picker +
+                       // message box, 'sending' a spinner, 'sent' the
+                       // confirmation (with issueUrl when the server
+                       // filed a GitHub issue), 'error' re-shows the form
+                       // with `error` above it. `category` is echoed back
+                       // so the picked chip survives a re-render.
+                       // Submitting fires 'slime:feedback-submit'
+                       // { category, message }; the "Send another" button
+                       // on the 'sent' screen fires 'slime:feedback-reset'.
+                       // No `boot` mode, same as supportSettings.
        slimeIdConnecting: { stage }
                        // "Sign in with Slime ID" (see
                        // membrane/session/slime-id.sh) -- reached directly
@@ -313,7 +328,7 @@
    'slime:cancel-connect'  {}
 
    'slime:open-settings'   {}                             // gear icon: open the tabbed Settings panel (defaults to its Internet tab)
-   'slime:settings-tab'    { tab }                        // Settings panel's left nav -- tab: 'internet'|'pair'|'speaker'|'microphone'|'camera'|'support'|'privacy'|'timezone'|'changelog'
+   'slime:settings-tab'    { tab }                        // Settings panel's left nav -- tab: 'internet'|'pair'|'speaker'|'microphone'|'camera'|'support'|'privacy'|'timezone'|'changelog'|'feedback'
    'slime:wifi-connect'    { ssid }
    'slime:wifi-password'   { password }
    'slime:wifi-rescan'     {}
@@ -329,6 +344,8 @@
    'slime:display-set'     { uiScale, resolution, audioOutput }  // Settings > Display & Sound -- always the whole
                                                           // current triplet, fired on any segmented-row change
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
+   'slime:feedback-submit' { category, message }           // Settings > Help > Send Feedback -- category: 'bug'|'feature'|'other'
+   'slime:feedback-reset'  {}                              // "Send another" on the post-submit confirmation
    'slime:speaker-volume-set' { volume }                   // Devices > Speaker tab -- 0-100, fired on slider release
    'slime:speaker-test'    {}                              // Devices > Speaker tab -- play the built-in test tone
    'slime:speaker-device-set' { device }                   // Devices > Speaker tab -- ALSA card id, '' = Automatic
@@ -1014,8 +1031,8 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
   // Left-hand nav, grouped. Was a flat horizontal row of tabs; with the
   // Devices group added it needed a sidebar with parent/child grouping.
   // Groups are always expanded -- see the .settings-sidebar CSS comment.
@@ -1023,7 +1040,8 @@
     { group: 'Network', items: [ { id: 'internet', label: 'Wi-Fi & Internet' }, { id: 'pair', label: 'Pairing' } ] },
     { group: 'Devices', items: [ { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
     { group: 'Support', items: [ { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
-    { group: 'System', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] }
+    { group: 'System', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] },
+    { group: 'Help', items: [ { id: 'feedback', label: 'Send Feedback' } ] }
   ];
 
   function settingsTabForState(state){
@@ -1036,6 +1054,7 @@
     if (state === 'displaySettings') return 'display';
     if (state === 'timezoneSettings') return 'timezone';
     if (state === 'changelogSettings') return 'changelog';
+    if (state === 'feedbackSettings') return 'feedback';
     return 'internet';
   }
 
@@ -1151,6 +1170,7 @@
     else if (state === 'timezoneSettings') html = renderTimezoneSettings(data);
     else if (state === 'crashReportSettings') html = renderCrashReportSettings(data);
     else if (state === 'changelogSettings') html = renderChangelogSettings(data);
+    else if (state === 'feedbackSettings') html = renderFeedbackSettings(data);
     else if (state === 'slimeIdConnecting') html = renderSlimeIdConnecting(data);
     else if (state === 'slimeIdEntry') html = renderSlimeIdEntry(data);
     else if (state === 'slimeIdError') html = renderSlimeIdError(data);
@@ -1807,6 +1827,66 @@
     );
   }
 
+  // Settings > Help > Send Feedback (see membrane/session/feedback.sh).
+  // One screen, switched on data.status. The disclosure line is deliberate:
+  // people should see, before they hit Send, that some non-identifying
+  // environment facts ride along -- no surprises.
+  function renderFeedbackSettings(data){
+    var status = data.status || 'idle';
+    var category = data.category || 'bug';
+    var version = data.version || 'unknown';
+
+    if (status === 'sending'){
+      return renderHwSettingsFrame('feedbackSettings', 'Send Feedback',
+        'Sending your feedback…',
+        '<div style="display:flex;align-items:center;gap:10px;color:var(--text-dim);font-size:13px;margin-top:6px;">' +
+          '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span>' +
+          '<span>Filing it now — this only takes a moment.</span>' +
+        '</div>');
+    }
+
+    if (status === 'sent'){
+      var link = data.issueUrl
+        ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--text-faint);word-break:break-all;">Tracked at ' + escapeHtml(data.issueUrl) + '</p>'
+        : '';
+      return renderHwSettingsFrame('feedbackSettings', 'Send Feedback',
+        'Thanks — that came through.',
+        '<div class="support-connection">' +
+          '<p style="margin:0;font-size:13px;line-height:1.65;color:var(--text);">Your note reached the Slime OS team. There’s nothing else you need to do.</p>' +
+          link +
+        '</div>' +
+        '<button type="button" class="btn-secondary" id="btnFeedbackAnother" style="margin-top:16px;">Send another</button>');
+    }
+
+    var cats = [ ['bug', 'Something’s broken'], ['feature', 'An idea / request'], ['other', 'Something else'] ];
+    var chips = cats.map(function(c){
+      return '<div class="seg-btn' + (c[0] === category ? ' active' : '') + '" role="button" tabindex="0" data-val="' + c[0] + '">' + escapeHtml(c[1]) + '</div>';
+    }).join('');
+
+    var errBlock = data.error
+      ? '<p style="margin:0 0 14px;font-size:12.5px;color:var(--error);line-height:1.5;">' + escapeHtml(data.error) + '</p>'
+      : '';
+
+    var inner =
+      errBlock +
+      '<label class="field-label">What kind of feedback is this?</label>' +
+      '<div class="seg-group" data-seg="feedbackCategory" style="margin-bottom:18px;">' + chips + '</div>' +
+      '<label class="field-label" for="fieldFeedbackMessage">Your message</label>' +
+      '<textarea class="field" id="fieldFeedbackMessage" rows="5" maxlength="4000" ' +
+        'placeholder="What happened, what you expected, and anything that helps us reproduce it." ' +
+        'style="resize:none;line-height:1.5;min-height:120px;" data-autofocus></textarea>' +
+      '<p style="margin:12px 0 0;font-size:11.5px;line-height:1.6;color:var(--text-faint);">' +
+        'Attached automatically: this device’s Slime OS version (v' + escapeHtml(version) + '), hardware profile, ' +
+        'kernel, RAM, the active connection type &amp; MTU, tunnel status and a coarse guess at your Brain’s OS. ' +
+        'No SSIDs, IP or MAC addresses, keys, hostnames or PINs — and nothing you haven’t typed above.' +
+      '</p>' +
+      '<button type="button" class="btn-primary" id="btnFeedbackSend" style="margin-top:18px;box-shadow:none;">Send feedback</button>';
+
+    return renderHwSettingsFrame('feedbackSettings', 'Send Feedback',
+      'Report a bug, ask for a feature, or tell us what’s not working. This goes straight to the Slime OS team.',
+      inner);
+  }
+
   function renderSlimeIdConnecting(data){
     return (
       '<div class="screen" data-screen="slimeIdConnecting">' +
@@ -2238,6 +2318,41 @@
     else if (state === 'crashReportSettings'){
       bindToggleRow('rowCrashReportToggle', 'fieldCrashReportToggle', 'lblCrashReportToggle', 'Anonymous error reporting is', 'slime:crash-report-toggle');
     }
+    else if (state === 'feedbackSettings'){
+      var fbAnother = document.getElementById('btnFeedbackAnother');
+      if (fbAnother) on(fbAnother, 'click', function(){ emit('slime:feedback-reset'); });
+
+      // idle / error screen -- category chips + textarea + Send.
+      var fbCat = data.category || 'bug';
+      var fbGroup = screenRoot.querySelector('.seg-group[data-seg="feedbackCategory"]');
+      if (fbGroup){
+        Array.prototype.forEach.call(fbGroup.querySelectorAll('.seg-btn'), function(btn){
+          var choose = function(){
+            if (btn.classList.contains('active')) return;
+            Array.prototype.forEach.call(fbGroup.querySelectorAll('.seg-btn'), function(b){
+              b.classList.toggle('active', b === btn);
+            });
+            fbCat = btn.getAttribute('data-val');
+          };
+          on(btn, 'click', choose);
+          on(btn, 'keydown', function(e){
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){ e.preventDefault(); choose(); }
+          });
+        });
+      }
+      var fbSend = document.getElementById('btnFeedbackSend');
+      var fbMsg = document.getElementById('fieldFeedbackMessage');
+      if (fbSend && fbMsg){
+        on(fbSend, 'click', function(){
+          var msg = (fbMsg.value || '').trim();
+          if (msg.length < 3){
+            fbMsg.focus();
+            return;
+          }
+          emit('slime:feedback-submit', { category: fbCat, message: msg });
+        });
+      }
+    }
     /* slimeIdConnecting has no interactive elements -- same reasoning as
        wifiConnecting/pairConnecting above. */
     else if (state === 'slimeIdEntry'){
@@ -2537,7 +2652,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -2629,7 +2744,21 @@
         window.SlimeUI.setState('crashReportSettings', { mode: 'settings', enabled: demoCrashReportEnabled });
       } else if (tab === 'changelog'){
         window.SlimeUI.setState('changelogSettings', { mode: 'settings', version: '0.1.0-demo', changelog: 'Demo mode changelog text.', releasedAt: null, releasedRelative: '2 hours ago' });
+      } else if (tab === 'feedback'){
+        window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'idle', category: 'bug', error: null, issueUrl: null, version: '0.1.0-demo' });
       }
+    });
+
+    document.addEventListener('slime:feedback-submit', function(e){
+      var cat = (e.detail && e.detail.category) || 'other';
+      window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'sending', category: cat, error: null, issueUrl: null, version: '0.1.0-demo' });
+      setTimeout(function(){
+        window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'sent', category: cat, error: null, issueUrl: 'https://github.com/mulai/slimeos/issues/999', version: '0.1.0-demo' });
+      }, 900);
+    });
+
+    document.addEventListener('slime:feedback-reset', function(){
+      window.SlimeUI.setState('feedbackSettings', { mode: 'settings', status: 'idle', category: 'bug', error: null, issueUrl: null, version: '0.1.0-demo' });
     });
 
     document.addEventListener('slime:support-toggle', function(e){
@@ -2920,6 +3049,8 @@
       'slime:crash-report': 'crashReport',
       'slime:crash-consent': 'crashConsent',
       'slime:crash-report-toggle': 'crashReportToggle',
+      'slime:feedback-submit': 'feedbackSubmit',
+      'slime:feedback-reset': 'feedbackReset',
       'slime:slime-id-start': 'slimeIdStart',
       'slime:slime-id-logout': 'slimeIdLogout',
       'slime:save-brain-consent': 'saveBrainConsent',
