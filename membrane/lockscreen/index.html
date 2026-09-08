@@ -1125,7 +1125,10 @@
     Array.prototype.forEach.call(document.querySelectorAll('.settings-tab'), function(btn){
       on(btn, 'click', function(){
         var tab = btn.getAttribute('data-tab');
-        if (tab !== settingsTabForState(state)) emit('slime:settings-tab', { tab: tab });
+        // Read the live state, not the one closed over at bind time: a tab
+        // switch now keeps this sidebar DOM (and these listeners) in place
+        // and only swaps the body, so `state` here would otherwise go stale.
+        if (tab !== settingsTabForState(current.state)) emit('slime:settings-tab', { tab: tab });
       });
     });
   }
@@ -1147,15 +1150,19 @@
   // flickers. When only the frame changed, swap the <img src> in place.
   var lastCameraSig = null;
 
-  // Signature of the last settings-panel *shell* we painted: state + active
-  // tab + whether the nav/close chrome shows. When a backend re-emit carries
-  // the SAME signature -- changelog's "Check for updates" round-trip
+  // Signature of the last settings-panel *shell* we painted: whether the
+  // nav/close chrome shows. Deliberately NOT the active tab -- the sidebar
+  // markup is identical for every tab (same buttons in the same groups),
+  // only the .active highlight moves. So when a re-emit keeps this
+  // signature -- a tab switch, changelog's "Check for updates" round-trip
   // (checking -> checked), feedback's idle -> sending -> sent, a Display
-  // segmented-row toggle -- only the tab body changed, but replacing the
-  // whole screenRoot rebuilds the sidebar + header and visibly flickers
-  // (issue #8). Same class of problem the Camera frame fast-path above
-  // already dodges; here we swap just .settings-body's contents and leave
-  // the sidebar DOM (and its already-bound listeners) untouched.
+  // segmented-row toggle -- only the tab body (and maybe the highlight)
+  // changed, but replacing the whole screenRoot rebuilds the sidebar +
+  // header and visibly flickers (issues #8, #9). Same class of problem the
+  // Camera frame fast-path above already dodges; here we swap just
+  // .settings-body's contents, move the .active class, and leave the
+  // sidebar/header DOM (and their already-bound listeners) untouched. A
+  // full rebuild happens only when the panel opens or its chrome changes.
   var lastSettingsSig = null;
 
   function renderImpl(){
@@ -1212,17 +1219,26 @@
     if (isSettingsPanel){
       // showNav mirrors renderSettingsShell()'s SETTINGS_TOP_STATES check;
       // showClose mirrors its wifiConnecting/pairConnecting exclusion --
-      // any change to either forces the full rebuild below.
-      var sig = state + '|' + settingsTabForState(state) + '|' +
-                (SETTINGS_TOP_STATES[state] ? 1 : 0) + '|' +
+      // a change to either (but NOT to the active tab) forces the full
+      // rebuild below.
+      var showNav = SETTINGS_TOP_STATES[state] ? 1 : 0;
+      var sig = 'p|' + showNav + '|' +
                 (state !== 'wifiConnecting' && state !== 'pairConnecting' ? 1 : 0);
       var body = screenRoot.querySelector('.settings-body');
       if (body && sig === lastSettingsSig){
         // `html` is still the pre-shell inner markup here. Swapping only the
         // body destroys the old content nodes (and their listeners) and we
         // re-bind the fresh ones; the sidebar/header keep the listeners
-        // bindSettingsShell() gave them on the last full render.
+        // bindSettingsShell() gave them on the last full render. On a tab
+        // switch the sidebar DOM is right as-is bar the highlight, so move
+        // the .active class to the button for the state we're now showing.
         body.innerHTML = html;
+        if (showNav){
+          var activeTab = settingsTabForState(state);
+          Array.prototype.forEach.call(screenRoot.querySelectorAll('.settings-tab'), function(btn){
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab);
+          });
+        }
         bindScreen(state, data);
         autofocus(state);
         return; // render() still runs renderUpdateIcon() after this

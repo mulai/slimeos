@@ -1,7 +1,7 @@
 {
-  "version": "0.3.11",
-  "released_at": "2026-09-08T01:00:00Z",
-  "changelog": "0.3.11\n- Fix: pressing \"Check for updates\" (and other in-place Settings actions) no longer flashes the whole Settings panel — only the part that changed redraws.",
+  "version": "0.3.12",
+  "released_at": "2026-09-08T12:00:00Z",
+  "changelog": "0.3.12\n- Fix: switching tabs in the Settings menu no longer rebuilds the whole panel — the sidebar and header stay put, only the highlight and the tab content change.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -61,7 +61,7 @@
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "4051d7d8699537c537cc3a76a1e33d9d2150493fbf8a525c892f786b0f4248c9"
+      "sha256": "4cac55104e300c8760425ef4bc920e6b4fd684d397420b2a334ff83f97a26d00"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",
