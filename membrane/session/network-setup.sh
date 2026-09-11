@@ -119,16 +119,35 @@ do_network_setup() {
     local phase="list"
     local ssid="" password="" secured="false"
     local last_scan="[]"
+    local scanned="false"
+    # boot mode has no working network yet, so it must scan immediately;
+    # settings mode (opened via the gear icon while already connected) does
+    # not -- `nmcli device wifi rescan` can take several seconds on real
+    # hardware and used to run unconditionally every time the Settings panel
+    # opened, since openSettings always lands here first via its
+    # Internet-tab default. That was the whole of issue #13's "settings
+    # panel takes a while to open" report. Now settings mode renders
+    # instantly with no networks listed and waits for an explicit Rescan tap
+    # (see the wifiRescan case below); boot mode's behavior is unchanged.
+    local scan_now="false"
+    [[ "$mode" == "boot" ]] && scan_now="true"
 
     while true; do
         if [[ "$phase" == "list" ]]; then
-            log "Network setup ($mode): scanning for Wi-Fi networks"
-            last_scan="$(nm_scan_wifi)" || last_scan='[]'
             local conn_type conn_ssid=""
             conn_type=$(active_connection_type)
             [[ "$conn_type" == "wifi" ]] && conn_ssid=$(active_wifi_ssid)
-            emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --arg connType "$conn_type" --arg connSsid "$conn_ssid" \
-                '{networks:$n, scanning:false, mode:$mode, connectionType:$connType, connectionSsid:$connSsid, skippable:($mode=="boot")}')"
+
+            if [[ "$scan_now" == "true" ]]; then
+                emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --arg connType "$conn_type" --arg connSsid "$conn_ssid" \
+                    '{networks:$n, scanning:true, scanned:false, mode:$mode, connectionType:$connType, connectionSsid:$connSsid, skippable:($mode=="boot")}')"
+                log "Network setup ($mode): scanning for Wi-Fi networks"
+                last_scan="$(nm_scan_wifi)" || last_scan='[]'
+                scanned="true"
+                scan_now="false"
+            fi
+            emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --arg connType "$conn_type" --arg connSsid "$conn_ssid" --argjson scanned "$scanned" \
+                '{networks:$n, scanning:false, scanned:$scanned, mode:$mode, connectionType:$connType, connectionSsid:$connSsid, skippable:($mode=="boot")}')"
 
             while true; do
                 local line ev_type
@@ -144,6 +163,7 @@ do_network_setup() {
                         continue 2
                         ;;
                     wifiRescan)
+                        scan_now="true"
                         continue 2
                         ;;
                     wifiSkip)

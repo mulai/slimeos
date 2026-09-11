@@ -1481,7 +1481,7 @@
         '</div>'
       );
     }).join('');
-    var emptyMsg = !networks.length ? ('<p style="font-size:13.5px;color:var(--text-muted);">' + (data.scanning ? 'Scanning for networks…' : 'No networks found nearby.') + '</p>') : '';
+    var emptyMsg = !networks.length ? ('<p style="font-size:13.5px;color:var(--text-muted);">' + (data.scanning ? 'Scanning for networks…' : (data.scanned === false ? 'Tap Rescan to look for networks nearby.' : 'No networks found nearby.')) + '</p>') : '';
     var actions = (
       '<button class="btn-ghost"' + (!networks.length ? ' data-autofocus' : '') + ' id="btnWifiRescan">Rescan</button>' +
       (mode === 'boot' && data.skippable ? '<button class="btn-ghost" id="btnWifiSkip">Skip &middot; my network already works</button>' : '') +
