@@ -37,6 +37,13 @@
 // calls) rather than via the Azure SDK: same zero-external-dependency
 // rationale as brain/enroll/main.go and membrane/bridge/main.go — this
 // file holds cloud credentials and is fully auditable on its own.
+//
+// The ARM credentials themselves live in Azure Key Vault (KV_VAULT_URL set)
+// rather than this hub's plaintext .env, fetched at startup via a second,
+// narrowly-scoped "read secrets from this vault only" identity — see
+// fetchAzureCredsFromKeyVault below. Falls back to AZURE_TENANT_ID/
+// CLIENT_ID/CLIENT_SECRET straight from the environment if KV_VAULT_URL is
+// unset.
 package main
 
 import (
@@ -91,11 +98,20 @@ func main() {
 		log.Fatalf("bad POWER_VMS: %v", err)
 	}
 
+	httpc := &http.Client{Timeout: 15 * time.Second}
+	tenant, clientID, clientSecret := os.Getenv("AZURE_TENANT_ID"), os.Getenv("AZURE_CLIENT_ID"), os.Getenv("AZURE_CLIENT_SECRET")
+	if vaultURL := os.Getenv("KV_VAULT_URL"); vaultURL != "" {
+		tenant, clientID, clientSecret, err = fetchAzureCredsFromKeyVault(httpc, vaultURL)
+		if err != nil {
+			log.Fatalf("failed to load Azure credentials from Key Vault: %v", err)
+		}
+	}
+
 	s := &server{
-		tenant:        os.Getenv("AZURE_TENANT_ID"),
-		clientID:      os.Getenv("AZURE_CLIENT_ID"),
-		clientSecret:  os.Getenv("AZURE_CLIENT_SECRET"),
-		httpc:         &http.Client{Timeout: 15 * time.Second},
+		tenant:        tenant,
+		clientID:      clientID,
+		clientSecret:  clientSecret,
+		httpc:         httpc,
 		hosts:         make(map[string]*hostState),
 		rdpPort:       strconv.Itoa(rdpPort),
 		staleGrace:    staleGrace,
@@ -353,6 +369,85 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: state})
+}
+
+// ── Key Vault bootstrap (raw REST, stdlib only) ──────────────────────────────
+//
+// The real ARM credentials (AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET, which
+// hold Virtual Machine Contributor on the Brain) live in Azure Key Vault,
+// not in this hub's plaintext .env. Reading them out still needs some local
+// credential to authenticate to the vault in the first place — that's
+// KV_READER_TENANT_ID/CLIENT_ID/CLIENT_SECRET, a second, deliberately
+// narrow service principal that holds only "Key Vault Secrets User"
+// (read-only) scoped to this one vault. It cannot start, stop, or touch the
+// VM in any way — so a leak of *this* credential has a much smaller blast
+// radius than a leak of the ARM one it's used to fetch. If KV_VAULT_URL is
+// unset, the caller falls back to reading AZURE_TENANT_ID/CLIENT_ID/
+// CLIENT_SECRET straight from the environment (local dev, or before this
+// vault existed).
+func fetchAzureCredsFromKeyVault(httpc *http.Client, vaultURL string) (tenant, clientID, clientSecret string, err error) {
+	kvTenant := os.Getenv("KV_READER_TENANT_ID")
+	kvClientID := os.Getenv("KV_READER_CLIENT_ID")
+	kvClientSecret := os.Getenv("KV_READER_CLIENT_SECRET")
+	if kvTenant == "" || kvClientID == "" || kvClientSecret == "" {
+		return "", "", "", fmt.Errorf("KV_VAULT_URL is set but KV_READER_TENANT_ID/KV_READER_CLIENT_ID/KV_READER_CLIENT_SECRET are not")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("client_id", kvClientID)
+	form.Set("client_secret", kvClientSecret)
+	form.Set("scope", "https://vault.azure.net/.default")
+
+	resp, err := httpc.PostForm("https://login.microsoftonline.com/"+kvTenant+"/oauth2/v2.0/token", form)
+	if err != nil {
+		return "", "", "", fmt.Errorf("key vault token request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	var tr struct {
+		AccessToken string `json:"access_token"`
+	}
+	if jerr := json.Unmarshal(body, &tr); jerr != nil || tr.AccessToken == "" {
+		return "", "", "", fmt.Errorf("key vault token endpoint HTTP %d: %s", resp.StatusCode, snippet(body))
+	}
+
+	getSecret := func(name string) (string, error) {
+		u := strings.TrimSuffix(vaultURL, "/") + "/secrets/" + name + "?api-version=7.4"
+		req, rerr := http.NewRequest(http.MethodGet, u, nil)
+		if rerr != nil {
+			return "", rerr
+		}
+		req.Header.Set("Authorization", "Bearer "+tr.AccessToken)
+		resp, derr := httpc.Do(req)
+		if derr != nil {
+			return "", derr
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("GET secret %s: HTTP %d: %s", name, resp.StatusCode, snippet(body))
+		}
+		var sr struct {
+			Value string `json:"value"`
+		}
+		if jerr := json.Unmarshal(body, &sr); jerr != nil || sr.Value == "" {
+			return "", fmt.Errorf("secret %s: empty or unparseable response", name)
+		}
+		return sr.Value, nil
+	}
+
+	if tenant, err = getSecret("slimeos-power-azure-tenant-id"); err != nil {
+		return "", "", "", err
+	}
+	if clientID, err = getSecret("slimeos-power-azure-client-id"); err != nil {
+		return "", "", "", err
+	}
+	if clientSecret, err = getSecret("slimeos-power-azure-client-secret"); err != nil {
+		return "", "", "", err
+	}
+	return tenant, clientID, clientSecret, nil
 }
 
 // ── Azure ARM (raw REST, stdlib only) ────────────────────────────────────────
