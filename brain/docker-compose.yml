@@ -173,9 +173,16 @@ services:
     depends_on:
       - wireguard
     environment:
+      # KV_VAULT_URL set = fetch the three below from Key Vault instead
+      # (see brain/power/main.go's fetchAzureCredsFromKeyVault); these
+      # AZURE_* vars are the fallback path, kept for local dev / rollback.
       AZURE_TENANT_ID: "${AZURE_TENANT_ID:-}"
       AZURE_CLIENT_ID: "${AZURE_CLIENT_ID:-}"
       AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
+      KV_VAULT_URL: "${KV_VAULT_URL:-}"
+      KV_READER_TENANT_ID: "${KV_READER_TENANT_ID:-}"
+      KV_READER_CLIENT_ID: "${KV_READER_CLIENT_ID:-}"
+      KV_READER_CLIENT_SECRET: "${KV_READER_CLIENT_SECRET:-}"
       POWER_VMS: "${POWER_VMS:-}"              # empty = service runs, manages nothing
       POWER_IDLE_MINUTES: "${POWER_IDLE_MINUTES:-20}"
 
