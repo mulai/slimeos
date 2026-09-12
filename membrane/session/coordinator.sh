@@ -317,11 +317,27 @@ fi
 # Display & Sound tab takes effect on the very next connect without a
 # restart -- do_display_settings() calls this again after it rewrites the
 # prefs file.
+#
+# RDP_SCALE_FACTOR (100|140|180, "Brain display scaling" in the Settings
+# tab) is FreeRDP's `/scale:` -- the desktop-scale-factor Windows uses to
+# pick its DPI, sent at connect time as part of monitor config. Windows
+# refuses to change Display/DPI settings from inside an RDP session
+# ("The Display Settings can't be changed from a remote session" --
+# expected Microsoft behavior, not a bug), so this can only be fixed here,
+# before connecting, not on-screen inside the Brain. github.com/mulai/
+# slimeos#15 -- a large TV at the default 100 renders a native-DPI desktop
+# stretched across the whole screen, i.e. correct pixel count but tiny
+# text/icons. Always included explicitly (even at the default) so RES_FLAGS
+# stays the single source of truth for every connect-time display param.
 compute_res_flags() {
     RES_FLAGS="/f" # fullscreen
     if [[ -n "${RDP_WIDTH:-}" && -n "${RDP_HEIGHT:-}" ]]; then
         RES_FLAGS="/w:${RDP_WIDTH} /h:${RDP_HEIGHT}"
     fi
+    case "${RDP_SCALE_FACTOR:-100}" in
+        140|180) RES_FLAGS="$RES_FLAGS /scale:${RDP_SCALE_FACTOR}" ;;
+        *)       RES_FLAGS="$RES_FLAGS /scale:100" ;;
+    esac
 }
 compute_res_flags
 

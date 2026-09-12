@@ -175,16 +175,23 @@
        displaySettings: { mode: 'settings', uiScale: '1'|'1.25'|'1.5'|'2',
                           resolution: 'auto'|'1920x1080'|'1280x720',
                           audioOutput: 'auto'|'analog'|'hdmi',
-                          audioOutputs: string[], error: string | null }
+                          audioOutputs: string[], brainScale: '100'|'140'|'180',
+                          error: string | null }
                        // Settings panel's Display & Sound tab (see
-                       // membrane/session/display-settings.sh). Three
+                       // membrane/session/display-settings.sh). Four
                        // segmented pick-one rows; `audioOutputs` is the
                        // subset of ids this hardware can actually do (hdmi
                        // only when an HDMI/DP audio device exists). uiScale
                        // is echoed back on setStatus and applied as a page
-                       // zoom; the other two land in the prefs file and
-                       // take effect on the next Brain connect. No `boot`
-                       // mode, same as supportSettings/timezoneSettings.
+                       // zoom; the other three land in the prefs file and
+                       // take effect on the next Brain connect. brainScale
+                       // is FreeRDP's /scale: (the Brain's own DPI/display
+                       // scaling) -- distinct from uiScale, which only
+                       // resizes the Membrane's local UI; fix for
+                       // github.com/mulai/slimeos#15 (Windows refuses to
+                       // change Display settings from inside an RDP
+                       // session, so this has to be set before connecting).
+                       // No `boot` mode, same as supportSettings/timezoneSettings.
        timezoneSettings: { mode: 'settings', current: string,
                           timezones: string[], error: string | null }
                        // Settings panel's Timezone tab (see
@@ -354,8 +361,8 @@
    'slime:pair-skip'       {}                             // boot mode only
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
-   'slime:display-set'     { uiScale, resolution, audioOutput }  // Settings > Display & Sound -- always the whole
-                                                          // current triplet, fired on any segmented-row change
+   'slime:display-set'     { uiScale, resolution, audioOutput, brainScale }  // Settings > Display & Sound -- always
+                                                          // the whole current set of four, fired on any segmented-row change
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
    'slime:feedback-submit' { category, message }           // Settings > Help > Send Feedback -- category: 'bug'|'feature'|'other'
    'slime:feedback-reset'  {}                              // "Send another" on the post-submit confirmation
@@ -1827,10 +1834,12 @@
     var scale = data.uiScale || '1';
     var resolution = data.resolution || 'auto';
     var audio = data.audioOutput || 'auto';
+    var brainScale = data.brainScale || '100';
     var outputs = (data.audioOutputs && data.audioOutputs.length) ? data.audioOutputs : ['auto', 'analog'];
     var error = data.error;
     var SCALE_OPTS = [['1', 'Normal'], ['1.25', 'Large'], ['1.5', 'Larger'], ['2', 'Largest']];
     var RES_OPTS = [['auto', 'Automatic'], ['1920x1080', '1920 × 1080'], ['1280x720', '1280 × 720']];
+    var BRAIN_SCALE_OPTS = [['100', 'Normal'], ['140', 'Large'], ['180', 'Largest']];
     var AUDIO_LABELS = { auto: 'Automatic', analog: 'Headphones / speakers', hdmi: 'TV / HDMI' };
     var audioOpts = outputs.map(function(id){ return [id, AUDIO_LABELS[id] || id]; });
     function seg(name, opts, sel, af){
@@ -1847,6 +1856,8 @@
           '<p style="margin:0 0 22px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Tune this Membrane for the screen it’s plugged into. Display size changes right away; the Brain settings apply the next time you connect.</p>' +
           '<label class="field-label">Display size</label>' + seg('uiScale', SCALE_OPTS, scale, true) +
           '<label class="field-label">Brain resolution</label>' + seg('resolution', RES_OPTS, resolution) +
+          '<label class="field-label">Brain display scaling</label>' + seg('brainScale', BRAIN_SCALE_OPTS, brainScale) +
+          '<p style="margin:-6px 0 14px;font-size:12px;line-height:1.5;color:var(--text-muted);">If the Brain’s desktop looks tiny on a big screen, raise this — Windows won’t let you change it from inside the session itself.</p>' +
           '<label class="field-label">Sound output</label>' + seg('audioOutput', audioOpts, audio) +
           (error ? '<p style="margin:4px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
         '</div>' +
@@ -2336,7 +2347,8 @@
           emit('slime:display-set', {
             uiScale: segCurrent('uiScale'),
             resolution: segCurrent('resolution'),
-            audioOutput: segCurrent('audioOutput')
+            audioOutput: segCurrent('audioOutput'),
+            brainScale: segCurrent('brainScale')
           });
         };
         on(btn, 'click', choose);
@@ -2817,6 +2829,7 @@
     var demoUiScale = '1';
     var demoResolution = 'auto';
     var demoAudioOutput = 'auto';
+    var demoBrainScale = '100';
     var demoTimezone = 'UTC';
     var demoSignedInEmail = null;
     var demoSpeakerVolume = 65;
@@ -2877,7 +2890,7 @@
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
       } else if (tab === 'display'){
-        window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], error: null });
+        window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, error: null });
       } else if (tab === 'timezone'){
         window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
       } else if (tab === 'privacy'){
@@ -2941,8 +2954,9 @@
       if (d.uiScale) demoUiScale = d.uiScale;
       if (d.resolution) demoResolution = d.resolution;
       if (d.audioOutput) demoAudioOutput = d.audioOutput;
+      if (d.brainScale) demoBrainScale = d.brainScale;
       window.SlimeUI.setStatus({ uiScale: demoUiScale });
-      window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], error: null });
+      window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, error: null });
     });
 
     document.addEventListener('slime:crash-report-toggle', function(e){

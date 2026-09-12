@@ -7,7 +7,7 @@
 # $DISPLAY_PREFS_FILE which coordinator.sh defines. `mode` is always
 # "settings" -- there is no boot-mode variant of this screen.
 #
-# Three knobs, all persisted to $DISPLAY_PREFS_FILE (a shell KEY="value"
+# Four knobs, all persisted to $DISPLAY_PREFS_FILE (a shell KEY="value"
 # fragment coordinator.sh sources after /etc/slimeos/config, so a choice
 # made here wins over the admin default):
 #
@@ -20,6 +20,13 @@
 #       RES_FLAGS from these; takes effect on the next connect.
 #   AUDIO_OUTPUT   auto | analog | hdmi   -- where a Brain's sound goes
 #       (see playback_target() in connect.sh). Next connect.
+#   RDP_SCALE_FACTOR   100 | 140 | 180   -- the Brain's own DPI/display
+#       scaling (FreeRDP's `/scale:`, see coordinator.sh's
+#       compute_res_flags()). Distinct from MEMBRANE_UI_SCALE above: this
+#       one changes what the REMOTE Windows/Linux desktop renders at, the
+#       fix for github.com/mulai/slimeos#15 (large TV, tiny icons) since
+#       Windows refuses to change this from inside the session itself.
+#       Next connect.
 #
 # Why the prefs file lives in $CRED_DIR and not next to /etc/slimeos/config:
 # config is root:$SESSION_USER 0640 (admin-writable only), and the session
@@ -31,6 +38,10 @@
 # Allowed UI scales -- kept in lockstep with renderDisplaySettings() in
 # index.html. "1" means "no zoom".
 DP_SCALES=("1" "1.25" "1.5" "2")
+
+# Allowed Brain DPI-scale factors -- the exact values FreeRDP's /scale:
+# accepts (confirmed via `xfreerdp3 /help`, not assumed). "100" = no scaling.
+DP_BRAIN_SCALES=("100" "140" "180")
 
 # resolution id -> "WIDTH HEIGHT" ("" = fullscreen/auto). Order here is the
 # order the <select> shows them.
@@ -73,11 +84,11 @@ dp_in_list() {
     return 1
 }
 
-# Atomically rewrite $DISPLAY_PREFS_FILE with the four keys. Same-dir temp
+# Atomically rewrite $DISPLAY_PREFS_FILE with the five keys. Same-dir temp
 # + mv so a crash mid-write can't leave coordinator.sh sourcing a half
 # file on the next boot. Returns non-zero (and writes nothing) on failure.
 dp_write_prefs() {
-    local scale="$1" res_w="$2" res_h="$3" audio="$4" tmp
+    local scale="$1" res_w="$2" res_h="$3" audio="$4" brain_scale="$5" tmp
     tmp=$(mktemp "${DISPLAY_PREFS_FILE}.XXXXXX") || return 1
     {
         echo "# Slime OS — Display & Sound preferences (Settings > Display & Sound)."
@@ -87,6 +98,7 @@ dp_write_prefs() {
         echo "RDP_WIDTH=\"${res_w}\""
         echo "RDP_HEIGHT=\"${res_h}\""
         echo "AUDIO_OUTPUT=\"${audio}\""
+        echo "RDP_SCALE_FACTOR=\"${brain_scale}\""
     } > "$tmp" || { rm -f "$tmp"; return 1; }
     chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$DISPLAY_PREFS_FILE" || { rm -f "$tmp"; return 1; }
@@ -99,20 +111,22 @@ do_display_settings() {
     while true; do
         local scale="${MEMBRANE_UI_SCALE:-1}"
         dp_in_list "$scale" "${DP_SCALES[@]}" || scale="1"
-        local resolution audio outputs_json
+        local resolution audio outputs_json brain_scale
         resolution=$(dp_current_resolution)
         audio="${AUDIO_OUTPUT:-auto}"
         outputs_json=$(dp_audio_outputs_json)
         # Fall back cleanly if a stale prefs file names an output this
         # hardware can't do (e.g. moved between boxes).
         grep -q "\"$audio\"" <<<"$outputs_json" || audio="auto"
+        brain_scale="${RDP_SCALE_FACTOR:-100}"
+        dp_in_list "$brain_scale" "${DP_BRAIN_SCALES[@]}" || brain_scale="100"
 
         emit_state displaySettings "$(jq -nc \
             --arg mode "$mode" --arg scale "$scale" --arg resolution "$resolution" \
             --arg audio "$audio" --argjson outputs "$outputs_json" \
-            --arg error "$error" \
+            --arg brainScale "$brain_scale" --arg error "$error" \
             '{mode:$mode, uiScale:$scale, resolution:$resolution,
-              audioOutput:$audio, audioOutputs:$outputs,
+              audioOutput:$audio, audioOutputs:$outputs, brainScale:$brainScale,
               error:(if $error == "" then null else $error end)}')"
         error=""
 
@@ -121,10 +135,11 @@ do_display_settings() {
         ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
         case "$ev_type" in
             displaySet)
-                local want_scale want_res want_audio res_dims res_w res_h
+                local want_scale want_res want_audio want_brain_scale res_dims res_w res_h
                 want_scale=$(jq -r '.uiScale // empty' <<<"$line")
                 want_res=$(jq -r '.resolution // empty' <<<"$line")
                 want_audio=$(jq -r '.audioOutput // empty' <<<"$line")
+                want_brain_scale=$(jq -r '.brainScale // empty' <<<"$line")
 
                 if ! dp_in_list "$want_scale" "${DP_SCALES[@]}"; then
                     log "displaySet rejected: uiScale '$want_scale'"
@@ -141,10 +156,15 @@ do_display_settings() {
                     error="That sound output isn't available on this device."
                     continue
                 fi
+                if ! dp_in_list "$want_brain_scale" "${DP_BRAIN_SCALES[@]}"; then
+                    log "displaySet rejected: brainScale '$want_brain_scale'"
+                    error="Couldn't apply that Brain display scaling."
+                    continue
+                fi
                 res_w="${res_dims% *}"; res_h="${res_dims#* }"
                 [[ -n "$res_dims" ]] || { res_w=""; res_h=""; }
 
-                if ! dp_write_prefs "$want_scale" "$res_w" "$res_h" "$want_audio"; then
+                if ! dp_write_prefs "$want_scale" "$res_w" "$res_h" "$want_audio" "$want_brain_scale"; then
                     log "displaySet: failed to write $DISPLAY_PREFS_FILE"
                     error="Couldn't save the change. Try again."
                     continue
@@ -157,8 +177,9 @@ do_display_settings() {
                 RDP_WIDTH="$res_w"
                 RDP_HEIGHT="$res_h"
                 AUDIO_OUTPUT="$want_audio"
+                RDP_SCALE_FACTOR="$want_brain_scale"
                 compute_res_flags
-                log "Display & Sound: uiScale=$want_scale resolution=${want_res} audioOutput=$want_audio"
+                log "Display & Sound: uiScale=$want_scale resolution=${want_res} audioOutput=$want_audio brainScale=$want_brain_scale"
                 # Pushes the new uiScale to the page (it zooms immediately);
                 # same explicit-send reasoning as timezone.sh's clock.
                 send_status
