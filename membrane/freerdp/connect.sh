@@ -575,40 +575,83 @@ do_connect() {
             # correctly, and plays standard 48kHz/S16_LE/stereo (what RDP
             # audio negotiates) without needing plughw's format
             # conversion — verified with speaker-test before switching.
+            # FreeRDP's rdpsnd ALSA backend always requests the LARGEST
+            # buffer the hardware reports (rdpsnd_alsa.c:
+            # `alsa->buffer_size = buffer_size_max`, confirmed by reading
+            # the actual 3.15.0 source, not --help) -- on the AMD box's
+            # onboard HDA codec that max is 524288 frames, ~11s at 48kHz.
+            # No /sound: sub-flag controls this (`latency:` is an unrelated
+            # reported-offset used for AV-sync bookkeeping, default 0, not
+            # a buffer-size knob). Confirmed live 2026-09-12 as the cause
+            # of github.com/mulai/slimeos#12 (residual audio after
+            # stopping/adjusting volume on the Brain -- e.g. dragging the
+            # Windows volume slider queues several UI blips into this
+            # oversized buffer faster than real-time drains them). Fix:
+            # route through `dmix`, not a bare `plug` -- confirmed live
+            # 2026-09-12 that `plug`'s own `slave{}` block does NOT accept
+            # buffer_size/period_size ("Unknown field buffer_size", alsa-lib
+            # rejects it outright); `dmix` does, because it owns the real
+            # hardware device exclusively and opens it ONCE at that fixed
+            # size, sharing it via its own ring buffer -- so the real
+            # speaker can never lag more than this cap behind the actual
+            # stream regardless of what FreeRDP's rdpsnd requests against
+            # the outer PCM (dmix requires a fixed rate/format/channels for
+            # that shared buffer; an outer `type plug` layer transparently
+            # converts whatever FreeRDP actually negotiates into it, same
+            # as any other plug use in this file). Verified empirically via
+            # `speaker-test`: reported `Buffer size range from 4800 to
+            # 9600` (was `[32, 524288]` direct on hw:CARD=SB, ~11s at
+            # 48kHz), clean playback, no underrun. ~200ms buffer / ~50ms
+            # period: short enough to kill the multi-second tail, long
+            # enough to tolerate normal WiFi/tunnel jitter.
+            local RDP_AUDIO_BUFFER_FRAMES=9600 RDP_AUDIO_PERIOD_FRAMES=2400
             local sound_flag="/sound:sys:alsa" sound_alsa_env="" pt pt_card pt_dev
             if pt=$(playback_target); then
                 pt_card=${pt%%|*}
                 pt_dev=${pt#*|}
+                local slave_pcm
                 if [[ -n "$pt_dev" ]]; then
-                    # A live HDMI/DisplayPort monitor's audio device.
-                    # FreeRDP's rdpsnd reuses this dev: string for
-                    # snd_mixer_attach() too, and any ",DEV=n" component
-                    # makes snd_ctl_open() fail ("Invalid CTL"), which
-                    # kills the whole rdpsnd channel — same failure class
-                    # as plughw: (see the note above), re-confirmed live
-                    # 2026-09-06. So route through a named PCM whose CTL
-                    # half is a plain per-card `type hw`: PCM -> the HDMI
-                    # device, mixer -> the card. Supplementary config; base
-                    # names (hw:, plughw:, the mic path) still resolve via
-                    # the <confdir> include. ALSA_CONFIG_PATH is scoped to
-                    # the xfreerdp3 child only.
-                    local alsa_cfg="${TMPDIR:-/tmp}/slimeos-rdp-alsa.conf"
-                    if printf '%s\n' \
-                        '<confdir:/alsa.conf>' \
-                        "pcm.slimeos_rdp_out { type plug; slave.pcm \"hw:CARD=${pt_card},DEV=${pt_dev}\" }" \
-                        "ctl.slimeos_rdp_out { type hw; card \"${pt_card}\" }" \
-                        > "$alsa_cfg" 2>/dev/null
-                    then
-                        sound_flag="/sound:sys:alsa,dev:slimeos_rdp_out"
-                        sound_alsa_env="env ALSA_CONFIG_PATH=$alsa_cfg"
-                        log "Playback -> HDMI/DP audio on card '${pt_card}' device ${pt_dev}"
+                    slave_pcm="hw:CARD=${pt_card},DEV=${pt_dev}"
+                else
+                    slave_pcm="hw:CARD=${pt_card}"
+                fi
+                # A live HDMI/DisplayPort monitor's audio device.
+                # FreeRDP's rdpsnd reuses this dev: string for
+                # snd_mixer_attach() too, and any ",DEV=n" component
+                # makes snd_ctl_open() fail ("Invalid CTL"), which
+                # kills the whole rdpsnd channel — same failure class
+                # as plughw: (see the note above), re-confirmed live
+                # 2026-09-06. So route through a named PCM whose CTL
+                # half is a plain per-card `type hw`: PCM -> the real
+                # device (HDMI or analog), mixer -> the card. Supplementary
+                # config; base names (hw:, plughw:, the mic path) still
+                # resolve via the <confdir> include. ALSA_CONFIG_PATH is
+                # scoped to the xfreerdp3 child only.
+                local alsa_cfg="${TMPDIR:-/tmp}/slimeos-rdp-alsa.conf"
+                # dmix's shared ring buffer needs a FIXED rate/format/channels
+                # (it owns the hardware exclusively at exactly one config) --
+                # 48kHz/S16LE/stereo is what RDP's audio channel negotiates
+                # in practice; the outer `plug` converts transparently if a
+                # given session ever ends up negotiating something else.
+                # ipc_key just needs to not collide with another dmix user
+                # on this device -- nothing else on the Membrane uses dmix.
+                if printf '%s\n' \
+                    '<confdir:/alsa.conf>' \
+                    "pcm.slimeos_rdp_dmix { type dmix; ipc_key 4287631; slave { pcm \"${slave_pcm}\"; buffer_size ${RDP_AUDIO_BUFFER_FRAMES}; period_size ${RDP_AUDIO_PERIOD_FRAMES}; rate 48000; format S16_LE; channels 2 } }" \
+                    'pcm.slimeos_rdp_out { type plug; slave.pcm "slimeos_rdp_dmix" }' \
+                    "ctl.slimeos_rdp_out { type hw; card \"${pt_card}\" }" \
+                    > "$alsa_cfg" 2>/dev/null
+                then
+                    sound_flag="/sound:sys:alsa,dev:slimeos_rdp_out"
+                    sound_alsa_env="env ALSA_CONFIG_PATH=$alsa_cfg"
+                    if [[ -n "$pt_dev" ]]; then
+                        log "Playback -> HDMI/DP audio on card '${pt_card}' device ${pt_dev} (buffer capped)"
                     else
-                        sound_flag="/sound:sys:alsa,dev:hw:CARD=${pt_card}"
-                        log "Playback card '${pt_card}' (couldn't write HDMI ALSA config, using analog)"
+                        log "Playback ALSA card '${pt_card}' selected (buffer capped)"
                     fi
                 else
                     sound_flag="/sound:sys:alsa,dev:hw:CARD=${pt_card}"
-                    log "Playback ALSA card '${pt_card}' selected"
+                    log "Playback card '${pt_card}' (couldn't write ALSA buffer-cap config, using uncapped hw device)"
                 fi
             fi
 
