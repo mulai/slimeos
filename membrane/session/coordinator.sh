@@ -268,7 +268,16 @@ chmod 700 "$CRED_DIR"
 # plain /gfx:AVC444 session. Purely client-offered/negotiated — a Brain
 # or xrdp version that doesn't implement the server side of MS-RDPEVOR
 # just never opens the channel, same negotiated-fallback shape as /gfx.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
+# +auto-reconnect — FreeRDP's own in-protocol session resume (off by
+# default). Without it, every dropped GFX frame that a lossy WiFi link
+# can't recover from client-side rides out as a hard disconnect, and the
+# only recovery is this file's own MIN_SESSION_SECONDS/RECONNECT_DELAY
+# loop doing a full re-logon several seconds later (issue #11: brief
+# black-screen glitches on WiFi turning into full session drops). This
+# flag lets FreeRDP quietly resume the same session on a short-lived
+# network blip instead; the outer reconnect loop still catches it if
+# FreeRDP exhausts its own (default 20) retries.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video +auto-reconnect"
 if [[ -f "$CONFIG_DIR/hw-freerdp-flags" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_DIR/hw-freerdp-flags"

@@ -41,7 +41,15 @@ SLIMEOS_COMPOSITOR_RENDERER=""
 # iGPU (760G/RS880, `radeon` KMS driver) has no reliable VAAPI H.264
 # decode of its own either way — the win here is the channel split, not
 # hardware decode.
-SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video"
+# /rfx — RemoteFX fallback alongside /gfx:AVC444, same belt-and-suspenders
+# pairing profiles 001/006 already use. Added after issue #11 (this exact
+# board, over WiFi): AVC444 has no resilience of its own against packet
+# loss/reordering, so a lossy link shows up as blank/corrupted tiles until
+# the next server keyframe repaints them.
+# +auto-reconnect — see coordinator.sh's SLIMEOS_FREERDP_EXTRA_FLAGS
+# comment. This profile's own flags fully replace that default (sourced
+# from hw-freerdp-flags below), so the flag has to be repeated here too.
+SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 /rfx +video +auto-reconnect"
 
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"
