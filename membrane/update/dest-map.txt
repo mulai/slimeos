@@ -31,3 +31,9 @@ plus-jakarta-sans.woff2:lockscreen/fonts/plus-jakarta-sans.woff2
 jetbrains-mono.woff2:lockscreen/fonts/jetbrains-mono.woff2
 slimeos-bridge:slimeos-bridge
 dest-map.txt:dest-map.txt
+detect.sh:hardware-profiles/detect.sh
+000-generic.sh:hardware-profiles/000-generic.sh
+001-gigabyte-h97.sh:hardware-profiles/001-gigabyte-h97.sh
+006-apple-mac-intel.sh:hardware-profiles/006-apple-mac-intel.sh
+008-gigabyte-78lmt-s2p.sh:hardware-profiles/008-gigabyte-78lmt-s2p.sh
+009-vmware-guest.sh:hardware-profiles/009-vmware-guest.sh

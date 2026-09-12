@@ -16,10 +16,11 @@
 # gap, unlike a bad checksum below, which genuinely is self-healing.
 #
 # The manifest versions the WHOLE bundle as ONE number (Tommy's explicit
-# design call) -- deliberately excludes hardware-profiles/*.sh (a profile
-# change also needs hardware-profiles/detect.sh re-run to take effect, out
-# of scope for v1) and this file + apply-update-helper.sh themselves (the
-# bootstrap problem above).
+# design call) -- excludes only this file + apply-update-helper.sh
+# themselves (the bootstrap problem above). hardware-profiles/*.sh +
+# detect.sh ARE ordinary bundle entries (since v0.3.14): apply-update-helper.sh
+# re-runs detect.sh itself, right after staging, whenever one of those files
+# changed -- see its own comment near hw_profile_changed.
 
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 MANIFEST_URL="$REPO_BASE/membrane/update/manifest.json"

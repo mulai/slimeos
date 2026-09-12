@@ -93,6 +93,7 @@ done
 
 echo "[apply-update] applying staged files"
 applied_any=false
+hw_profile_changed=false
 for name in "${!DEST_FOR[@]}"; do
     staged="$STAGING_DIR/$name"
     [[ -f "$staged" ]] || continue
@@ -104,11 +105,21 @@ for name in "${!DEST_FOR[@]}"; do
     esac
     install -m "$mode" -o root -g root "$staged" "$dest"
     applied_any=true
+    [[ "$dest" == "$INSTALL_DIR/hardware-profiles/"* ]] && hw_profile_changed=true
 done
 
 if ! $applied_any; then
     echo "[apply-update] nothing staged, aborting without touching version or rebooting" >&2
     exit 1
+fi
+
+# hardware-profiles/*.sh are ordinary bundle entries like everything else
+# above, but a profile change only takes effect once detect.sh re-runs and
+# re-sources the matched profile -- detect.sh is explicitly documented as
+# idempotent and safe to call from here (see its own header comment).
+if $hw_profile_changed; then
+    echo "[apply-update] hardware-profiles changed -- re-running detect.sh"
+    bash "$INSTALL_DIR/hardware-profiles/detect.sh" || echo "[apply-update] WARNING: detect.sh failed, keeping previous profile" >&2
 fi
 
 # Purely informational (see changelog.sh's Settings tab) -- doesn't gate
