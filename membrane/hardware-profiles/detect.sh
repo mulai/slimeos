@@ -70,6 +70,14 @@ select_profile() {
     elif echo "$DMI_VENDOR" | grep -qi "VMware"; then
         echo "009-vmware-guest.sh"
 
+    # NUC6CAxx family (Celeron J3xxx/J4xxx, quad-core, no HT) — weak
+    # single-thread performance makes xfreerdp3's single-threaded AVC444
+    # decode the real bottleneck for video playback (see profile 010's own
+    # header for detail). Board prefix, not exact model, to also cover
+    # untested siblings (NUC6CAYS etc.) in the same low-power tier.
+    elif echo "$DMI_BOARD" | grep -qi "NUC6CA"; then
+        echo "010-intel-nuc6-celeron.sh"
+
     else
         # Fallback: generic — works on most machines, conservative settings
         echo "000-generic.sh"

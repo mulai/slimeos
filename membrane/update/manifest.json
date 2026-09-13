@@ -1,7 +1,7 @@
 {
-  "version": "0.3.16",
-  "released_at": "2026-09-12T02:00:00Z",
-  "changelog": "0.3.16\n- New: \"Brain display scaling\" control in Settings > Display & Sound — fixes a large TV/monitor rendering a native-DPI desktop stretched across the whole screen (tiny icons/text), since Windows won't let you change Display settings from inside an RDP session itself (github.com/mulai/slimeos#15).\n\n0.3.15\n- Fix: capped the ALSA playback buffer used for Brain audio redirection, instead of letting FreeRDP request the hardware's maximum (up to ~11s on some onboard audio codecs) — stops residual audio lingering after stopping or adjusting volume on the Brain (github.com/mulai/slimeos#12).\n\n0.3.14\n- Fix: FreeRDP sessions now enable auto-reconnect globally, and profile 008 (Gigabyte 78LMT-S2P) falls back to /rfx, so a WiFi blip resumes the session instead of dropping it (github.com/mulai/slimeos#11).\n- hardware-profiles/*.sh and detect.sh are now updated over-the-air like every other file, instead of requiring a reinstall.",
+  "version": "0.3.17",
+  "released_at": "2026-09-13T11:00:00Z",
+  "changelog": "0.3.17\n- Fix: a Windows Brain reconnecting to its own previous disconnected RDP session (instead of a fresh one) could leave the Membrane stuck showing a quarter-size Brain picker until the whole Brain was rebooted — the hub now force-clears the stale session right after every clean disconnect (github.com/mulai/slimeos#17).\n- Fix: NUC6CAxx (Celeron J3455) devices get a new dedicated hardware profile that switches to /gfx:AVC420 — xfreerdp3's AVC444 decode is single-threaded and was the real cause of choppy video playback on this board, not network or aggregate CPU (github.com/mulai/slimeos#14). Only shipped once #17 above was fixed, since switching codecs mid-session is exactly the kind of resize that could trigger it.\n\n0.3.16\n- New: \"Brain display scaling\" control in Settings > Display & Sound — fixes a large TV/monitor rendering a native-DPI desktop stretched across the whole screen (tiny icons/text), since Windows won't let you change Display settings from inside an RDP session itself (github.com/mulai/slimeos#15).\n\n0.3.15\n- Fix: capped the ALSA playback buffer used for Brain audio redirection, instead of letting FreeRDP request the hardware's maximum (up to ~11s on some onboard audio codecs) — stops residual audio lingering after stopping or adjusting volume on the Brain (github.com/mulai/slimeos#12).\n\n0.3.14\n- Fix: FreeRDP sessions now enable auto-reconnect globally, and profile 008 (Gigabyte 78LMT-S2P) falls back to /rfx, so a WiFi blip resumes the session instead of dropping it (github.com/mulai/slimeos#11).\n- hardware-profiles/*.sh and detect.sh are now updated over-the-air like every other file, instead of requiring a reinstall.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -57,7 +57,7 @@
     },
     {
       "src": "freerdp/connect.sh",
-      "sha256": "3070ff667d54277243b5f04378c4cdb41d9e6dc25e63aab66341ea44487c2f6c"
+      "sha256": "a2a53ad1d8c1ca246dabc9397d4d33b0b28d78bb74706ea3aff1e87343ea031c"
     },
     {
       "src": "lockscreen/index.html",
@@ -77,11 +77,11 @@
     },
     {
       "src": "update/dest-map.txt",
-      "sha256": "c8b352be4977bb277f99c0b5e72ec23f0546ddb3f8a891e7aa37057ca19bc514"
+      "sha256": "a314b34fd94d5ca9abfa5fed83317304911d411697dd51774d806216dc0f1ea4"
     },
     {
       "src": "hardware-profiles/detect.sh",
-      "sha256": "88f13652b92ecc01ea855d5e354f14473cc0829bb490dca0ef47cb6de7e6b88c"
+      "sha256": "275d2abf1eec8a22f7fb9671ed85b219fd7f2be6a596dc3cbee048f51131e193"
     },
     {
       "src": "hardware-profiles/000-generic.sh",
@@ -102,6 +102,10 @@
     {
       "src": "hardware-profiles/009-vmware-guest.sh",
       "sha256": "0cd4967f4ed72ba5d5131c6b6e38a2f0ae15c7a479adaae0882974d96816682c"
+    },
+    {
+      "src": "hardware-profiles/010-intel-nuc6-celeron.sh",
+      "sha256": "96528626ee2392bd7ecd6767962e217b55c9fb6ef371f419e59457a6285b5330"
     }
   ],
   "bridge": {

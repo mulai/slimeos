@@ -37,3 +37,4 @@ detect.sh:hardware-profiles/detect.sh
 006-apple-mac-intel.sh:hardware-profiles/006-apple-mac-intel.sh
 008-gigabyte-78lmt-s2p.sh:hardware-profiles/008-gigabyte-78lmt-s2p.sh
 009-vmware-guest.sh:hardware-profiles/009-vmware-guest.sh
+010-intel-nuc6-celeron.sh:hardware-profiles/010-intel-nuc6-celeron.sh
