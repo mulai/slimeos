@@ -300,6 +300,35 @@ wake_brain() {
     return 0
 }
 
+# Best-effort, fire-and-forget notification to the hub's power service that
+# an RDP session to this managed Brain just ended cleanly. See
+# github.com/mulai/slimeos#17: a Windows RDP host reconnects to the
+# *existing* disconnected session left behind by the previous connect
+# rather than starting a fresh one, and that reused session keeps its old
+# display geometry -- a session that happened to negotiate a smaller size
+# (a flaky/interrupted connect, a Settings resolution change, etc.) leaves
+# every later connect stuck rendering into that same smaller area until
+# something forces a genuinely new session. Confirmed live 2026-09-13:
+# force-logging off the stale disconnected session (Windows `logoff`, no
+# VM reboot) reproduces the same fix as a full Brain reboot, in seconds
+# instead of minutes.
+#
+# Backgrounded (`&`) so a slow/unreachable hub never delays the Membrane's
+# return to the Brain picker -- this is strictly a best-effort cleanup for
+# NEXT time, nothing here is on the critical path of the connection that
+# just ended. Same unmanaged-host-is-a-no-op posture as wake_brain: an
+# unmanaged Brain (LAN Windows PC, xrdp Linux Brain, hub without the power
+# service) gets {managed:false} or a refused connection, either way a
+# harmless no-op.
+notify_session_ended() {
+    local vm_host="$1"
+    local power_url="${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}"
+    local body
+    body=$(jq -nc --arg h "$vm_host" '{host:$h}')
+    ( curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+        -d "$body" "${power_url}/session-ended" >/dev/null 2>&1 & )
+}
+
 # Best-effort POST to /api/device/brain-credential -- fetched fresh
 # immediately before every connect attempt to a kind='paid' brain, never
 # cached in $CRED_DIR's .cred file mechanism (every connect gets a live
@@ -819,6 +848,7 @@ do_connect() {
             case "$exit_code" in
                 0|1|2|11|12)
                     log "Clean disconnect (exit code $exit_code) — returning to Brain picker"
+                    notify_session_ended "$vm_host"
                     return 0
                     ;;
             esac

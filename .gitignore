@@ -26,6 +26,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# local Claude Code session notes -- not for public repo
+.claude/
+
 # build artifacts
 dist/
 build/

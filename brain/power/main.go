@@ -48,6 +48,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -138,6 +139,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/wake", s.handleWake)
 	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/session-ended", s.handleSessionEnded)
 
 	// Bind-retry loop: this process starts as soon as the wireguard
 	// container's namespace exists, which is seconds before its init has
@@ -371,6 +373,50 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: state})
 }
 
+type sessionEndedRequest struct {
+	Host string `json:"host"`
+}
+
+// handleSessionEnded is called by connect.sh (notify_session_ended) right
+// after a Membrane's RDP session to a managed Brain ends cleanly. See
+// github.com/mulai/slimeos#17: a Windows RDP host reconnects to the
+// existing disconnected session left behind by the PREVIOUS connect rather
+// than starting a fresh one, and that reused session keeps whatever
+// display geometry it last had — so a session that ever negotiated a
+// smaller size (a flaky connect, a deliberately smaller Settings
+// resolution, etc.) leaves every later connect stuck rendering into that
+// same smaller area until something forces a genuinely new session.
+// Confirmed live 2026-09-13: force-logging off the stale disconnected
+// session reproduces the same fix as a full Brain reboot, in seconds
+// instead of minutes, with no VM downtime.
+//
+// Same unmanaged-host-is-a-no-op posture as handleWake, and same
+// fire-and-forget posture as the Membrane caller: the cleanup itself runs
+// in the background (see resetStaleRDPSession) so a slow/unreachable Azure
+// API never blocks this response, and this response is never on the
+// Membrane's own critical path either (connect.sh backgrounds the call and
+// discards the result).
+func (s *server) handleSessionEnded(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req sessionEndedRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, powerResponse{Error: "bad_request"})
+		return
+	}
+	hs, ok := s.hosts[req.Host]
+	if !ok {
+		// Not an error: an unmanaged Brain (LAN Windows PC, xrdp Linux
+		// Brain) has no runCommand capability here and never will.
+		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
+		return
+	}
+	go s.resetStaleRDPSession(hs, req.Host)
+	writeJSON(w, http.StatusOK, powerResponse{Managed: true})
+}
+
 // ── Key Vault bootstrap (raw REST, stdlib only) ──────────────────────────────
 //
 // The real ARM credentials (AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET, which
@@ -525,6 +571,92 @@ func (s *server) armRequest(method, armURL string) (int, []byte, error) {
 		}
 		return resp.StatusCode, body, nil
 	}
+}
+
+// armRequestWithBody is armRequest's sibling for calls that need a JSON
+// body (currently only runCommand below) — kept separate rather than
+// adding an unused-most-of-the-time body param to armRequest itself, since
+// every existing armRequest caller is a bare GET/POST.
+func (s *server) armRequestWithBody(method, armURL string, body []byte) (int, []byte, error) {
+	for attempt := 0; ; attempt++ {
+		tok, err := s.token()
+		if err != nil {
+			return 0, nil, err
+		}
+		req, err := http.NewRequest(method, armURL, bytes.NewReader(body))
+		if err != nil {
+			return 0, nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := s.httpc.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			s.mu.Lock()
+			s.tok = ""
+			s.mu.Unlock()
+			continue
+		}
+		return resp.StatusCode, respBody, nil
+	}
+}
+
+// resetStaleRDPSession runs a best-effort PowerShell script on the Windows
+// Brain via Azure's runCommand action (Microsoft.Compute/virtualMachines/
+// runCommand/action — already included in the "Virtual Machine
+// Contributor" role this service's SP holds, so no separate IAM grant was
+// needed) that logs off any DISCONNECTED RDP session, explicitly excluding
+// session 0 (the reserved "services" session) and — by construction, since
+// the script only ever matches lines containing the literal state "Disc"
+// — never touching a Conn(ected) session. See handleSessionEnded and
+// github.com/mulai/slimeos#17 for why. The failure mode of every other
+// action in this file is "the fix doesn't apply this time", never "kick
+// out an active user" — this preserves that: a currently-connected user
+// (this VM, or in principle a second RDP user) is never a match.
+//
+// Fire-and-forget: a runCommand POST triggers an Azure-managed async
+// operation on acceptance (200/202) that keeps running on the platform
+// side regardless of whether the caller polls for its result — this
+// deliberately does not poll, since nothing here is on any user-facing
+// critical path (see notify_session_ended in connect.sh) and a failure
+// here should only ever surface in this service's own log, never to a
+// Membrane or its user.
+func (s *server) resetStaleRDPSession(hs *hostState, host string) {
+	const script = `$sessions = query session 2>$null
+foreach ($line in $sessions) {
+    if ($line -notmatch '\bDisc\b') { continue }
+    $parts = ($line.Trim()) -split '\s+'
+    if ($parts.Length -lt 3) { continue }
+    $state = $parts[$parts.Length - 1]
+    $sid = $parts[$parts.Length - 2]
+    if ($state -ne 'Disc') { continue }
+    if ($sid -notmatch '^\d+$') { continue }
+    if ([int]$sid -eq 0) { continue }
+    logoff $sid 2>$null
+}`
+	body, err := json.Marshal(struct {
+		CommandID string   `json:"commandId"`
+		Script    []string `json:"script"`
+	}{CommandID: "RunPowerShellScript", Script: strings.Split(script, "\n")})
+	if err != nil {
+		log.Printf("session-ended %s: marshal runCommand body: %v", host, err)
+		return
+	}
+	status, respBody, err := s.armRequestWithBody("POST", vmBase(hs.ref)+"/runCommand?api-version="+armAPIVersion, body)
+	if err != nil {
+		log.Printf("session-ended %s: runCommand request failed: %v", host, err)
+		return
+	}
+	if status != http.StatusOK && status != http.StatusAccepted {
+		log.Printf("session-ended %s: runCommand HTTP %d: %s", host, status, snippet(respBody))
+		return
+	}
+	log.Printf("session-ended %s: stale RDP session cleanup issued", host)
 }
 
 // vmState returns the VM's PowerState suffix: running, starting, stopping,
