@@ -64,6 +64,18 @@ do_changelog() {
     while true; do
         version=$(cat "$CONFIG_DIR/version" 2>/dev/null || echo "unknown")
         changelog=$(cat "$CONFIG_DIR/changelog" 2>/dev/null || true)
+        # github.com/mulai/slimeos#16: $CONFIG_DIR/changelog holds every
+        # past release's notes concatenated (manifest.json's own format —
+        # a full history, by design, so a device that skipped several
+        # releases in one update still gets a complete changelog written).
+        # This tab only wants the entry for the version actually installed
+        # -- see changelog_block_for_version's own header comment. Falls
+        # back to the raw (multi-version) text if no block matches $version
+        # exactly, rather than showing nothing for an edge case this
+        # shouldn't hit in practice.
+        local version_block
+        version_block=$(changelog_block_for_version "$changelog" "$version")
+        [[ -n "$version_block" ]] && changelog="$version_block"
         [[ -n "$changelog" ]] || changelog="No changelog recorded for this install."
         released_at=$(cat "$CONFIG_DIR/changelog-released-at" 2>/dev/null || true)
         released_relative=""

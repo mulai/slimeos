@@ -625,6 +625,35 @@ relative_time() {
     fi
 }
 
+# manifest.json's `changelog` field is one string holding EVERY past
+# release's notes concatenated (each release's own header script prepends
+# its entry, see membrane/update/manifest.json) -- a full history, by
+# design, so a device that skipped several releases in one update still
+# gets a complete changelog. github.com/mulai/slimeos#16: showing that
+# whole blob in the Settings > Changelog tab is far more than a user
+# wants to read there; they want just the entry for one specific version.
+# Blocks are separated by a blank line, each headed by its own bare
+# version-number line (e.g. "0.3.17\n- Fix: ...\n\n0.3.16\n- ..."). Returns
+# the block whose header matches $2 (with that header line stripped, since
+# every caller already shows the version number in its own heading right
+# next to this text) or "" if no block matches (a changelog whose newest
+# entry isn't the requested version — shouldn't happen in practice, but
+# fails safe to empty rather than showing the wrong version's notes).
+changelog_block_for_version() {
+    local full="$1" target="$2"
+    # A block header is a bare version line (starts with a digit); bullet
+    # lines all start with "- " and must NOT be mistaken for one, or every
+    # bullet would reset in_block and truncate the block to nothing. The
+    # blank separator line before the NEXT version's header is still
+    # in_block when printed (the boundary is only detected at that next
+    # header), but $(...) already strips every trailing newline on capture,
+    # so that one trailing blank line needs no separate trim step here.
+    awk -v target="$target" '
+        /^[0-9]/ { in_block = ($0 == target); next }
+        in_block { print }
+    ' <<<"$full"
+}
+
 # Purely a local-state read, no live validation against the backend --
 # see slime-id.sh's own header comment on why this pass stops at "prove
 # the handshake works." A stale/expired token still shows as signed in

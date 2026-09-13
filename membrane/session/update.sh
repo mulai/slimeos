@@ -74,8 +74,16 @@ do_update_check() {
         update_available_version="$remote_version"
         # Stashed for the Settings > Changelog "what's new" preview only --
         # the status strip icon needs just the version. Manifest field is
-        # already in hand, so this costs nothing extra.
-        update_available_changelog=$(jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null || echo "")
+        # already in hand, so this costs nothing extra. Sliced to just
+        # $remote_version's own entry (same treatment/reasoning as
+        # changelog.sh's do_changelog() — see changelog_block_for_version's
+        # header comment): the manifest's `changelog` field is the FULL
+        # history, and github.com/mulai/slimeos#16 asked for just the one
+        # version's notes here, not the whole blob.
+        local full_changelog version_block
+        full_changelog=$(jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null || echo "")
+        version_block=$(changelog_block_for_version "$full_changelog" "$remote_version")
+        update_available_changelog="${version_block:-$full_changelog}"
         update_available_released_at=$(jq -r '.released_at // ""' <<<"$manifest" 2>/dev/null || echo "")
     else
         update_available_version=""
