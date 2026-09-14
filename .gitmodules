@@ -1,0 +1,3 @@
+[submodule "android/third_party/FreeRDP"]
+	path = android/third_party/FreeRDP
+	url = https://github.com/FreeRDP/FreeRDP.git

@@ -1,0 +1,6 @@
+rootProject.name = 'SlimeOS'
+
+include ':freeRDPCore'
+project(':freeRDPCore').projectDir = file('third_party/FreeRDP/client/Android/Studio/freeRDPCore')
+
+include ':app'

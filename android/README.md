@@ -40,3 +40,15 @@ Developer accounts ready:
 - Google Play Store
 - Apple App Store  
 - Huawei AppGallery
+
+## M1 spike (in progress, separate from Phase 2 above)
+
+`android/app` is a different, lighter product than the Phase 2 launcher above: a normal
+foreground app (issue #18) — pairing code -> WireGuard tunnel -> RDP session — with no
+home-screen takeover, no device wipe. Android/tablet first, closer to Chrome Remote
+Desktop than to a device replacement. See `.claude/plans/fizzy-wobbling-cosmos.md` and
+`.claude/FUTURE_SESSION_NOTES.md` for current status.
+
+FreeRDP is vendored as a git submodule at `android/third_party/FreeRDP` (pinned to
+release `3.31.1`); `android/app` depends on its `freeRDPCore` module directly rather than
+embedding a copy of FreeRDP's source in this repo.
