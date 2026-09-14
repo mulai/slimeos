@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  brain/power (membrane/freerdp/connect.sh's SLIMEOS_POWER_URL) is plain HTTP —
+  it's only ever reached over the private WireGuard tunnel, never the open
+  internet, so this permits cleartext for that one fixed tunnel-gateway
+  address only. Everything else (pairing against enroll.slimeos.com) stays
+  on Android's default HTTPS-only policy.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.10.0.1</domain>
+    </domain-config>
+</network-security-config>

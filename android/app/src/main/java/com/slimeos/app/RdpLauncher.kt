@@ -27,7 +27,9 @@ object RdpLauncher {
         host: String,
         port: Int,
         username: String,
-        password: String
+        password: String,
+        widthPx: Int,
+        heightPx: Int
     ): Intent {
         val authority = "${enc(username)}@$host:$port"
         val query = buildString {
@@ -35,7 +37,12 @@ object RdpLauncher {
             append("&cert=ignore")
             append("&network=auto")
             append("&dynamic-resolution=")
-            append("&f=")
+            // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
+            // own "match resolution to device" logic entirely, so without explicit w/h
+            // it falls back to a small built-in default and letterboxes instead of
+            // filling the screen — pass the real window size explicitly instead.
+            append("&w=").append(widthPx)
+            append("&h=").append(heightPx)
             append("&p=").append(enc(password))
         }
         val uri = Uri.parse("freerdp://$authority/connect?$query")

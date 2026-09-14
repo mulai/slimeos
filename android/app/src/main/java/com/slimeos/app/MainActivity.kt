@@ -26,6 +26,7 @@ import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -122,8 +123,42 @@ class MainActivity : ComponentActivity() {
 
     private fun doConnect(host: String, port: Int, username: String, password: String) {
         uiState.rdpHost = host
-        uiState.status = "Connecting..."
-        rdpSessionLauncher.launch(RdpLauncher.buildSessionIntent(this, host, port, username, password))
+        lifecycleScope.launch {
+            uiState.status = "Waking Brain..."
+            val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host) }
+            if (!awake) {
+                uiState.status = "Brain didn't wake in time — try again."
+                return@launch
+            }
+            uiState.status = "Connecting..."
+            val bounds = windowManager.currentWindowMetrics.bounds
+            rdpSessionLauncher.launch(
+                RdpLauncher.buildSessionIntent(
+                    this@MainActivity, host, port, username, password,
+                    widthPx = bounds.width(), heightPx = bounds.height()
+                )
+            )
+        }
+    }
+
+    // Mirrors connect.sh's wake_brain(): some Brains (e.g. Azure) auto-deallocate when
+    // idle, so /wake must be called and polled until running before RDP can connect —
+    // otherwise the TCP attempt just times out against a powered-off VM.
+    private suspend fun waitForBrainAwake(host: String): Boolean {
+        val deadlineMs = System.currentTimeMillis() + 3 * 60_000L
+        var attempt = 0
+        while (System.currentTimeMillis() < deadlineMs) {
+            attempt++
+            when (BrainPower.wake(host)) {
+                BrainPower.WakeState.Ready -> return true
+                BrainPower.WakeState.Failed -> return false
+                BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
+                    withContext(Dispatchers.Main) { uiState.status = "Waking Brain... (attempt $attempt)" }
+                    delay(5_000)
+                }
+            }
+        }
+        return false
     }
 }
 
