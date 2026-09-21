@@ -26,8 +26,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     xorgxrdp \
     # Fonts
     fonts-liberation fonts-noto-core \
-    # Common apps
-    firefox \
+    # Common apps (firefox installed separately below -- see note)
     mousepad \
     thunar \
     # Utilities
@@ -38,6 +37,24 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     # Theming
     adwaita-icon-theme \
     && rm -rf /var/lib/apt/lists/*
+
+# ── Firefox (Mozilla's real .deb, NOT Ubuntu's apt package) ───────────────────
+# Ubuntu's `firefox` apt package (since 20.04) is a thin transitional wrapper
+# that pulls in the Snap build on first run. Snap-packaged apps are unreliable
+# inside a Docker container (snapd/squashfuse don't run properly without extra
+# setup), causing exactly the random crashes reported on this desktop -- this
+# is the actual fix, not just an Ubuntu-version bump (24.04's `firefox` apt
+# package has the identical snap-wrapper trap). Official Mozilla apt repo,
+# pinned above Ubuntu's own package so `apt-get install firefox` always
+# resolves to the real Mozilla-built .deb, never the snap redirector.
+RUN install -d -m 0755 /etc/apt/keyrings && \
+    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O /etc/apt/keyrings/packages.mozilla.org.asc && \
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+        > /etc/apt/sources.list.d/mozilla.list && \
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
+        > /etc/apt/preferences.d/mozilla && \
+    apt-get update -qq && apt-get install -y --no-install-recommends firefox && \
+    rm -rf /var/lib/apt/lists/*
 
 # ── Locale ────────────────────────────────────────────────────────────────────
 RUN locale-gen en_US.UTF-8
