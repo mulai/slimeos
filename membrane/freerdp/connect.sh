@@ -630,10 +630,18 @@ do_connect() {
             # as any other plug use in this file). Verified empirically via
             # `speaker-test`: reported `Buffer size range from 4800 to
             # 9600` (was `[32, 524288]` direct on hw:CARD=SB, ~11s at
-            # 48kHz), clean playback, no underrun. ~200ms buffer / ~50ms
-            # period: short enough to kill the multi-second tail, long
-            # enough to tolerate normal WiFi/tunnel jitter.
-            local RDP_AUDIO_BUFFER_FRAMES=9600 RDP_AUDIO_PERIOD_FRAMES=2400
+            # 48kHz), clean playback, no underrun.
+            #
+            # Lowered 9600/2400 (~200ms/~50ms) -> 4800/1200 (~100ms/~25ms)
+            # 2026-09-22 after the RDP hardware-NVENC fix (see
+            # docs/windows-cloud-desktop.md) made video noticeably faster --
+            # the old ~200ms audio buffer, previously masked by slower
+            # software-encoded video, became a perceptible audio-behind-video
+            # lag once video sped up. 4800 is the confirmed floor of dmix's
+            # safe range above, so this stays clear of underrun while
+            # tightening the sync. Verified live on the AMD box against the
+            # Azure Brain: lip-sync confirmed back to normal.
+            local RDP_AUDIO_BUFFER_FRAMES=4800 RDP_AUDIO_PERIOD_FRAMES=1200
             local sound_flag="/sound:sys:alsa" sound_alsa_env="" pt pt_card pt_dev
             if pt=$(playback_target); then
                 pt_card=${pt%%|*}
