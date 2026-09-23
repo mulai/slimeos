@@ -1,6 +1,7 @@
 # Proposal: Membrane lock screen (unlock by QR with Slime ID)
 
-Status: **approved 2026-09-23**. Phase 1 built: server live, Membrane side in v0.3.24.
+Status: **shipped.** Phase 1 (v0.3.24/0.3.25) and the Phase 2 idle timeout + device name
+(v0.3.26) are verified on real hardware (2026-09-23). Still open: org-admin unlock, push-to-approve.
 
 ## Problem
 
@@ -55,9 +56,9 @@ then is an unlock code requested and polled. Going back to the PIN view stops po
    Approve.
 3. The Membrane sees the approval and unlocks.
 
-### Alternative unlock: recovery PIN (offline, no phone)
+### Recovery PIN (the default view; works offline, no phone)
 
-Next to the QR code, the lock screen offers "Use recovery PIN instead". It's the same 8-digit
+The lock screen opens on the recovery PIN field (see "Unlock flow"). It's the same 8-digit
 PIN shown once after installation, and it works with no network and no phone.
 
 - **Show-once stays show-once** (decision from 2026-09-06 unchanged): there's still no reveal,
