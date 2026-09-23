@@ -356,6 +356,8 @@ source "$INSTALL_DIR/timezone.sh" # defines do_timezone()
 # shellcheck source=crash-reporting.sh
 source "$INSTALL_DIR/crash-reporting.sh" # defines do_crash_reporting(), try_handle_crash_report()
 # shellcheck source=slime-id.sh
+# shellcheck source=lock.sh
+source "$INSTALL_DIR/lock.sh" # defines do_lock_screen(), do_security()
 source "$INSTALL_DIR/slime-id.sh" # defines do_slime_id_login(), slime_id_logout()
 # shellcheck source=update.sh
 source "$INSTALL_DIR/update.sh" # defines do_update_check(), do_apply_update()
@@ -377,6 +379,9 @@ network_checked=false
 wg_checked=false
 consent_checked=false
 pin_shown=false
+# Boot-time lock (lock.sh) -- once per coordinator process, like the checks
+# above, so a WS reconnect doesn't re-lock an unlocked device.
+lock_checked=false
 
 # Set by do_update_check() (update.sh), read by send_status() — empty until
 # a real update is found, cleared again once main catches back down to (or
@@ -486,6 +491,8 @@ LAST_ADDED_BRAIN_ID=""
 # into this same process and already share every other coordinator.sh
 # helper the same way.
 SETTINGS_NEXT_TAB=""
+# Set by do_security() (lock.sh) when its "Lock now" button closes Settings.
+SETTINGS_LOCK_NOW=false
 
 add_brain() {
     local name="$1" host="$2" port="$3" kind="${4:-free}"
@@ -707,7 +714,8 @@ show_picker_or_empty() {
     remote_count=$(jq 'length' <<<"$REMOTE_BRAINS_JSON" 2>/dev/null || echo 0)
     email=$(signed_in_email)
     if [[ "$count" -eq 0 && "$remote_count" -eq 0 ]]; then
-        emit_state empty "$(jq -nc --arg e "$email" '{signedInEmail:(if $e == "" then null else $e end)}')"
+        local lock_on=false; lock_is_enabled && lock_on=true
+        emit_state empty "$(jq -nc --arg e "$email" --argjson l "$lock_on" '{signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l}')"
         return
     fi
 
@@ -754,8 +762,9 @@ show_picker_or_empty() {
 
     local brains_json
     brains_json=$(printf '%s\n' "${entries[@]}" | jq -sc '.')
-    emit_state picker "$(jq -nc --argjson b "$brains_json" --arg e "$email" \
-        '{brains:$b, signedInEmail:(if $e == "" then null else $e end)}')"
+    local lock_on=false; lock_is_enabled && lock_on=true
+    emit_state picker "$(jq -nc --argjson b "$brains_json" --arg e "$email" --argjson l "$lock_on" \
+        '{brains:$b, signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l}')"
 }
 
 log "Coordinator starting, waiting for first client..."
@@ -780,6 +789,10 @@ while true; do
                     log "No default route detected — entering network setup (boot mode)"
                     do_network_setup boot
                 fi
+            fi
+            if ! $lock_checked; then
+                lock_checked=true
+                do_lock_screen
             fi
             if ! $wg_checked; then
                 wg_checked=true
@@ -878,6 +891,7 @@ while true; do
             ;;
         connect)
             id=$(jq -r '.id // empty' <<<"$line")
+            session_ran=false
             if [[ "$id" == remote:* ]]; then
                 # A Slime ID bookmark. Slime ID never holds the WireGuard
                 # credential for a free Brain (see pair.sh's own doc
@@ -938,6 +952,7 @@ while true; do
                     add_brain "${rname:-Untitled Brain}" "$rhost" "$rport" "${rkind:-free}"
                     stamp_last_connected "$LAST_ADDED_BRAIN_ID"
                     do_connect "$LAST_ADDED_BRAIN_ID"
+                    session_ran=true
                 elif [[ "$wake_cancelled" == true ]]; then
                     log "Wake cancelled while reconnecting to bookmarked brain '$rname' ($rhost)"
                 else
@@ -951,7 +966,10 @@ while true; do
                 log "Connecting to brain id=$id"
                 stamp_last_connected "$id"
                 do_connect "$id"
+                session_ran=true
             fi
+            # Lock screen (lock.sh): locks after every Brain session ends.
+            $session_ran && do_lock_screen
             refresh_brain_status
             send_status
             show_picker_or_empty
@@ -965,6 +983,12 @@ while true; do
             ;;
         slimeIdLogout)
             slime_id_logout
+            # QR unlock needs Slime ID, so a deliberate sign-out also turns
+            # the lock off rather than leaving the owner PIN-only.
+            if lock_is_enabled; then
+                lock_set_enabled false
+                log "Lock screen: turned off (signed out)"
+            fi
             refresh_remote_brains
             refresh_brain_status
             send_status
@@ -994,6 +1018,7 @@ while true; do
                     microphone) do_microphone_settings settings ;;
                     camera)     do_camera_settings settings ;;
                     support)    do_support settings ;;
+                    security)   do_security settings ;;
                     privacy)    do_crash_reporting settings ;;
                     display)    do_display_settings settings ;;
                     timezone)   do_timezone settings ;;
@@ -1003,6 +1028,16 @@ while true; do
                 [[ -n "$SETTINGS_NEXT_TAB" ]] || break
                 settings_tab="$SETTINGS_NEXT_TAB"
             done
+            if $SETTINGS_LOCK_NOW; then
+                SETTINGS_LOCK_NOW=false
+                do_lock_screen
+            fi
+            send_status
+            show_picker_or_empty
+            ;;
+        lockNow)
+            # "Lock now" on the picker (only shown while the lock is on).
+            do_lock_screen
             send_status
             show_picker_or_empty
             ;;

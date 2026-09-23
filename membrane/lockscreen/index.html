@@ -16,10 +16,19 @@
             'wifiList' | 'wifiPassword' | 'wifiConnecting' | 'wifiError' |
             'pairEntry' | 'pairConnecting' | 'pairError' | 'supportSettings' |
             'crashReportSettings' | 'displaySettings' | 'timezoneSettings' | 'changelogSettings' | 'feedbackSettings' |
-            'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError'
+            'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError' |
+            'lockScreen' | 'securitySettings'
      data per state:
-       empty:        { signedInEmail: string | null }
-       picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null }
+       empty:        { signedInEmail: string | null, lockEnabled: bool }
+       picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null, lockEnabled: bool }
+                       // lockEnabled shows the status strip's "Lock now"
+                       // padlock (lock.sh / docs/membrane-lock-screen-proposal.md).
+       lockScreen:   { qrState: 'loading'|'ready'|'offline'|'signed_out', userCode, verificationUri,
+                       qrDataUrl, pinError: string | null, pinRetryAt: epoch seconds (0 = now), label }
+                       // Blocks everything but Wi-Fi setup and power until
+                       // unlocked, by QR (the device's own Slime ID only) or
+                       // the recovery PIN. The gear icon is hidden here.
+       securitySettings: { mode: 'settings', enabled: bool, signedIn: bool, email: string | null, error: string | null }
                        // signedInEmail is set once do_slime_id_login() has ever
                        // completed successfully on this device (see
                        // membrane/session/slime-id.sh) -- a purely local-state
@@ -398,6 +407,11 @@
      doesn't need to remember any state between the prompt and the answer.
    'slime:recovery-pin-ack' {}                             // answer to the one-shot showRecoveryPin
      overlay (single acknowledgement button, no choice to make) -- never shown again once acked.
+   'slime:unlock-pin'      { pin }                         // lockScreen: recovery-PIN unlock attempt
+   'slime:lock-new-code'   {}                              // lockScreen: fetch a fresh unlock QR code
+   'slime:lock-wifi'       {}                              // lockScreen: open Wi-Fi setup (boot mode, skippable)
+   'slime:lock-toggle'     { enabled }                     // securitySettings: turn the lock on/off
+   'slime:lock-now'        {}                              // status-strip padlock or securitySettings "Lock now"
 
    'slime:apply-update'    {}                              // "Update now" -- from the update-available
      modal (status strip icon, idle empty/picker screens only -- see setStatus's `update` field
@@ -582,6 +596,7 @@
     padding:15px 30px;box-shadow:0 14px 30px -14px rgba(0,242,254,0.55);
   }
   .btn-primary:hover{filter:brightness(1.06);}
+  .btn-primary:disabled{opacity:0.45;cursor:default;filter:none;}
   .btn-secondary{
     background:none;border:1px solid rgba(255,255,255,0.14);border-radius:10px;
     padding:12px;font-family:var(--font-display);font-weight:600;font-size:14px;color:#C9D3DF;
@@ -732,6 +747,7 @@
       <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
       <span class="settings-gear hidden" id="btnUpdate" tabindex="0" role="button" title="Update available"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg></span>
       <span class="settings-gear" id="btnOpenSettings" tabindex="0" role="button" title="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
+      <span class="settings-gear hidden" id="btnLockNow" tabindex="0" role="button" title="Lock now"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
       <span class="bars" id="tunnelBars" title="Connection quality"><span id="bar1" style="height:4px;"></span><span id="bar2" style="height:7px;"></span><span id="bar3" style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
@@ -1069,14 +1085,15 @@
   // exactly the states whose `back` handling (see each do_*() in the
   // coordinator) closes the panel entirely rather than stepping back one
   // level within the same tab.
-  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
-  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
+  var SETTINGS_STATES = { wifiList:1, wifiPassword:1, wifiConnecting:1, wifiError:1, pairEntry:1, pairConnecting:1, pairError:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, securitySettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
+  var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, securitySettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
   // Left-hand nav, grouped. Was a flat horizontal row of tabs; with the
   // Devices group added it needed a sidebar with parent/child grouping.
   // Groups are always expanded -- see the .settings-sidebar CSS comment.
   var SETTINGS_NAV = [
     { group: 'Network', items: [ { id: 'internet', label: 'Wi-Fi & Internet' }, { id: 'pair', label: 'Pairing' } ] },
     { group: 'Devices', items: [ { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
+    { group: 'Security', items: [ { id: 'security', label: 'Lock Screen' } ] },
     { group: 'Support', items: [ { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
     { group: 'System', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] },
     { group: 'Help', items: [ { id: 'feedback', label: 'Send Feedback' } ] }
@@ -1088,6 +1105,7 @@
     if (state === 'microphoneSettings') return 'microphone';
     if (state === 'cameraSettings') return 'camera';
     if (state === 'supportSettings') return 'support';
+    if (state === 'securitySettings') return 'security';
     if (state === 'crashReportSettings') return 'privacy';
     if (state === 'displaySettings') return 'display';
     if (state === 'timezoneSettings') return 'timezone';
@@ -1157,6 +1175,19 @@
     try { renderImpl(); }
     catch (err) { reportCaughtError(err); }
     renderUpdateIcon();
+    renderLockChrome();
+  }
+
+  // Status-strip chrome for the lock screen (lock.sh): the gear is hidden
+  // while locked (the backend ignores open-settings there anyway), and the
+  // padlock "Lock now" shows on the picker/empty screens only while the
+  // lock is turned on.
+  function renderLockChrome(){
+    var locked = current.state === 'lockScreen';
+    document.getElementById('btnOpenSettings').classList.toggle('hidden', locked);
+    var idle = (current.state === 'empty' || current.state === 'picker');
+    var lockOn = !!(current.data && current.data.lockEnabled);
+    document.getElementById('btnLockNow').classList.toggle('hidden', !(idle && lockOn));
   }
 
   // Signature of the last full render of the Camera tab (everything about it
@@ -1230,6 +1261,8 @@
     else if (state === 'slimeIdConnecting') html = renderSlimeIdConnecting(data);
     else if (state === 'slimeIdEntry') html = renderSlimeIdEntry(data);
     else if (state === 'slimeIdError') html = renderSlimeIdError(data);
+    else if (state === 'lockScreen') html = renderLockScreen(data);
+    else if (state === 'securitySettings') html = renderSecuritySettings(data);
 
     var isSettingsPanel = SETTINGS_STATES[state] && data.mode === 'settings';
     if (isSettingsPanel){
@@ -2074,6 +2107,80 @@
     );
   }
 
+  function renderLockScreen(data){
+    var qs = data.qrState || 'loading';
+    var userCode = data.userCode || '';
+    var displayCode = userCode.length === 8 ? (userCode.slice(0, 4) + '-' + userCode.slice(4)) : userCode;
+    var qrBlock;
+    if (qs === 'ready'){
+      qrBlock =
+        '<p style="margin:0 0 18px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Scan with your phone to unlock, or visit ' + escapeHtml(data.verificationUri || '') + ' and enter the code. Only the Slime ID this Membrane is signed in to can unlock it.</p>' +
+        '<div style="background:#fff;border-radius:16px;padding:14px;display:inline-block;margin-bottom:16px;">' +
+          '<img src="' + escapeHtml(data.qrDataUrl || '') + '" alt="QR code" style="display:block;width:160px;height:160px;">' +
+        '</div>' +
+        '<p style="margin:0 0 12px;font-family:var(--font-mono);font-size:24px;font-weight:700;letter-spacing:3px;color:var(--mint);">' + escapeHtml(displayCode) + '</p>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-dim);font-size:12.5px;">' +
+          '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span>' +
+          '<span>Waiting for approval…</span>' +
+        '</div>' +
+        '<button type="button" class="btn-tertiary" style="margin-top:10px;" id="btnLockNewCode">New code</button>';
+    } else if (qs === 'signed_out'){
+      qrBlock = '<p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">This Membrane is no longer signed in to Slime ID, so it can only be unlocked with its recovery PIN.</p>';
+    } else if (qs === 'offline'){
+      qrBlock = '<p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Can’t reach Slime ID right now, so there’s no QR code. Check the internet connection, or unlock with your recovery PIN.</p>';
+    } else {
+      qrBlock =
+        '<div style="display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-dim);font-size:12.5px;margin:10px 0;">' +
+          '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span><span>Getting an unlock code…</span>' +
+        '</div>';
+    }
+    return (
+      '<div class="screen" data-screen="lockScreen">' +
+        '<div style="width:100%;max-width:400px;text-align:center;">' +
+          '<h2 class="title" style="font-size:22px;margin:0 0 6px;">This Membrane is locked</h2>' +
+          (data.label ? '<p style="margin:0 0 18px;font-size:12px;font-family:var(--font-mono);color:var(--text-faint);">' + escapeHtml(data.label) + '</p>' : '<div style="height:12px;"></div>') +
+          qrBlock +
+          '<div style="margin:22px 0 16px;border-top:1px dashed rgba(255,255,255,0.08);"></div>' +
+          '<form id="formLockPin" autocomplete="off" style="text-align:left;">' +
+            '<label class="field-label" for="fieldLockPin">Recovery PIN</label>' +
+            '<div style="display:flex;gap:10px;">' +
+              '<input class="field" id="fieldLockPin" type="password" inputmode="numeric" maxlength="16" autocomplete="off" spellcheck="false" placeholder="8 digits" style="margin-bottom:0;flex:1;"' + (qs === 'ready' ? '' : ' data-autofocus') + '>' +
+              '<button type="button" class="btn-primary" style="box-shadow:none;" id="btnLockPinSubmit">Unlock</button>' +
+            '</div>' +
+            '<p id="lockPinError" style="margin:10px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(data.pinError || '') + '</p>' +
+            '<p id="lockPinWait" style="margin:4px 0 0;font-size:12px;color:var(--text-faint);"></p>' +
+          '</form>' +
+          '<button type="button" class="btn-tertiary" style="margin-top:14px;" id="btnLockWifi">Wi-Fi settings</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderSecuritySettings(data){
+    var enabled = !!data.enabled;
+    var signedIn = !!data.signedIn;
+    var error = data.error;
+    return (
+      '<div class="screen" data-screen="securitySettings">' +
+        '<div style="width:100%;max-width:460px;">' +
+          '<h2 class="title" style="text-align:left;font-size:19px;margin:0 0 8px;">Lock Screen</h2>' +
+          '<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:var(--text-muted);">Locks this Membrane when it starts and after every Brain session, so nobody else can open your Brains or Settings. Unlock by scanning a QR code with your phone (only your Slime ID can approve it), or with the recovery PIN shown when this Membrane was installed, which also works without internet.</p>' +
+          (signedIn || enabled ? (
+            '<div class="support-toggle-row" id="rowLockToggle" role="switch" tabindex="0" data-autofocus aria-checked="' + (enabled ? 'true' : 'false') + '">' +
+              '<input type="checkbox" id="fieldLockToggle" tabindex="-1" aria-hidden="true"' + (enabled ? ' checked' : '') + '>' +
+              '<span id="lblLockToggle" style="font-family:var(--font-display);font-weight:600;font-size:14.5px;color:var(--text);">Lock screen is ' + (enabled ? 'on' : 'off') + '</span>' +
+            '</div>'
+          ) : (
+            '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text);">Sign in with Slime ID first (from the Brain list) to use the lock screen.</p>'
+          )) +
+          (error ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
+          (enabled ? '<button type="button" class="btn-secondary" style="margin-top:18px;" id="btnSecurityLockNow">Lock now</button>' : '') +
+          (signedIn && data.email ? '<p style="margin:18px 0 0;font-size:11.5px;color:var(--text-faint);">Unlocks are approved by ' + escapeHtml(maskEmail(data.email)) + '. Keep your recovery PIN somewhere safe — it can’t be shown again.</p>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderSlimeIdError(data){
     return (
       '<div class="screen" data-screen="slimeIdError">' +
@@ -2126,6 +2233,58 @@
   // the inner checkbox display-only (pointer-events:none) just mirroring
   // state for the visual tick. One code path flips it, so no native/JS
   // double-toggle.
+  // Lock screen (renderLockScreen). The typed PIN survives the backend's
+  // re-emits (new QR code, offline -> ready) in lockPinDraft, and is
+  // dropped the moment it's submitted. The wait countdown for the PIN rate
+  // limit ticks client-side from pinRetryAt.
+  var lockPinDraft = '';
+  var lockWaitTimer = null;
+  function bindLockScreen(data){
+    var form = document.getElementById('formLockPin');
+    var field = document.getElementById('fieldLockPin');
+    var submit = document.getElementById('btnLockPinSubmit');
+    var wait = document.getElementById('lockPinWait');
+    if (data.pinError) lockPinDraft = '';
+    field.value = lockPinDraft;
+    on(field, 'input', function(){ lockPinDraft = field.value; });
+    // A plain button (not type=submit) with its own click handler: on the
+    // kiosk, clicks arrive via the mousedown->click synthesis, which isn't
+    // guaranteed to trigger form submission. Enter in the field still
+    // submits the form (a one-field form submits implicitly).
+    function submitPin(){
+      if (submit.disabled) return;
+      var pin = field.value.trim();
+      if (!pin) return;
+      field.value = ''; lockPinDraft = '';
+      submit.disabled = true;
+      document.getElementById('lockPinError').textContent = 'Checking…';
+      emit('slime:unlock-pin', { pin: pin });
+    }
+    on(form, 'submit', function(e){ e.preventDefault(); submitPin(); });
+    on(submit, 'click', submitPin);
+    var newCode = document.getElementById('btnLockNewCode');
+    if (newCode) on(newCode, 'click', function(){ emit('slime:lock-new-code'); });
+    on(document.getElementById('btnLockWifi'), 'click', function(){ emit('slime:lock-wifi'); });
+
+    if (lockWaitTimer){ clearInterval(lockWaitTimer); lockWaitTimer = null; }
+    var retryAt = Number(data.pinRetryAt) || 0;
+    function tick(){
+      if (!document.body.contains(wait)){ clearInterval(lockWaitTimer); lockWaitTimer = null; return; }
+      var left = retryAt - Math.floor(Date.now() / 1000);
+      if (left > 0){
+        submit.disabled = true;
+        var m = Math.floor(left / 60), sec = left % 60;
+        wait.textContent = 'Try again in ' + (m ? m + ' min ' : '') + sec + ' s.';
+      } else {
+        submit.disabled = false;
+        wait.textContent = '';
+        if (lockWaitTimer){ clearInterval(lockWaitTimer); lockWaitTimer = null; }
+      }
+    }
+    tick();
+    if (retryAt * 1000 > Date.now()) lockWaitTimer = setInterval(tick, 1000);
+  }
+
   function bindToggleRow(rowId, boxId, labelId, labelPrefix, eventName){
     var row = document.getElementById(rowId);
     if (!row) return;
@@ -2342,6 +2501,14 @@
     }
     else if (state === 'supportSettings'){
       bindToggleRow('rowSupportToggle', 'fieldSupportToggle', 'lblSupportToggle', 'Remote Support is', 'slime:support-toggle');
+    }
+    else if (state === 'securitySettings'){
+      bindToggleRow('rowLockToggle', 'fieldLockToggle', 'lblLockToggle', 'Lock screen is', 'slime:lock-toggle');
+      var btnSecLock = document.getElementById('btnSecurityLockNow');
+      if (btnSecLock) on(btnSecLock, 'click', function(){ emit('slime:lock-now'); });
+    }
+    else if (state === 'lockScreen'){
+      bindLockScreen(data);
     }
     else if (state === 'displaySettings'){
       var segCurrent = function(name){
@@ -2770,6 +2937,7 @@
     else if (s === 'pairError') emit('slime:back');
     else if (s === 'pairEntry' && current.data && current.data.mode === 'settings') emit('slime:back');
     else if (s === 'supportSettings') emit('slime:back');
+    else if (s === 'securitySettings') emit('slime:back');
     else if (s === 'displaySettings') emit('slime:back');
     else if (s === 'timezoneSettings') emit('slime:back');
     else if (s === 'crashReportSettings') emit('slime:back');
@@ -2782,6 +2950,10 @@
   var btnOpenSettings = document.getElementById('btnOpenSettings');
   on(btnOpenSettings, 'click', function(){ emit('slime:open-settings'); });
   on(btnOpenSettings, 'keydown', function(e){ if (e.key === 'Enter') emit('slime:open-settings'); });
+
+  var btnLockNow = document.getElementById('btnLockNow');
+  on(btnLockNow, 'click', function(){ emit('slime:lock-now'); });
+  on(btnLockNow, 'keydown', function(e){ if (e.key === 'Enter') emit('slime:lock-now'); });
 
   var btnPower = document.getElementById('btnPower');
   on(btnPower, 'click', showPowerConfirm);
@@ -2817,7 +2989,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:unlock-pin','slime:lock-new-code','slime:lock-wifi','slime:lock-toggle','slime:lock-now','slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -3247,6 +3419,11 @@
       'slime:slime-id-logout': 'slimeIdLogout',
       'slime:save-brain-consent': 'saveBrainConsent',
       'slime:recovery-pin-ack': 'recoveryPinAck',
+      'slime:unlock-pin': 'unlockPin',
+      'slime:lock-new-code': 'lockNewCode',
+      'slime:lock-wifi': 'lockWifi',
+      'slime:lock-toggle': 'lockToggle',
+      'slime:lock-now': 'lockNow',
       'slime:apply-update': 'applyUpdate'
     };
 

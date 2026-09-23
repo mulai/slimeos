@@ -51,7 +51,11 @@ do_slime_id_login() {
 
             set +e
             local response exit_code
-            response=$(curl -fsS -m 10 -X POST "$SLIME_ID_API/device/start" 2>&1)
+            # label names this device on /device and in the Devices list
+            # (membrane_label, lock.sh); servers that predate it ignore it.
+            response=$(curl -fsS -m 10 -X POST -H 'Content-Type: application/json' \
+                -d "$(jq -nc --arg l "$(membrane_label)" '{label:$l}')" \
+                "$SLIME_ID_API/device/start" 2>&1)
             exit_code=$?
             set -e
 
