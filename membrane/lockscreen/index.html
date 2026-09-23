@@ -19,8 +19,8 @@
             'slimeIdConnecting' | 'slimeIdEntry' | 'slimeIdError' |
             'lockScreen' | 'securitySettings'
      data per state:
-       empty:        { signedInEmail: string | null, lockEnabled: bool }
-       picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null, lockEnabled: bool }
+       empty:        { signedInEmail: string | null, lockEnabled: bool, lockIdleMinutes: number }
+       picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null, lockEnabled: bool, lockIdleMinutes: number }
                        // lockEnabled shows the status strip's "Lock now"
                        // padlock (lock.sh / docs/membrane-lock-screen-proposal.md).
        lockScreen:   { qrState: 'hidden'|'loading'|'ready'|'offline'|'signed_out', userCode, verificationUri,
@@ -28,7 +28,8 @@
                        // Blocks everything but Wi-Fi setup and power until
                        // unlocked, by QR (the device's own Slime ID only) or
                        // the recovery PIN. The gear icon is hidden here.
-       securitySettings: { mode: 'settings', enabled: bool, signedIn: bool, email: string | null, error: string | null }
+       securitySettings: { mode: 'settings', enabled: bool, signedIn: bool, email: string | null, error: string | null,
+                           lockIdleMinutes: 1|5|15|30|0 (0 = never), deviceName: string ('' = use hostname), hostname }
                        // signedInEmail is set once do_slime_id_login() has ever
                        // completed successfully on this device (see
                        // membrane/session/slime-id.sh) -- a purely local-state
@@ -413,7 +414,10 @@
    'slime:lock-new-code'   {}                              // lockScreen: fetch a fresh unlock QR code
    'slime:lock-wifi'       {}                              // lockScreen: open Wi-Fi setup (boot mode, skippable)
    'slime:lock-toggle'     { enabled }                     // securitySettings: turn the lock on/off
-   'slime:lock-now'        {}                              // status-strip padlock or securitySettings "Lock now"
+   'slime:lock-now'        {}                              // status-strip padlock, securitySettings "Lock now", or the idle timer
+   'slime:lock-idle-set'   { minutes }                     // securitySettings: auto-lock after 1/5/15/30 min, 0 = never
+   'slime:device-name-set' { name }                        // securitySettings: this Membrane's name ('' = hostname)
+   'slime:force-back'      {}                              // idle timer only: close Settings (any sub-screen) before locking
 
    'slime:apply-update'    {}                              // "Update now" -- from the update-available
      modal (status strip icon, idle empty/picker screens only -- see setStatus's `update` field
@@ -1178,12 +1182,48 @@
     catch (err) { reportCaughtError(err); }
     renderUpdateIcon();
     renderLockChrome();
+    noteIdleLockSettings();
   }
 
   // Status-strip chrome for the lock screen (lock.sh): the gear is hidden
   // while locked (the backend ignores open-settings there anyway), and the
   // padlock "Lock now" shows on the picker/empty screens only while the
   // lock is turned on.
+  // Idle auto-lock (lock.sh / docs/membrane-lock-screen-proposal.md). The
+  // page is the only thing that sees keyboard/mouse input, so the timer
+  // lives here. It only runs on the Brain list (picker/empty) and in the
+  // Settings panel: a Brain session has Windows' own lock, and the other
+  // screens (connecting, credentials, errors, first-boot setup) belong to
+  // backend loops that wouldn't act on a lock request anyway. In Settings
+  // it sends force-back first, which every settings loop honours, then
+  // lock-now reaches the main loop. The latest setting comes from the
+  // picker/empty/securitySettings data.
+  var idleLockEnabled = false, idleLockMinutes = 0, lastActivityAt = Date.now();
+  function noteIdleLockSettings(){
+    var st = current.state, d = current.data || {};
+    if (st === 'picker' || st === 'empty'){
+      idleLockEnabled = !!d.lockEnabled; idleLockMinutes = Number(d.lockIdleMinutes) || 0;
+    } else if (st === 'securitySettings'){
+      idleLockEnabled = !!d.enabled; idleLockMinutes = Number(d.lockIdleMinutes) || 0;
+    } else if (st === 'lockScreen'){
+      lastActivityAt = Date.now();
+    }
+  }
+  ['keydown', 'mousedown', 'mousemove', 'wheel', 'touchstart'].forEach(function(t){
+    document.addEventListener(t, function(){ lastActivityAt = Date.now(); }, true);
+  });
+  setInterval(guarded(function(){
+    if (!idleLockEnabled || idleLockMinutes <= 0) return;
+    var st = current.state, d = current.data || {};
+    var inSettings = SETTINGS_STATES[st] && d.mode === 'settings';
+    if (!(st === 'picker' || st === 'empty' || st === 'securitySettings' || inSettings)) return;
+    if (Date.now() - lastActivityAt < idleLockMinutes * 60000) return;
+    lastActivityAt = Date.now();
+    closeModal();
+    if (st !== 'picker' && st !== 'empty') emit('slime:force-back');
+    emit('slime:lock-now');
+  }), 10000);
+
   function renderLockChrome(){
     var locked = current.state === 'lockScreen';
     document.getElementById('btnOpenSettings').classList.toggle('hidden', locked);
@@ -2196,7 +2236,22 @@
             '<p style="margin:0;font-size:13px;line-height:1.6;color:var(--text);">Sign in with Slime ID first (from the Brain list) to use the lock screen.</p>'
           )) +
           (error ? '<p style="margin:14px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
-          (enabled ? '<button type="button" class="btn-secondary" style="margin-top:18px;" id="btnSecurityLockNow">Lock now</button>' : '') +
+          (enabled ? (
+            '<label class="field-label" style="margin-top:22px;">Lock when idle for</label>' +
+            '<div class="seg-group" id="segLockIdle" style="margin-bottom:6px;">' +
+              [[1,'1 min'],[5,'5 min'],[15,'15 min'],[30,'30 min'],[0,'Never']].map(function(o){
+                return '<div class="seg-btn' + (Number(data.lockIdleMinutes) === o[0] ? ' active' : '') + '" role="button" tabindex="0" data-val="' + o[0] + '">' + o[1] + '</div>';
+              }).join('') +
+            '</div>' +
+            '<p style="margin:0 0 4px;font-size:11.5px;color:var(--text-faint);">Counts time on the Brain list and in Settings. Inside a Brain, Windows’ own lock applies.</p>' +
+            '<button type="button" class="btn-secondary" style="margin-top:18px;" id="btnSecurityLockNow">Lock now</button>'
+          ) : '') +
+          '<label class="field-label" for="fieldDeviceName" style="margin-top:26px;">Device name</label>' +
+          '<div style="display:flex;gap:10px;">' +
+            '<input class="field" id="fieldDeviceName" maxlength="40" autocomplete="off" spellcheck="false" style="margin-bottom:0;flex:1;" value="' + escapeHtml(data.deviceName || '') + '" placeholder="' + escapeHtml(data.hostname || 'slimeos') + '">' +
+            '<button type="button" class="btn-secondary" id="btnDeviceNameSave">Save</button>' +
+          '</div>' +
+          '<p style="margin:8px 0 0;font-size:11.5px;color:var(--text-faint);">Shown when you approve an unlock or sign-in on your phone, and in your Slime ID’s device list.</p>' +
           (signedIn && data.email ? '<p style="margin:18px 0 0;font-size:11.5px;color:var(--text-faint);">Unlocks are approved by ' + escapeHtml(maskEmail(data.email)) + '. Keep your recovery PIN somewhere safe — it can’t be shown again.</p>' : '') +
         '</div>' +
       '</div>'
@@ -2537,6 +2592,22 @@
       bindToggleRow('rowLockToggle', 'fieldLockToggle', 'lblLockToggle', 'Lock screen is', 'slime:lock-toggle');
       var btnSecLock = document.getElementById('btnSecurityLockNow');
       if (btnSecLock) on(btnSecLock, 'click', function(){ emit('slime:lock-now'); });
+      var segIdle = document.getElementById('segLockIdle');
+      if (segIdle) Array.prototype.forEach.call(segIdle.querySelectorAll('.seg-btn'), function(btn){
+        var choose = function(){
+          if (btn.classList.contains('active')) return;
+          Array.prototype.forEach.call(segIdle.querySelectorAll('.seg-btn'), function(b){ b.classList.toggle('active', b === btn); });
+          emit('slime:lock-idle-set', { minutes: Number(btn.getAttribute('data-val')) });
+        };
+        on(btn, 'click', choose);
+        on(btn, 'keydown', function(e){
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){ e.preventDefault(); choose(); }
+        });
+      });
+      var nameField = document.getElementById('fieldDeviceName');
+      var saveName = function(){ emit('slime:device-name-set', { name: nameField.value.trim() }); };
+      on(document.getElementById('btnDeviceNameSave'), 'click', saveName);
+      on(nameField, 'keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); saveName(); } });
     }
     else if (state === 'lockScreen'){
       bindLockScreen(data);
@@ -3020,7 +3091,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:unlock-pin','slime:lock-show-qr','slime:lock-hide-qr','slime:lock-new-code','slime:lock-wifi','slime:lock-toggle','slime:lock-now','slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:lock-idle-set','slime:device-name-set','slime:force-back','slime:unlock-pin','slime:lock-show-qr','slime:lock-hide-qr','slime:lock-new-code','slime:lock-wifi','slime:lock-toggle','slime:lock-now','slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -3457,6 +3528,9 @@
       'slime:lock-wifi': 'lockWifi',
       'slime:lock-toggle': 'lockToggle',
       'slime:lock-now': 'lockNow',
+      'slime:lock-idle-set': 'lockIdleSet',
+      'slime:device-name-set': 'deviceNameSet',
+      'slime:force-back': 'forceBack',
       'slime:apply-update': 'applyUpdate'
     };
 

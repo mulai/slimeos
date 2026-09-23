@@ -35,10 +35,20 @@
 LOCK_STATE_DIR="${HOME:-/home/$(id -un)}/.local/state/slimeos"
 LOCK_ENABLED_FILE="$LOCK_STATE_DIR/lock-enabled"
 LOCK_PIN_ATTEMPTS_FILE="$LOCK_STATE_DIR/lock-pin-attempts"
+LOCK_IDLE_FILE="$LOCK_STATE_DIR/lock-idle-minutes"
+DEVICE_NAME_FILE="$LOCK_STATE_DIR/device-name"
 mkdir -p "$LOCK_STATE_DIR" 2>/dev/null && chmod 700 "$LOCK_STATE_DIR" 2>/dev/null || :
 
 LOCK_PIN_FREE_ATTEMPTS=5
 LOCK_PIN_MAX_WAIT=3600
+
+# Idle auto-lock (Phase 2). The page owns the timer -- it's the only thing
+# that sees keyboard/mouse input -- and only runs it on the picker and in
+# Settings (a Brain session has Windows' own lock). The backend just stores
+# the choice and hands it to the page in picker/empty/securitySettings data.
+# 0 = never (the device still locks at boot and after every session).
+LOCK_IDLE_CHOICES="1 5 15 30 0"
+LOCK_IDLE_DEFAULT=5
 
 lock_is_enabled() {
     [[ "$(cat "$LOCK_ENABLED_FILE" 2>/dev/null)" == "on" ]]
@@ -52,14 +62,32 @@ lock_set_enabled() {
     fi
 }
 
+lock_idle_minutes() {
+    local m; m=$(cat "$LOCK_IDLE_FILE" 2>/dev/null || true)
+    [[ " $LOCK_IDLE_CHOICES " == *" $m "* ]] || m=$LOCK_IDLE_DEFAULT
+    echo "$m"
+}
+
 slime_id_token() {
     jq -r '.token // empty' "$SLIME_ID_SESSION_FILE" 2>/dev/null || true
 }
 
-# Device label for /device ("Unlock <label>"); also sent on sign-in.
+# Device label for /device ("Unlock <label>"), the sign-in session and
+# the Devices list: the name set in Settings › Security, else the hostname
+# (which is "slimeos" on every stock install).
 membrane_label() {
-    local h; h=$(hostname 2>/dev/null || echo "")
-    echo "${h:-Membrane}"
+    local n; n=$(cat "$DEVICE_NAME_FILE" 2>/dev/null || true)
+    if [[ -z "$n" ]]; then
+        n=$(hostname 2>/dev/null || echo "")
+    fi
+    echo "${n:-Membrane}"
+}
+
+# Printable characters only, trimmed, at most 40. Empty = back to hostname.
+clean_device_name() {
+    local n; n=$(printf '%s' "$1" | tr -d '\000-\037\177')
+    n="${n#"${n%%[![:space:]]*}"}"; n="${n%"${n##*[![:space:]]}"}"
+    printf '%s' "${n:0:40}"
 }
 
 # Prints "<failures> <next_allowed_epoch>" (defaults "0 0").
@@ -272,8 +300,11 @@ do_security() {
         fi
         emit_state securitySettings "$(jq -nc --arg mode "$mode" --argjson enabled "$enabled" \
             --argjson signedIn "$signed_in" --arg email "$email" --arg error "$error" \
+            --argjson idle "$(lock_idle_minutes)" --arg name "$(cat "$DEVICE_NAME_FILE" 2>/dev/null || true)" \
+            --arg host "$(hostname 2>/dev/null || true)" \
             '{mode:$mode, enabled:$enabled, signedIn:$signedIn, email:(if $email == "" then null else $email end),
-              error:(if $error == "" then null else $error end)}')"
+              error:(if $error == "" then null else $error end), lockIdleMinutes:$idle,
+              deviceName:$name, hostname:$host}')"
         error=""
 
         local line ev_type
@@ -289,6 +320,22 @@ do_security() {
                 else
                     log "Lock screen: turned $([[ "$want" == "true" ]] && echo on || echo off)"
                 fi
+                ;;
+            lockIdleSet)
+                local mins; mins=$(jq -r '.minutes // empty' <<<"$line" 2>/dev/null || true)
+                if [[ " $LOCK_IDLE_CHOICES " == *" $mins "* ]]; then
+                    echo "$mins" > "$LOCK_IDLE_FILE" || error="Couldn't save the auto-lock setting."
+                    log "Lock screen: idle auto-lock set to ${mins} min (0 = never)"
+                fi
+                ;;
+            deviceNameSet)
+                local name; name=$(clean_device_name "$(jq -r '.name // ""' <<<"$line" 2>/dev/null || true)")
+                if [[ -z "$name" ]]; then
+                    rm -f "$DEVICE_NAME_FILE"
+                elif ! printf '%s\n' "$name" > "$DEVICE_NAME_FILE"; then
+                    error="Couldn't save the device name."
+                fi
+                log "Device name set to '${name:-<hostname>}'"
                 ;;
             lockNow)
                 if lock_is_enabled; then

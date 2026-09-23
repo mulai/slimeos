@@ -127,7 +127,7 @@ Membrane.
 |---|---|
 | Boot / coordinator restart | Locked |
 | Brain session ends (logoff, disconnect, error) | Locked |
-| Idle on the Membrane UI for N min (default 5) | Locked (Phase 2) |
+| Idle on the Brain list or in Settings for N min (default 5) | Locked (v0.3.26; timer runs in the page) |
 | "Lock now" button (picker screen) | Locked |
 | Inside a Brain session | Not our job: Windows has its own lock (Win+L, idle) |
 | Slime ID session revoked/expired | Stays locked; PIN unlock only (see above) |
@@ -162,7 +162,7 @@ never be unlocked), shutdown/restart, and the lock screen itself.
   wording; a real device label; Membrane lock state, lock screen, Security tab, and the
   boot / session-end / manual triggers. Verified on the AMD box. OTA release + a slimeos.com deploy, with the
   server deployed first so older Membranes are unaffected.
-- **Phase 2:** idle timer, org-admin unlock, and a "tap to approve" notification on the
+- **Phase 2:** idle timer and device naming (shipped v0.3.26); still open: org-admin unlock, and a "tap to approve" notification on the
   phone instead of scanning (needs a push channel we don't have yet).
 
 **Effort guess:** the PIN-file fix is under one session; Phase 1 is roughly 3 working sessions, including real-device

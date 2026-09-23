@@ -715,7 +715,8 @@ show_picker_or_empty() {
     email=$(signed_in_email)
     if [[ "$count" -eq 0 && "$remote_count" -eq 0 ]]; then
         local lock_on=false; lock_is_enabled && lock_on=true
-        emit_state empty "$(jq -nc --arg e "$email" --argjson l "$lock_on" '{signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l}')"
+        emit_state empty "$(jq -nc --arg e "$email" --argjson l "$lock_on" --argjson idle "$(lock_idle_minutes)" \
+            '{signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l, lockIdleMinutes:$idle}')"
         return
     fi
 
@@ -764,7 +765,8 @@ show_picker_or_empty() {
     brains_json=$(printf '%s\n' "${entries[@]}" | jq -sc '.')
     local lock_on=false; lock_is_enabled && lock_on=true
     emit_state picker "$(jq -nc --argjson b "$brains_json" --arg e "$email" --argjson l "$lock_on" \
-        '{brains:$b, signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l}')"
+        --argjson idle "$(lock_idle_minutes)" \
+        '{brains:$b, signedInEmail:(if $e == "" then null else $e end), lockEnabled:$l, lockIdleMinutes:$idle}')"
 }
 
 log "Coordinator starting, waiting for first client..."
