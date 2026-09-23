@@ -23,7 +23,7 @@
        picker:       { brains: [{ id, name, host, lastConnected, remote?: bool }], signedInEmail: string | null, lockEnabled: bool }
                        // lockEnabled shows the status strip's "Lock now"
                        // padlock (lock.sh / docs/membrane-lock-screen-proposal.md).
-       lockScreen:   { qrState: 'loading'|'ready'|'offline'|'signed_out', userCode, verificationUri,
+       lockScreen:   { qrState: 'hidden'|'loading'|'ready'|'offline'|'signed_out', userCode, verificationUri,
                        qrDataUrl, pinError: string | null, pinRetryAt: epoch seconds (0 = now), label }
                        // Blocks everything but Wi-Fi setup and power until
                        // unlocked, by QR (the device's own Slime ID only) or
@@ -408,6 +408,8 @@
    'slime:recovery-pin-ack' {}                             // answer to the one-shot showRecoveryPin
      overlay (single acknowledgement button, no choice to make) -- never shown again once acked.
    'slime:unlock-pin'      { pin }                         // lockScreen: recovery-PIN unlock attempt
+   'slime:lock-show-qr'    {}                              // lockScreen: switch to the QR view (requests a code)
+   'slime:lock-hide-qr'    {}                              // lockScreen: back to the PIN view (stops polling)
    'slime:lock-new-code'   {}                              // lockScreen: fetch a fresh unlock QR code
    'slime:lock-wifi'       {}                              // lockScreen: open Wi-Fi setup (boot mode, skippable)
    'slime:lock-toggle'     { enabled }                     // securitySettings: turn the lock on/off
@@ -2107,14 +2109,44 @@
     );
   }
 
+  // PIN view by default (qrState 'hidden'), like the Windows/macOS lock
+  // screens; the QR view only after the user taps "Unlock with phone", so no
+  // unlock code is requested (or polled) until someone actually wants one.
   function renderLockScreen(data){
-    var qs = data.qrState || 'loading';
+    var qs = data.qrState || 'hidden';
+    var header =
+      '<h2 class="title" style="font-size:22px;margin:0 0 6px;">This Membrane is locked</h2>' +
+      (data.label ? '<p style="margin:0 0 22px;font-size:12px;font-family:var(--font-mono);color:var(--text-faint);">' + escapeHtml(data.label) + '</p>' : '<div style="height:16px;"></div>');
+    var wifi = '<button type="button" class="btn-tertiary" style="margin-top:14px;" id="btnLockWifi">Wi-Fi settings</button>';
+    var qrIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" style="vertical-align:-3px;margin-right:8px;"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h3v-3"></path></svg>';
+
+    if (qs === 'hidden'){
+      return (
+        '<div class="screen" data-screen="lockScreen">' +
+          '<div style="width:100%;max-width:380px;text-align:center;">' +
+            header +
+            '<form id="formLockPin" autocomplete="off" style="text-align:left;">' +
+              '<label class="field-label" for="fieldLockPin">Recovery PIN</label>' +
+              '<div style="display:flex;gap:10px;">' +
+                '<input class="field" id="fieldLockPin" type="password" inputmode="numeric" maxlength="16" autocomplete="off" spellcheck="false" placeholder="8 digits" style="margin-bottom:0;flex:1;" data-autofocus>' +
+                '<button type="button" class="btn-primary" style="box-shadow:none;" id="btnLockPinSubmit">Unlock</button>' +
+              '</div>' +
+              '<p id="lockPinError" style="margin:10px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(data.pinError || '') + '</p>' +
+              '<p id="lockPinWait" style="margin:4px 0 0;font-size:12px;color:var(--text-faint);"></p>' +
+            '</form>' +
+            '<button type="button" class="btn-secondary" style="margin-top:18px;" id="btnLockShowQr">' + qrIcon + 'Unlock with phone</button>' +
+            '<br>' + wifi +
+          '</div>' +
+        '</div>'
+      );
+    }
+
     var userCode = data.userCode || '';
     var displayCode = userCode.length === 8 ? (userCode.slice(0, 4) + '-' + userCode.slice(4)) : userCode;
     var qrBlock;
     if (qs === 'ready'){
       qrBlock =
-        '<p style="margin:0 0 18px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Scan with your phone to unlock, or visit ' + escapeHtml(data.verificationUri || '') + ' and enter the code. Only the Slime ID this Membrane is signed in to can unlock it.</p>' +
+        '<p style="margin:0 0 18px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Scan with your phone, or visit ' + escapeHtml(data.verificationUri || '') + ' and enter the code. Only the Slime ID this Membrane is signed in to can unlock it.</p>' +
         '<div style="background:#fff;border-radius:16px;padding:14px;display:inline-block;margin-bottom:16px;">' +
           '<img src="' + escapeHtml(data.qrDataUrl || '') + '" alt="QR code" style="display:block;width:160px;height:160px;">' +
         '</div>' +
@@ -2127,7 +2159,7 @@
     } else if (qs === 'signed_out'){
       qrBlock = '<p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">This Membrane is no longer signed in to Slime ID, so it can only be unlocked with its recovery PIN.</p>';
     } else if (qs === 'offline'){
-      qrBlock = '<p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Can’t reach Slime ID right now, so there’s no QR code. Check the internet connection, or unlock with your recovery PIN.</p>';
+      qrBlock = '<p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:var(--text-muted);">Can’t reach Slime ID right now. Check the internet connection, or use your recovery PIN.</p>';
     } else {
       qrBlock =
         '<div style="display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-dim);font-size:12.5px;margin:10px 0;">' +
@@ -2137,20 +2169,10 @@
     return (
       '<div class="screen" data-screen="lockScreen">' +
         '<div style="width:100%;max-width:400px;text-align:center;">' +
-          '<h2 class="title" style="font-size:22px;margin:0 0 6px;">This Membrane is locked</h2>' +
-          (data.label ? '<p style="margin:0 0 18px;font-size:12px;font-family:var(--font-mono);color:var(--text-faint);">' + escapeHtml(data.label) + '</p>' : '<div style="height:12px;"></div>') +
+          header +
           qrBlock +
-          '<div style="margin:22px 0 16px;border-top:1px dashed rgba(255,255,255,0.08);"></div>' +
-          '<form id="formLockPin" autocomplete="off" style="text-align:left;">' +
-            '<label class="field-label" for="fieldLockPin">Recovery PIN</label>' +
-            '<div style="display:flex;gap:10px;">' +
-              '<input class="field" id="fieldLockPin" type="password" inputmode="numeric" maxlength="16" autocomplete="off" spellcheck="false" placeholder="8 digits" style="margin-bottom:0;flex:1;"' + (qs === 'ready' ? '' : ' data-autofocus') + '>' +
-              '<button type="button" class="btn-primary" style="box-shadow:none;" id="btnLockPinSubmit">Unlock</button>' +
-            '</div>' +
-            '<p id="lockPinError" style="margin:10px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(data.pinError || '') + '</p>' +
-            '<p id="lockPinWait" style="margin:4px 0 0;font-size:12px;color:var(--text-faint);"></p>' +
-          '</form>' +
-          '<button type="button" class="btn-tertiary" style="margin-top:14px;" id="btnLockWifi">Wi-Fi settings</button>' +
+          '<br><button type="button" class="btn-secondary" style="margin-top:20px;" id="btnLockHideQr" data-autofocus>Use recovery PIN</button>' +
+          '<br>' + wifi +
         '</div>' +
       '</div>'
     );
@@ -2240,7 +2262,19 @@
   var lockPinDraft = '';
   var lockWaitTimer = null;
   function bindLockScreen(data){
+    on(document.getElementById('btnLockWifi'), 'click', function(){ emit('slime:lock-wifi'); });
+    var showQr = document.getElementById('btnLockShowQr');
+    if (showQr) on(showQr, 'click', function(){ emit('slime:lock-show-qr'); });
+    var hideQr = document.getElementById('btnLockHideQr');
+    if (hideQr) on(hideQr, 'click', function(){ emit('slime:lock-hide-qr'); });
+    var newCode = document.getElementById('btnLockNewCode');
+    if (newCode) on(newCode, 'click', function(){ emit('slime:lock-new-code'); });
+
     var form = document.getElementById('formLockPin');
+    if (!form){
+      if (lockWaitTimer){ clearInterval(lockWaitTimer); lockWaitTimer = null; }
+      return;
+    }
     var field = document.getElementById('fieldLockPin');
     var submit = document.getElementById('btnLockPinSubmit');
     var wait = document.getElementById('lockPinWait');
@@ -2262,9 +2296,6 @@
     }
     on(form, 'submit', function(e){ e.preventDefault(); submitPin(); });
     on(submit, 'click', submitPin);
-    var newCode = document.getElementById('btnLockNewCode');
-    if (newCode) on(newCode, 'click', function(){ emit('slime:lock-new-code'); });
-    on(document.getElementById('btnLockWifi'), 'click', function(){ emit('slime:lock-wifi'); });
 
     if (lockWaitTimer){ clearInterval(lockWaitTimer); lockWaitTimer = null; }
     var retryAt = Number(data.pinRetryAt) || 0;
@@ -2989,7 +3020,7 @@
   /* ===================== demo mode (?demo=1) ===================== */
 
   if (isDemo){
-    ['slime:unlock-pin','slime:lock-new-code','slime:lock-wifi','slime:lock-toggle','slime:lock-now','slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
+    ['slime:unlock-pin','slime:lock-show-qr','slime:lock-hide-qr','slime:lock-new-code','slime:lock-wifi','slime:lock-toggle','slime:lock-now','slime:add-brain','slime:connect','slime:remove-brain','slime:credentials','slime:retry','slime:reenter-password','slime:back','slime:cancel-connect','slime:open-settings','slime:settings-tab','slime:wifi-connect','slime:wifi-password','slime:wifi-rescan','slime:wifi-skip','slime:power-shutdown','slime:power-restart','slime:pair-submit','slime:pair-skip','slime:support-toggle','slime:display-set','slime:timezone-set','slime:speaker-volume-set','slime:speaker-test','slime:speaker-device-set','slime:mic-volume-set','slime:mic-test','slime:mic-device-set','slime:camera-preview-start','slime:camera-preview-stop','slime:camera-device-set','slime:crash-report','slime:crash-consent','slime:crash-report-toggle','slime:feedback-submit','slime:feedback-reset','slime:check-update','slime:slime-id-start','slime:slime-id-logout','slime:save-brain-consent','slime:recovery-pin-ack','slime:apply-update'].forEach(function(name){
       document.addEventListener(name, function(e){ console.log('[demo]', name, e.detail); });
     });
 
@@ -3420,6 +3451,8 @@
       'slime:save-brain-consent': 'saveBrainConsent',
       'slime:recovery-pin-ack': 'recoveryPinAck',
       'slime:unlock-pin': 'unlockPin',
+      'slime:lock-show-qr': 'lockShowQr',
+      'slime:lock-hide-qr': 'lockHideQr',
       'slime:lock-new-code': 'lockNewCode',
       'slime:lock-wifi': 'lockWifi',
       'slime:lock-toggle': 'lockToggle',

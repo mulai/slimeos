@@ -45,8 +45,12 @@ behave exactly as today.
 
 ### Unlock flow
 
-1. The lock screen shows a QR code and a short code, the same visual as today's sign-in
-   screen but titled "Unlock <device name>".
+*Updated 2026-09-23 after the first real-device test (Tommy):* the lock screen opens on the
+recovery PIN field, like Windows/macOS. "Unlock with phone" switches to the QR view, and only
+then is an unlock code requested and polled. Going back to the PIN view stops polling.
+
+1. After tapping "Unlock with phone", the lock screen shows a QR code and a short code, the
+   same visual as the sign-in screen but titled "Unlock <device name>".
 2. The owner scans it, and the phone opens `/device?code=…` → "Unlock this Membrane?" →
    Approve.
 3. The Membrane sees the approval and unlocks.

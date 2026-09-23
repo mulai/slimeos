@@ -13,19 +13,22 @@
 # nothing else (picker, Settings, connect) is reachable, except Wi-Fi setup
 # and power, which it handles directly.
 #
-# Two ways to unlock:
-#   * QR -- /api/device/unlock-start creates a code only this device's own
-#     Slime ID can approve; polling /api/device/poll until approved. Never
-#     mints a session (the device already has one).
-#   * Recovery PIN -- the 8-digit PIN shown once at install, verified as
-#     slime-recovery's password by the system itself (su/PAM), never against
-#     a stored copy. Rate-limited, with the counter on disk so a reboot
-#     doesn't reset it. The PIN is never logged or stored.
+# Two ways to unlock, PIN first (like the Windows/macOS lock screens):
+#   * Recovery PIN (the default view) -- the 8-digit PIN shown once at
+#     install, verified as slime-recovery's password by the system itself
+#     (su/PAM), never against a stored copy. Rate-limited, with the counter
+#     on disk so a reboot doesn't reset it. The PIN is never logged or stored.
+#   * QR, only after the user taps the QR icon -- /api/device/unlock-start
+#     creates a code only this device's own Slime ID can approve, polled via
+#     /api/device/poll until approved. Never mints a session (the device
+#     already has one). Going back to the PIN view stops the polling, so an
+#     idle locked device makes no server calls at all.
 #
 # If the device's Slime ID session turns out to be revoked/expired
-# (unlock-start answers signed_out), the local session file is cleared and
-# QR unlock is disabled -- PIN only. A *new* sign-in can never unlock the
-# device: that would let any Slime ID holder unlock anyone's Membrane.
+# (unlock-start answers signed_out when the QR is requested), the local
+# session file is cleared and QR unlock is disabled -- PIN only. A *new*
+# sign-in can never unlock the device: that would let any Slime ID holder
+# unlock anyone's Membrane.
 
 # $CONFIG_DIR is root-owned (only install-time-seeded files in it are ours
 # to write), so the lock's own state lives in the session user's home.
@@ -122,7 +125,8 @@ do_lock_screen() {
 
     local device_code="" user_code="" verification_uri="" qr_data_url=""
     local interval=4 code_expires=0 next_code_try=0
-    local qr_state="loading" pin_error="" signed_out=false
+    # hidden = PIN view (no code, no polling); the rest are the QR view.
+    local qr_state="hidden" pin_error=""
 
     # Fetches a fresh unlock code; sets qr_state to ready/offline/signed_out.
     lock_fetch_code() {
@@ -169,7 +173,6 @@ do_lock_screen() {
     local failures; read -r failures LOCK_PIN_RETRY_AT <<<"$(lock_pin_attempts_read)"
     # At boot this runs before the picker ever sent the status strip.
     send_status
-    lock_fetch_code
     lock_emit
 
     local tick=0
@@ -193,12 +196,17 @@ do_lock_screen() {
                     fi
                     lock_emit
                     ;;
-                lockNewCode)
+                lockShowQr|lockNewCode)
+                    qr_state="loading"; lock_emit
                     lock_fetch_code; pin_error=""; lock_emit
+                    ;;
+                lockHideQr)
+                    qr_state="hidden"; device_code=""; user_code=""; lock_emit
                     ;;
                 lockWifi)
                     do_network_setup boot
-                    lock_fetch_code; lock_emit
+                    [[ "$qr_state" == "hidden" ]] || lock_fetch_code
+                    lock_emit
                     ;;
                 _clientConnected)
                     send_status
@@ -242,7 +250,7 @@ do_lock_screen() {
                         ;;
                 esac
                 ;;
-            offline|loading)
+            offline)
                 if (( now >= next_code_try )); then
                     lock_fetch_code
                     [[ "$qr_state" == "ready" || "$qr_state" == "signed_out" ]] && lock_emit
