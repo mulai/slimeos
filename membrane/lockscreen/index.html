@@ -1810,6 +1810,10 @@
               '<p style="margin:14px 0 0;font-size:11.5px;color:var(--text-faint);">This password stops working the moment Remote Support is turned off — or back on, which replaces it with a new one.</p>' +
             '</div>'
           ) : '') +
+          // On, but the details are gone -- only after the Membrane's session
+          // service restarted (the password is never stored, so it can't be
+          // shown again). Say so instead of silently showing nothing.
+          (enabled && !conn && !error ? '<p style="margin:14px 0 0;font-size:12.5px;line-height:1.6;color:var(--text-muted);">Remote Support is on, but its access details can’t be shown again after the Membrane restarted its session. Turn it off and back on to get a new password.</p>' : '') +
           '<p style="margin:24px 0 0;font-size:11.5px;color:var(--text-faint);">Membrane v' + escapeHtml(data.version || 'unknown') + '</p>' +
         '</div>' +
       '</div>'

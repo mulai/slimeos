@@ -35,13 +35,23 @@ REMOTE_SUPPORT_TOGGLE="$INSTALL_DIR/remote-support-toggle.sh"
 MEMBRANE_VERSION="unknown"
 [[ -f "$CONFIG_DIR/version" ]] && MEMBRANE_VERSION=$(cat "$CONFIG_DIR/version")
 
+# The last successful `on` toggle's connection info (host/port/user/password),
+# or "null". Deliberately module-level rather than local to do_support(): the
+# password can't be recovered after the fact (chpasswd only keeps a hash), so a
+# local copy meant the details vanished as soon as the user switched tabs or
+# closed Settings, while Remote Support stayed on. Held in the long-running
+# coordinator's memory only, never written to disk -- a coordinator restart
+# still loses it (the screen then explains how to get a fresh password), and
+# every boot forces Remote Support off anyway (install.sh's boot-time unit).
+SUPPORT_CONNECTION="null"
+
 support_is_active() {
     systemctl is-active --quiet ssh.service
 }
 
 do_support() {
     local mode="$1"
-    local connection="null" error=""
+    local error=""
 
     while true; do
         local enabled="false"
@@ -51,10 +61,10 @@ do_support() {
         # replacing what's shown in response to a new event) -- but if
         # ssh.service somehow isn't actually running, showing stale
         # "share this" details would be actively misleading, so drop them.
-        [[ "$enabled" == "true" ]] || connection="null"
+        [[ "$enabled" == "true" ]] || SUPPORT_CONNECTION="null"
 
         emit_state supportSettings "$(jq -nc --arg mode "$mode" --argjson enabled "$enabled" \
-            --argjson connection "$connection" --arg error "$error" --arg version "$MEMBRANE_VERSION" \
+            --argjson connection "$SUPPORT_CONNECTION" --arg error "$error" --arg version "$MEMBRANE_VERSION" \
             '{mode:$mode, enabled:$enabled, connection:$connection, error:(if $error == "" then null else $error end), version:$version}')"
         error=""
 
@@ -76,11 +86,11 @@ do_support() {
                 if [[ $exit_code -ne 0 ]]; then
                     log "Remote support toggle ($action) failed (exit $exit_code): $output"
                     error="Couldn't change Remote Support right now."
-                    connection="null"
+                    SUPPORT_CONNECTION="null"
                 elif [[ "$action" == "on" ]]; then
-                    connection="$output"
+                    SUPPORT_CONNECTION="$output"
                 else
-                    connection="null"
+                    SUPPORT_CONNECTION="null"
                 fi
                 ;;
             settingsTab)
