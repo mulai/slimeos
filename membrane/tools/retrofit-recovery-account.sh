@@ -28,6 +28,10 @@ RECOVERY_USER="slime-recovery"
 PIN_FILE="$CONFIG_DIR/recovery-pin"
 
 [[ -f "$PIN_FILE" ]] || { echo "No $PIN_FILE on this device -- not a Slime OS Membrane install?" >&2; exit 1; }
+# Emptied by coordinator.sh's clear_recovery_pin_file() once the PIN has been
+# shown -- but only after this account exists, so an empty file here means
+# the retrofit already happened.
+[[ -s "$PIN_FILE" ]] || { echo "$PIN_FILE is empty -- this device's recovery account is already set up (the plaintext PIN is cleared after it's shown)." >&2; exit 1; }
 RECOVERY_PIN=$(cat "$PIN_FILE")
 
 if id "$RECOVERY_USER" &>/dev/null; then

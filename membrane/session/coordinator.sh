@@ -425,6 +425,33 @@ maybe_show_recovery_pin() {
     fi
 }
 
+# install.sh leaves the recovery PIN in plaintext at $CONFIG_DIR/recovery-pin
+# purely so maybe_show_recovery_pin() above can show it once. Nothing needed
+# it after that, yet it stayed readable by $SESSION_USER -- the account Remote
+# Support logs in as -- and that PIN is slime-recovery's sudo password, so any
+# Remote Support login could escalate to root (found 2026-09-23). Wiped once
+# the modal is acknowledged (recoveryPinAck) and on every coordinator start,
+# which also cleans up devices installed before this fix via OTA.
+# Emptied rather than deleted: the file is ours, but $CONFIG_DIR is root's.
+# Skipped while slime-recovery doesn't exist yet: a pre-0.3.3 device still
+# needs the file for membrane/tools/retrofit-recovery-account.sh, and wiping
+# it there would lose the PIN for good.
+clear_recovery_pin_file() {
+    local pin_file="$CONFIG_DIR/recovery-pin"
+    [[ -s "$pin_file" ]] || return 0
+    [[ "$(cat "$CONFIG_DIR/recovery-pin-shown" 2>/dev/null)" == "shown" ]] || return 0
+    if ! id slime-recovery &>/dev/null; then
+        log "Keeping recovery-pin: slime-recovery account not set up yet (run retrofit-recovery-account.sh)"
+        return 0
+    fi
+    shred -z -n 1 "$pin_file" 2>/dev/null || :
+    if : > "$pin_file"; then
+        log "Cleared plaintext recovery-pin (already shown)"
+    else
+        log "Failed to clear recovery-pin"
+    fi
+}
+
 # Cache of this account's Slime ID-bookmarked brains (see brains-list.ts),
 # refreshed explicitly at a few entry points (refresh_remote_brains, below)
 # rather than on every show_picker_or_empty call -- that function runs on
@@ -730,6 +757,7 @@ show_picker_or_empty() {
 }
 
 log "Coordinator starting, waiting for first client..."
+clear_recovery_pin_file
 
 while true; do
     line=$(read_event) || { log "stdin closed — exiting"; exit 0; }
@@ -844,6 +872,7 @@ while true; do
             # crashConsent above -- a write failure just means the modal
             # reappears next boot instead of corrupting session state.
             echo "shown" > "$CONFIG_DIR/recovery-pin-shown" || log "Failed to write recovery-pin-shown"
+            clear_recovery_pin_file
             ;;
         connect)
             id=$(jq -r '.id // empty' <<<"$line")
