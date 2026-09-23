@@ -129,7 +129,12 @@ fi
 # return traffic to the new client exits via the container's default route
 # and vanishes: rx grows, tx stays flat, and every ping/RDP attempt times out.
 if ! ip route add "${CLIENT_IP}" dev wg0 2>/dev/null; then
-    ip route show | grep -qF "${CLIENT_IP%/32} " || die "failed to add route for ${CLIENT_IP} -- peer is live but unreachable. Do not hand out this pairing code."
+    # The route already exists when an IP is reused after a peer was removed.
+    # Capture the table first: `ip route show | grep -q` under pipefail kills
+    # `ip` with SIGPIPE (exit 141) once grep exits early on a long table, which
+    # falsely reported every reused IP as unreachable (found 2026-09-23).
+    routes=$(ip route show)
+    grep -qF "${CLIENT_IP%/32} " <<<"$routes" || die "failed to add route for ${CLIENT_IP} -- peer is live but unreachable. Do not hand out this pairing code."
 fi
 
 echo ""
