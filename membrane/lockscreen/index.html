@@ -903,15 +903,24 @@
      this doesn't double-fire in a normal browser (demo mode); needs
      real-hardware confirmation that it actually fixes the reported bug.
   */
+  // <summary> is included too: without it the error screens' "Technical
+  // details" disclosure ignored mouse clicks entirely on real hardware (only
+  // click-to-focus + Space opened it). It's toggled directly rather than via
+  // the synthetic click, so it doesn't depend on the engine honouring an
+  // untrusted click as a <details> activation.
   var pendingClickEl = null;
   document.addEventListener('mousedown', function(e){
-    var el = e.target.closest('button, [tabindex]');
+    var el = e.target.closest('button, [tabindex], summary');
     if (!el) return;
     pendingClickEl = el;
     setTimeout(function(){
       if (pendingClickEl === el){
         pendingClickEl = null;
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        if (el.tagName === 'SUMMARY' && el.parentElement && el.parentElement.tagName === 'DETAILS'){
+          el.parentElement.open = !el.parentElement.open;
+        } else {
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
       }
     }, 200);
   }, true);
