@@ -428,8 +428,10 @@ maybe_show_recovery_pin() {
 # install.sh leaves the recovery PIN in plaintext at $CONFIG_DIR/recovery-pin
 # purely so maybe_show_recovery_pin() above can show it once. Nothing needed
 # it after that, yet it stayed readable by $SESSION_USER -- the account Remote
-# Support logs in as -- and that PIN is slime-recovery's sudo password, so any
-# Remote Support login could escalate to root (found 2026-09-23). Wiped once
+# Support logs in as -- and that PIN is slime-recovery's sudo password, a
+# standing admin credential sitting in a file (found 2026-09-23; note a Remote
+# Support login has sudo anyway, by design -- see install.sh's session-user
+# groups -- but only while Remote Support is on). Wiped once
 # the modal is acknowledged (recoveryPinAck) and on every coordinator start,
 # which also cleans up devices installed before this fix via OTA.
 # Emptied rather than deleted: the file is ours, but $CONFIG_DIR is root's.

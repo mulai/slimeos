@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.22"
+SLIMEOS_VERSION="0.3.23"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -299,6 +299,12 @@ sleep 15
 # before install.sh ever runs, so the `useradd` branch below is frequently
 # skipped -- `usermod -aG` runs unconditionally so required groups are always
 # guaranteed regardless of which path created the user.
+# `sudo` is deliberate (decided 2026-09-23): Remote Support logs in as this
+# user, and a support session is meant to have full control of the device --
+# the Remote Support tab says so. Password sudo only works while Remote
+# Support is on: remote-support-toggle.sh sets a fresh password on `on` and
+# locks the account (`usermod -L`) on `off` and at every boot. The kiosk's own
+# privileged calls don't rely on it (per-user NOPASSWD sudoers + polkit rules).
 if ! id "$SESSION_USER" &>/dev/null; then
     log "Creating session user '$SESSION_USER'..."
     useradd -m -s /bin/bash -G audio,video,render,netdev,sudo,input "$SESSION_USER"
