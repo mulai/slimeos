@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.28"
+SLIMEOS_VERSION="0.3.29"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -132,7 +132,7 @@ systemctl disable --now ssh.service 2>/dev/null || true
 # compiles fine from the very same deb13u3 source (verified 2026-07-16),
 # it just never made it into the archive build. On top of that, the
 # archive source itself has camera bugs, so this is a patched rebuild
-# (version-bumped +slimeos8 so apt prefers it), checksum-pinned below.
+# (version-bumped +slimeos9 so apt prefers it), checksum-pinned below.
 # It carries six changes over deb13u3 (details in
 # membrane/freerdp/camera-patches/README.md,
 # membrane/freerdp/keyboard-patches/README.md and
@@ -166,7 +166,7 @@ systemctl disable --now ssh.service 2>/dev/null || true
 # together with manifest.json whenever they're rebuilt.
 #
 # ⚠ A future Debian point release (deb13u4+) sorts HIGHER than
-# +slimeos8: an apt upgrade would replace these and silently drop the
+# +slimeos9: an apt upgrade would replace these and silently drop the
 # camera, keyboard, UDP and VAAPI patches again. When that happens, rebuild from
 # the new source and bump (procedure in membrane/freerdp/udp-patches/README.md).
 if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
@@ -179,13 +179,13 @@ if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
         echo "$sum  $FREERDP_DIR/$deb" | sha256sum -c - >/dev/null
         FREERDP_DEBS+=("$FREERDP_DIR/$deb")
     done <<'DEBSUMS'
-3a539d4f71998503e316fa0ee09398ce4bca998ffd40f3d0cc54ff716406f7c1  freerdp3-x11.deb
-994acd65ee873d7979ba80fb7db456fa535c4380a890f782f2f216bcc961034b  libfreerdp-client3-3.deb
-f0f29d14fadce258cca2ef4d99544dc261360cf6542dd1fa9c9b06834d632886  libfreerdp3-3.deb
-32ff64452d3273ac5094436fc1c1da0ceb4552edb539d7cbfa8f6c891c2be0b5  libwinpr3-3.deb
+60b2d4dc8fda3e327dd263151999de7f7218d44e09365995224b2dc0ca5cb8d9  freerdp3-x11.deb
+ed06fe4ee426f786937223caf651b403012fca0ca1f11f7afe471bba418170ba  libfreerdp-client3-3.deb
+cc2c189642257b39087907763ec2d32b1589bd7e4643190da137d4cecb07b1a9  libfreerdp3-3.deb
+dc5e1d1129afdbd9af4a0a731546060fa1eb15656011f9f510e27373c79a1e06  libwinpr3-3.deb
 DEBSUMS
     dpkg -i "${FREERDP_DEBS[@]}"
-    ok "FreeRDP rebuild installed (+slimeos8)"
+    ok "FreeRDP rebuild installed (+slimeos9)"
 else
     log "Non-amd64 architecture — skipping FreeRDP rebuild (no prebuilt debs); webcam redirection and UDP unavailable"
 fi

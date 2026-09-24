@@ -297,8 +297,16 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
  	return multitransport_client_send_response(multi, reqId, E_ABORT) ? STATE_RUN_SUCCESS
  	                                                                  : STATE_RUN_FAILED;
  }
-@@ -233,5 +475,6 @@ rdpMultitransport* multitransport_new(rd
+@@ -231,7 +473,14 @@ rdpMultitransport* multitransport_new(rd
+ 	return multi;
+ }
  
++void multitransport_client_stop_udp(rdpMultitransport* multi)
++{
++	WINPR_UNUSED(multi);
++	slimeos_rdpudp2_stop();
++}
++
  void multitransport_free(rdpMultitransport* multitransport)
  {
 +	slimeos_rdpudp2_stop(); /* research: stop the UDP receive thread (it frees itself) */
@@ -308,7 +316,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 ===================================================================
 --- /dev/null
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
-@@ -0,0 +1,824 @@
+@@ -0,0 +1,828 @@
 +/* SLIMEOS-UDP-RESEARCH checkpoint 5a: native RDP-UDP2 (MS-RDPEUDP v3) client transport.
 + *
 + * Research code, #included by multitransport.c and only used with SLIMEOS_UDP_NATIVE=1.
@@ -397,6 +405,8 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	UINT64 lastProbeUs;
 +	UINT32 probes;       /* keepalive dummies sent while the link was quiet (total) */
 +	UINT32 probesUnans;  /* ... since the last datagram arrived */
++	pthread_t thread;    /* receive thread, joined by slimeos_rdpudp2_stop() */
++	BOOL threadRunning;
 +	int tcpFd;       /* the session's TCP socket to the same host:port, -1 if not found */
 +	ino_t tcpIno;    /* its inode, so a reused fd number is never shut down by mistake */
 +} Ru2;
@@ -814,14 +824,25 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	return ru2_now_us() < atomic_load(&slimeos_udp_paused_until_us);
 +}
 +
-+/* Ask the published transport (if any) to stop; its thread frees it. */
++static void ru2_free(Ru2* u);
++
++/* Stop the published transport (if any) and WAIT for its receive thread before freeing it.
++ * Called at the start of every client disconnect (rdp_client_disconnect), so the thread can
++ * never deliver tunnel data into channels that are being torn down: on 2026-09-24 the NUC
++ * segfaulted in freerdp_channels_data from this thread on every disconnect (exit 139). The
++ * thread polls with a 200 ms timeout, so the wait is short. */
 +static void slimeos_rdpudp2_stop(void)
 +{
 +	pthread_mutex_lock(&slimeos_ru2_lock);
-+	if (slimeos_ru2)
-+		atomic_store(&slimeos_ru2->stop, true);
++	Ru2* u = slimeos_ru2;
 +	slimeos_ru2 = NULL;
 +	pthread_mutex_unlock(&slimeos_ru2_lock);
++	if (!u)
++		return;
++	atomic_store(&u->stop, true);
++	if (u->threadRunning && !pthread_equal(u->thread, pthread_self()))
++		(void)pthread_join(u->thread, NULL);
++	ru2_free(u);
 +}
 +
 +static void ru2_free(Ru2* u)
@@ -945,12 +966,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	          "SLIMEOS-UDP-NATIVE: receive thread done: pkts=%" PRIu32 " dummy=%" PRIu32
 +	          " data=%" PRIu32 " tunnelPdus=%" PRIu32 " delivered=%" PRIu32 " maxGapMs=%" PRIu64,
 +	          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4], u->maxGapUs / 1000);
-+	pthread_mutex_lock(&slimeos_ru2_lock);
-+	if (slimeos_ru2 == u)
-+		slimeos_ru2 = NULL;
-+	pthread_mutex_unlock(&slimeos_ru2_lock);
-+	ru2_free(u);
-+	return NULL;
++	return NULL; /* slimeos_rdpudp2_stop() joins this thread and frees u */
 +}
 +
 +static UINT16 ru2_find_drdynvc(freerdp* instance)
@@ -1117,19 +1133,42 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	u->tcpFd = ru2_find_tcp_fd(u->fd, &u->tcpIno);
 +	if (u->tcpFd < 0)
 +		WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: TCP socket not found; mid-session fallback disabled");
++	if (pthread_create(&u->thread, NULL, ru2_thread, u) != 0)
++		goto fail;
++	u->threadRunning = TRUE;
 +	pthread_mutex_lock(&slimeos_ru2_lock);
 +	slimeos_ru2 = u;
-+	pthread_t th;
-+	const BOOL started = (pthread_create(&th, NULL, ru2_thread, u) == 0);
-+	if (!started)
-+		slimeos_ru2 = NULL;
 +	pthread_mutex_unlock(&slimeos_ru2_lock);
-+	if (!started)
-+		goto fail;
-+	pthread_detach(th);
 +	return TRUE;
 +
 +fail:
 +	ru2_free(u);
 +	return FALSE;
 +}
+Index: freerdp3-3.15.0+dfsg/libfreerdp/core/connection.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/connection.c
++++ freerdp3-3.15.0+dfsg/libfreerdp/core/connection.c
+@@ -486,6 +486,9 @@ BOOL rdp_client_disconnect(rdpRdp* rdp)
+ 
+ 	context = rdp->context;
+ 
++	/* Slime OS: the UDP receive thread delivers into the channels; stop it first. */
++	multitransport_client_stop_udp(rdp->multitransport);
++
+ 	if (rdp->nego)
+ 	{
+ 		if (!nego_disconnect(rdp->nego))
+Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.h
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/multitransport.h
++++ freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.h
+@@ -52,6 +52,8 @@ FREERDP_LOCAL BOOL multitransport_client
+                                                        HRESULT hr);
+ 
+ FREERDP_LOCAL void multitransport_free(rdpMultitransport* multi);
++/* Slime OS: stop and join the RDP-UDP2 receive thread before channels are torn down. */
++FREERDP_LOCAL void multitransport_client_stop_udp(rdpMultitransport* multi);
+ 
+ WINPR_ATTR_MALLOC(multitransport_free, 1)
+ FREERDP_LOCAL rdpMultitransport* multitransport_new(rdpRdp* rdp, UINT16 protocol);

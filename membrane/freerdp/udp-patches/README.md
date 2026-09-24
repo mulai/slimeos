@@ -12,7 +12,8 @@ hardware profiles that opt in (today only 010, the NUC6CAxx, with
 FreeRDP#8276).
 
 **Status (2026-09-24):** in daily use on the AMD box over Wi-Fi. Shipped
-as `+slimeos7` (v0.3.27), then `+slimeos8` (v0.3.28, adds opt-in VAAPI),
+as `+slimeos7` (v0.3.27), `+slimeos8` (v0.3.28, adds opt-in VAAPI), then
+`+slimeos9` (v0.3.29, fixes a crash on disconnect),
 together with the camera and keyboard patches. Users
 switch it on per device in Settings > Display & Sound > Brain connection
 > "Faster (beta)". It is off by default.
@@ -36,6 +37,10 @@ switch it on per device in Settings > Display & Sound > Brain connection
   resumes the same Windows session. UDP stays declined (E_ABORT) for
   5 minutes, so that reconnect is TCP-only. On the build VM, the session
   was back at 32 fps about 8 s after UDP was blocked.
+- **Clean shutdown.** `rdp_client_disconnect()` first stops and joins the
+  receive thread (`multitransport_client_stop_udp()`), so it can never
+  deliver into channels that are being torn down. Before `+slimeos9` it
+  could, and the NUC segfaulted (exit 139) on every disconnect.
 - If the handshake fails, the client answers E_ABORT and the session runs
   on plain TCP, exactly like stock FreeRDP.
 
@@ -81,7 +86,7 @@ lets them into `connect.log` at INFO.
    `-DWITH_VAAPI=ON` (it ships OFF). Add `libva-dev` to Build-Depends.
    The runtime dependencies don't change, which matters because the OTA
    installs with plain `dpkg -i`.
-3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos9`...).
+3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos10`...).
    Write it by hand; `dch` hangs when run non-interactively.
 4. `DEB_BUILD_OPTIONS="parallel=8 nocheck noddebs" dpkg-buildpackage -b -us -uc`
    takes about 1–2 minutes on 8 cores.
