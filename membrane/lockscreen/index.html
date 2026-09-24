@@ -685,19 +685,24 @@
   .settings-close{background:none;border:none;color:var(--text-muted);font-size:20px;line-height:1;padding:6px 10px;border-radius:8px;}
   .settings-close:hover{color:#fff;background:rgba(255,255,255,0.08);}
 
-  /* Left-hand nav (replaced the old cramped horizontal .settings-tabs row --
-     with ~9 destinations across Network/Devices/Support/System groups a
-     single wrapping row got unreadable). Groups are always expanded: at
-     this count every destination stays one click away and there's no
-     accordion state to build. */
+  /* Two levels (github.com/mulai/slimeos#22): the left-hand nav lists
+     categories only, and the tabs across the top switch between the pages
+     of the active category. A flat list of all 13 pages under group
+     headings was taller than a 1024x600 screen and had to be scrolled. */
   .settings-shell{display:flex;flex:1;min-height:0;}
-  .settings-sidebar{width:198px;flex-shrink:0;border-right:1px solid rgba(255,255,255,0.08);padding:16px 12px 20px;overflow-y:auto;}
-  .settings-nav-group + .settings-nav-group{margin-top:18px;}
-  .settings-nav-label{font-family:var(--font-mono);font-size:9.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--text-faint);padding:0 10px;margin-bottom:6px;}
+  .settings-sidebar{width:184px;flex-shrink:0;border-right:1px solid rgba(255,255,255,0.08);padding:16px 12px 20px;overflow-y:auto;}
+  /* The top tabs live inside .settings-body as a sticky header, not in a
+     flex column around it: WebKit (cog) didn't size a scroll area nested
+     in a stretched flex column, so a tall page (Camera) was cut off by the
+     panel instead of scrolling. */
+  .settings-subtabs{position:sticky;top:-6px;z-index:2;display:flex;gap:2px;margin:-6px -8px 0;padding:10px 16px 0;background:var(--surface);border-bottom:1px solid rgba(255,255,255,0.08);overflow-x:auto;}
+  .settings-subtab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13px;padding:8px 12px 10px;white-space:nowrap;}
+  .settings-subtab:hover{color:#C9D3DF;}
+  .settings-subtab.active{color:var(--mint);border-bottom-color:var(--mint);}
   .settings-tab{background:none;border:none;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13.5px;}
   /* laid out as a vertical list item, not a tab -- colour/active states
      reused from the row version, just re-oriented. */
-  .settings-sidebar .settings-tab{display:block;width:100%;text-align:left;font-size:13px;padding:8px 10px;border-radius:8px;margin-bottom:2px;}
+  .settings-sidebar .settings-tab{display:block;width:100%;text-align:left;font-size:13.5px;padding:10px 12px;border-radius:8px;margin-bottom:4px;}
   .settings-sidebar .settings-tab:hover{color:#C9D3DF;background:rgba(255,255,255,0.04);}
   .settings-sidebar .settings-tab.active{color:var(--mint);background:rgba(0,194,168,0.1);}
   .settings-body{flex:1;overflow-y:auto;padding:6px 8px 8px;}
@@ -1097,15 +1102,31 @@
   var SETTINGS_TOP_STATES = { wifiList:1, pairEntry:1, speakerSettings:1, microphoneSettings:1, cameraSettings:1, supportSettings:1, securitySettings:1, crashReportSettings:1, displaySettings:1, timezoneSettings:1, changelogSettings:1, feedbackSettings:1 };
   // Left-hand nav, grouped. Was a flat horizontal row of tabs; with the
   // Devices group added it needed a sidebar with parent/child grouping.
-  // Groups are always expanded -- see the .settings-sidebar CSS comment.
+  // Categories in the sidebar, their pages as tabs across the top -- see
+  // the .settings-sidebar CSS comment. Picking a category opens its first
+  // page. "Display" stays in that category's name: changelogs and the
+  // website point people to "Settings > Display & Sound".
   var SETTINGS_NAV = [
     { group: 'Network', items: [ { id: 'internet', label: 'Wi-Fi & Internet' }, { id: 'pair', label: 'Pairing' } ] },
-    { group: 'Devices', items: [ { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
-    { group: 'Security', items: [ { id: 'security', label: 'Lock Screen' } ] },
-    { group: 'Support', items: [ { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
-    { group: 'System', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' } ] },
-    { group: 'Help', items: [ { id: 'feedback', label: 'Send Feedback' } ] }
+    { group: 'Display & Devices', items: [ { id: 'display', label: 'Display & Sound' }, { id: 'speaker', label: 'Speaker' }, { id: 'microphone', label: 'Microphone' }, { id: 'camera', label: 'Camera' } ] },
+    { group: 'Security & Privacy', items: [ { id: 'security', label: 'Lock Screen' }, { id: 'support', label: 'Remote Support' }, { id: 'privacy', label: 'Privacy' } ] },
+    { group: 'System', items: [ { id: 'timezone', label: 'Timezone' }, { id: 'changelog', label: 'Changelog' }, { id: 'feedback', label: 'Send Feedback' } ] }
   ];
+
+  function settingsGroupFor(tab){
+    for (var i = 0; i < SETTINGS_NAV.length; i++){
+      for (var j = 0; j < SETTINGS_NAV[i].items.length; j++){
+        if (SETTINGS_NAV[i].items[j].id === tab) return SETTINGS_NAV[i];
+      }
+    }
+    return SETTINGS_NAV[0];
+  }
+
+  function renderSettingsSubtabs(activeTab){
+    return settingsGroupFor(activeTab).items.map(function(t){
+      return '<button type="button" class="settings-subtab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '">' + escapeHtml(t.label) + '</button>';
+    }).join('');
+  }
 
   function settingsTabForState(state){
     if (state === 'pairEntry' || state === 'pairConnecting' || state === 'pairError') return 'pair';
@@ -1133,13 +1154,9 @@
     // design (see their own render*() comments) -- no close affordance
     // there either, same reasoning.
     var showClose = state !== 'wifiConnecting' && state !== 'pairConnecting';
+    var activeGroup = settingsGroupFor(activeTab).group;
     var navHtml = SETTINGS_NAV.map(function(g){
-      return '<div class="settings-nav-group">' +
-        '<div class="settings-nav-label">' + g.group + '</div>' +
-        g.items.map(function(t){
-          return '<button type="button" class="settings-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '">' + t.label + '</button>';
-        }).join('') +
-      '</div>';
+      return '<button type="button" class="settings-tab' + (g.group === activeGroup ? ' active' : '') + '" data-tab="' + g.items[0].id + '" data-group="' + escapeHtml(g.group) + '">' + escapeHtml(g.group) + '</button>';
     }).join('');
     return (
       '<div class="screen" data-screen="settings">' +
@@ -1149,7 +1166,8 @@
             (showClose ? '<button type="button" class="settings-close" id="btnSettingsClose" title="Close" aria-label="Close">&times;</button>' : '') +
           '</div>' +
           (showNav
-            ? '<div class="settings-shell"><div class="settings-sidebar">' + navHtml + '</div><div class="settings-body">' + innerHtml + '</div></div>'
+            ? '<div class="settings-shell"><div class="settings-sidebar">' + navHtml + '</div>' +
+                '<div class="settings-body"><div class="settings-subtabs">' + renderSettingsSubtabs(activeTab) + '</div>' + innerHtml + '</div></div>'
             : '<div class="settings-body">' + innerHtml + '</div>') +
         '</div>' +
       '</div>'
@@ -1164,13 +1182,21 @@
   function bindSettingsShellImpl(state){
     var close = document.getElementById('btnSettingsClose');
     if (close) on(close, 'click', function(){ emit('slime:back'); });
-    Array.prototype.forEach.call(document.querySelectorAll('.settings-tab'), function(btn){
+    bindSettingsTabButtons(document.querySelectorAll('.settings-tab, .settings-subtab'));
+  }
+
+  function bindSettingsTabButtons(buttons){
+    Array.prototype.forEach.call(buttons, function(btn){
       on(btn, 'click', function(){
         var tab = btn.getAttribute('data-tab');
         // Read the live state, not the one closed over at bind time: a tab
-        // switch now keeps this sidebar DOM (and these listeners) in place
-        // and only swaps the body, so `state` here would otherwise go stale.
-        if (tab !== settingsTabForState(current.state)) emit('slime:settings-tab', { tab: tab });
+        // switch keeps the sidebar DOM (and these listeners) in place and
+        // only swaps the body and the top tabs, so `state` here would
+        // otherwise go stale. A category button's data-tab is its first
+        // page; clicking the category you're already in does nothing.
+        var live = settingsTabForState(current.state);
+        if (btn.classList.contains('settings-tab') && settingsGroupFor(tab) === settingsGroupFor(live)) return;
+        if (tab !== live) emit('slime:settings-tab', { tab: tab });
       });
     });
   }
@@ -1255,6 +1281,7 @@
   // sidebar/header DOM (and their already-bound listeners) untouched. A
   // full rebuild happens only when the panel opens or its chrome changes.
   var lastSettingsSig = null;
+  var lastSettingsTab = null;
 
   function renderImpl(){
     var state = current.state, data = current.data || {};
@@ -1324,19 +1351,29 @@
         // re-bind the fresh ones; the sidebar/header keep the listeners
         // bindSettingsShell() gave them on the last full render. On a tab
         // switch the sidebar DOM is right as-is bar the highlight, so move
-        // the .active class to the button for the state we're now showing.
-        body.innerHTML = html;
+        // the .active class to the category we're now in, and rebuild the
+        // top tabs (the category may have changed).
         if (showNav){
           var activeTab = settingsTabForState(state);
+          var activeGroup = settingsGroupFor(activeTab).group;
+          body.innerHTML = '<div class="settings-subtabs">' + renderSettingsSubtabs(activeTab) + '</div>' + html;
+          bindSettingsTabButtons(body.querySelectorAll('.settings-subtab'));
           Array.prototype.forEach.call(screenRoot.querySelectorAll('.settings-tab'), function(btn){
-            btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab);
+            btn.classList.toggle('active', btn.getAttribute('data-group') === activeGroup);
           });
+          // A new page starts at the top; a re-emit of the same page (a
+          // Display toggle, feedback sending -> sent) keeps its scroll.
+          if (activeTab !== lastSettingsTab) body.scrollTop = 0;
+          lastSettingsTab = activeTab;
+        } else {
+          body.innerHTML = html;
         }
         bindScreen(state, data);
         autofocus(state);
         return; // render() still runs renderUpdateIcon() after this
       }
       lastSettingsSig = sig;
+      lastSettingsTab = settingsTabForState(state);
       html = renderSettingsShell(state, html);
     } else {
       lastSettingsSig = null;
