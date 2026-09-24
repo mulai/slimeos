@@ -23,7 +23,7 @@
 #
 # then exit the shell and reboot without the USB. Everything below takes
 # effect on that next real boot:
-#   * openssh-server installed
+#   * openssh-server installed, if it isn't already
 #   * ssh.service enabled via a direct symlink (a rescue chroot has no live
 #     systemd to `enable --now` with — see the 2026-07-12 bring-up notes)
 #   * a dedicated 'slime-rescue' account (sudo). NOT 'slime': Remote Support
@@ -60,9 +60,15 @@ RESCUE_USER="slime-rescue"
 mountpoint -q /proc 2>/dev/null || mount -t proc proc /proc 2>/dev/null || true
 mountpoint -q /sys  2>/dev/null || mount -t sysfs sys /sys 2>/dev/null || true
 
-echo "Installing openssh-server..."
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
+# install.sh has installed openssh-server since Remote Support shipped, so
+# this is only for very old installs. Skip apt when it's there: devices
+# installed with weston have libfreerdp-server3-3 pinned to the stock
+# FreeRDP, which our +slimeos builds break, so any `apt-get install` fails.
+if ! dpkg -s openssh-server >/dev/null 2>&1; then
+    echo "Installing openssh-server..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
+fi
 
 # Belt and braces: the package postinst normally enables ssh.service itself
 # (deb-systemd-helper works offline), but make sure regardless.
