@@ -730,6 +730,31 @@ do_connect() {
                 fi
             fi
 
+            # Hardware H.264 decode (VAAPI), opt-in per hardware profile
+            # (SLIMEOS_VAAPI_DECODE="1" in hw-freerdp-flags). The +slimeos8
+            # FreeRDP build compiles it in but only uses it when
+            # SLIMEOS_VAAPI_DECODE=1 reaches xfreerdp3: upstream calls it
+            # experimental, and Intel's default iHD driver segfaults in
+            # vaGetImage on some chips (FreeRDP#8276, reproduced on the
+            # NUC6CAYH 2026-09-22). A profile that needs the older driver
+            # names it in SLIMEOS_LIBVA_DRIVER; if that driver isn't
+            # installed, stay on software decode rather than risk the crash.
+            local vaapi_env="env -u SLIMEOS_VAAPI_DECODE"
+            if [[ "${SLIMEOS_VAAPI_DECODE:-}" == "1" ]]; then
+                local va_drv="${SLIMEOS_LIBVA_DRIVER:-}" va_ok=false lib
+                for lib in /usr/lib/*/libfreerdp3.so.3; do
+                    [[ -e "$lib" ]] && grep -qa "SLIMEOS_VAAPI_DECODE" "$lib" 2>/dev/null && va_ok=true
+                done
+                if ! $va_ok; then
+                    log "VAAPI decode requested by the hardware profile, but this FreeRDP build lacks it -- software decode"
+                elif [[ -n "$va_drv" ]] && ! compgen -G "/usr/lib/*/dri/${va_drv}_drv_video.so" >/dev/null; then
+                    log "VAAPI decode needs the '${va_drv}' driver, which isn't installed -- software decode"
+                else
+                    vaapi_env="env SLIMEOS_VAAPI_DECODE=1${va_drv:+ LIBVA_DRIVER_NAME=$va_drv}"
+                    log "VAAPI hardware decode on${va_drv:+ (driver $va_drv)}"
+                fi
+            fi
+
             # Peripheral redirection (speaker/mic/USB storage):
             #   /sound, /microphone — explicit `sys:alsa` because the
             #     Membrane has no PulseAudio/PipeWire daemon installed;
@@ -756,7 +781,7 @@ do_connect() {
             # before trying this again — see membrane/freerdp/
             # action-noop.sh's own header for the postmortem.
             set +e
-            ${sound_alsa_env} ${udp_env} xfreerdp3 \
+            ${sound_alsa_env} ${udp_env} ${vaapi_env} xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
                 /u:"${slime_username}" \
                 /p:"${rdp_pass}" \

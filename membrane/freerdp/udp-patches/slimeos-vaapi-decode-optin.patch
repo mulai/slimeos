@@ -1,0 +1,18 @@
+Index: freerdp3-3.15.0+dfsg/libfreerdp/codec/h264_ffmpeg.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/libfreerdp/codec/h264_ffmpeg.c
++++ freerdp3-3.15.0+dfsg/libfreerdp/codec/h264_ffmpeg.c
+@@ -702,6 +702,13 @@ static BOOL libavcodec_init(H264_CONTEXT
+ 
+ #ifdef WITH_VAAPI
+ 
++		/* Slime OS: VAAPI decode is opt-in per device (SLIMEOS_VAAPI_DECODE=1, set by
++		 * connect.sh from the hardware profile). Upstream calls it experimental: on some
++		 * Intel iGPUs the iHD driver segfaults in vaGetImage (FreeRDP#8276), so a build
++		 * with VAAPI compiled in must still decode in software everywhere else. */
++		if (!getenv("SLIMEOS_VAAPI_DECODE") || (strcmp(getenv("SLIMEOS_VAAPI_DECODE"), "1") != 0))
++			goto fail_hwdevice_create;
++
+ 		if (!sys->hwctx)
+ 		{
+ 			int ret =

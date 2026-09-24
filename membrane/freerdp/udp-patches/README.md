@@ -1,12 +1,19 @@
-# FreeRDP UDP transport (RDP-UDP2)
+# FreeRDP UDP transport (RDP-UDP2) and opt-in VAAPI decode
 
 `slimeos-udp-transport.patch` adds RDP's UDP transport to FreeRDP 3.15
 (deb13u3). Upstream FreeRDP has none: it only parses the server's
 Initiate Multitransport Request and always declines it. Maintainers
 confirmed this in FreeRDP#10669 and #4978.
 
+`slimeos-vaapi-decode-optin.patch` makes the build's VAAPI hardware H.264
+decode run only when `SLIMEOS_VAAPI_DECODE=1`. connect.sh sets it for
+hardware profiles that opt in (today only 010, the NUC6CAxx, with
+`LIBVA_DRIVER_NAME=i965`, because Intel's iHD driver segfaults there:
+FreeRDP#8276).
+
 **Status (2026-09-24):** in daily use on the AMD box over Wi-Fi. Shipped
-as the `+slimeos7` build (with the camera and keyboard patches). Users
+as `+slimeos7` (v0.3.27), then `+slimeos8` (v0.3.28, adds opt-in VAAPI),
+together with the camera and keyboard patches. Users
 switch it on per device in Settings > Display & Sound > Brain connection
 > "Faster (beta)". It is off by default.
 
@@ -67,10 +74,14 @@ lets them into `connect.log` at INFO.
 1. Get the **exact** deb13u3 source from the `.dsc`
    (`dget`/`dpkg-source -x freerdp3_3.15.0+dfsg-2.1+deb13u3.dsc`). On the
    build VM, `apt-get source freerdp3` picks up the 3.31 backport instead.
-2. Add the camera and keyboard patches (see those READMEs) and this patch
-   to `debian/patches/series`, in that order. `debian/rules` also needs
-   `-DRDPECAM_INPUT_FORMAT_H264=OFF` (camera README).
-3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos8`...).
+2. Add the camera and keyboard patches (see those READMEs), then
+   `slimeos-udp-transport.patch` and `slimeos-vaapi-decode-optin.patch`, to
+   `debian/patches/series`, in that order. `debian/rules` also needs
+   `-DRDPECAM_INPUT_FORMAT_H264=OFF` (camera README) and
+   `-DWITH_VAAPI=ON` (it ships OFF). Add `libva-dev` to Build-Depends.
+   The runtime dependencies don't change, which matters because the OTA
+   installs with plain `dpkg -i`.
+3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos9`...).
    Write it by hand; `dch` hangs when run non-interactively.
 4. `DEB_BUILD_OPTIONS="parallel=8 nocheck noddebs" dpkg-buildpackage -b -us -uc`
    takes about 1–2 minutes on 8 cores.

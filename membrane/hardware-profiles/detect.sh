@@ -115,16 +115,17 @@ EOF
 log "Profile applied. Marker written to $APPLIED_MARKER"
 
 # ── FreeRDP package sync ──────────────────────────────────────────────────────
-# The patched FreeRDP build (camera + keyboard fixes + the UDP transport,
-# +slimeos7) ships as ordinary OTA bundle files under hardware-profiles/freerdp/,
+# The patched FreeRDP build (camera + keyboard fixes, the UDP transport and
+# opt-in VAAPI decode, +slimeos8) ships as ordinary OTA bundle files under hardware-profiles/freerdp/,
 # already sha256-verified by update.sh. They live under hardware-profiles/ on
 # purpose: apply-update-helper.sh re-runs this script as root whenever a file
 # there lands, and that helper can't update itself, so this is the only root
 # hook an already-installed device has for installing packages. Idempotent:
-# does nothing when the bundled version is already installed. Leaves test
-# builds (version contains "research") and anything newer alone; a newer
-# Debian point release would drop the camera/keyboard/UDP patches, see
-# install.sh section 1b.
+# does nothing when the bundled version is already installed. Never
+# downgrades (a newer Debian point release would drop our patches, see
+# install.sh section 1b). A lab device running a hand-installed test build
+# keeps it only while /etc/slimeos/freerdp-pinned exists (explicit, so a
+# forgotten test build still converges to the release).
 FREERDP_DEB_DIR="$PROFILE_DIR/freerdp"
 FREERDP_DEBS=(freerdp3-x11.deb libfreerdp-client3-3.deb libfreerdp3-3.deb libwinpr3-3.deb)
 
@@ -140,12 +141,18 @@ sync_freerdp() {
         log "FreeRDP sync: $have already installed"
         return 0
     fi
-    if [[ "$have" == *research* ]]; then
-        log "FreeRDP sync: test build $have installed, leaving it (bundle has $want)"
+    if [[ -e /etc/slimeos/freerdp-pinned ]]; then
+        log "FreeRDP sync: /etc/slimeos/freerdp-pinned exists, keeping $have (bundle has $want)"
         return 0
     fi
-    if [[ -n "$have" ]] && dpkg --compare-versions "$have" gt "$want"; then
-        log "FreeRDP sync: newer $have installed, not downgrading to $want"
+    # Compare Debian's own version only: our suffixes (+slimeosN, +udpN,
+    # +udpresearchN) don't order meaningfully against each other ("u" sorts
+    # after "s"), but a newer Debian base (e.g. deb13u4) must never be
+    # replaced by our older-base rebuild.
+    local have_base="${have%%+slimeos*}" want_base="${want%%+slimeos*}"
+    have_base="${have_base%%+udp*}"
+    if [[ -n "$have" ]] && dpkg --compare-versions "$have_base" gt "$want_base"; then
+        log "FreeRDP sync: newer Debian build $have installed, not replacing it with $want"
         return 0
     fi
     log "FreeRDP sync: ${have:-none} -> $want"

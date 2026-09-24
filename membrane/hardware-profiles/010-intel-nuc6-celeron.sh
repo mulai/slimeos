@@ -26,10 +26,7 @@
 # /rfx -- RemoteFX fallback alongside /gfx:AVC420, same belt-and-suspenders
 # pairing profiles 001/006/008 already use for a lossy WiFi link.
 # +video -- MS-RDPEVOR video-optimized channel, see coordinator.sh's
-# SLIMEOS_FREERDP_EXTRA_FLAGS comment. Intel HD 500 has real VAAPI H.264
-# decode capability in principle, but mainline FreeRDP's Linux client
-# doesn't wire up hardware-accelerated decode -- the win here is still the
-# channel split, not hardware decode.
+# SLIMEOS_FREERDP_EXTRA_FLAGS comment.
 # +auto-reconnect -- see coordinator.sh's SLIMEOS_FREERDP_EXTRA_FLAGS
 # comment. This profile's own flags fully replace that default (sourced
 # from hw-freerdp-flags below), so the flag has to be repeated here too.
@@ -49,9 +46,26 @@ SLIMEOS_COMPOSITOR_RENDERER=""
 
 SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC420 /bpp:32 /rfx +video +auto-reconnect"
 
+# ── Hardware H.264 decode (VAAPI) ─────────────────────────────────────────────
+# Even with AVC420, software decode still left video choppy on this board.
+# The +slimeos8 FreeRDP build can decode on the HD 500 via VAAPI (opt-in,
+# see connect.sh). Intel's default iHD driver segfaults in vaGetImage here
+# (FreeRDP#8276, reproduced 2026-09-22 with a symbolized backtrace); the
+# older i965 driver works, and Tommy confirmed live that video was "much
+# better". connect.sh falls back to software decode if i965 is missing.
+SLIMEOS_VAAPI_DECODE="1"
+SLIMEOS_LIBVA_DRIVER="i965"
+if ! dpkg -s i965-va-driver >/dev/null 2>&1; then
+    log "Installing i965-va-driver for VAAPI decode..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q i965-va-driver >/dev/null 2>&1 \
+        || log "i965-va-driver install failed; video stays on software decode until it's installed"
+fi
+
 cat > /etc/slimeos/hw-freerdp-flags <<EOF
 SLIMEOS_FREERDP_EXTRA_FLAGS="$SLIMEOS_FREERDP_EXTRA_FLAGS"
 SLIMEOS_COMPOSITOR_RENDERER="$SLIMEOS_COMPOSITOR_RENDERER"
+SLIMEOS_VAAPI_DECODE="$SLIMEOS_VAAPI_DECODE"
+SLIMEOS_LIBVA_DRIVER="$SLIMEOS_LIBVA_DRIVER"
 EOF
 
 # ── Power: disable sleep (kiosk device stays awake) ──────────────────────────

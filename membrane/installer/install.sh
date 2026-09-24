@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.27"
+SLIMEOS_VERSION="0.3.28"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -126,14 +126,14 @@ ok "Dependencies installed"
 # toggle never depends on apt/network being reachable in the moment.
 systemctl disable --now ssh.service 2>/dev/null || true
 
-# ── 1b. FreeRDP rebuild (camera + keyboard fixes + UDP transport) ─────────────
+# ── 1b. FreeRDP rebuild (camera, keyboard, UDP transport, VAAPI decode) ───────
 # Debian trixie's freerdp3 archive binaries ship WITHOUT the rdpecam
 # camera channel even though debian/rules enables it — the plugin
 # compiles fine from the very same deb13u3 source (verified 2026-07-16),
 # it just never made it into the archive build. On top of that, the
 # archive source itself has camera bugs, so this is a patched rebuild
-# (version-bumped +slimeos7 so apt prefers it), checksum-pinned below.
-# It carries five changes over deb13u3 (details in
+# (version-bumped +slimeos8 so apt prefers it), checksum-pinned below.
+# It carries six changes over deb13u3 (details in
 # membrane/freerdp/camera-patches/README.md,
 # membrane/freerdp/keyboard-patches/README.md and
 # membrane/freerdp/udp-patches/README.md):
@@ -152,7 +152,10 @@ systemctl disable --now ssh.service 2>/dev/null || true
 #      for why,
 #   5. the RDP-UDP2 transport (FreeRDP has none upstream), only used when
 #      connect.sh sets SLIMEOS_UDP_NATIVE=1 from the Display & Sound
-#      "Brain connection" setting.
+#      "Brain connection" setting,
+#   6. built WITH_VAAPI=ON, but hardware H.264 decode only runs when
+#      connect.sh sets SLIMEOS_VAAPI_DECODE=1 for a hardware profile that
+#      opted in (the iHD driver crashes on some Intel chips, FreeRDP#8276).
 # connect.sh's /dvc:rdpecam webcam redirection is inert without this.
 # libwinpr3-3 is included because the full rebuild emits an
 # exact-version dependency on it.
@@ -163,8 +166,8 @@ systemctl disable --now ssh.service 2>/dev/null || true
 # together with manifest.json whenever they're rebuilt.
 #
 # ⚠ A future Debian point release (deb13u4+) sorts HIGHER than
-# +slimeos7: an apt upgrade would replace these and silently drop the
-# camera, keyboard and UDP patches again. When that happens, rebuild from
+# +slimeos8: an apt upgrade would replace these and silently drop the
+# camera, keyboard, UDP and VAAPI patches again. When that happens, rebuild from
 # the new source and bump (procedure in membrane/freerdp/udp-patches/README.md).
 if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
     log "Installing FreeRDP rebuild (camera, keyboard, UDP transport)..."
@@ -176,13 +179,13 @@ if [[ "$(dpkg --print-architecture)" == "amd64" ]]; then
         echo "$sum  $FREERDP_DIR/$deb" | sha256sum -c - >/dev/null
         FREERDP_DEBS+=("$FREERDP_DIR/$deb")
     done <<'DEBSUMS'
-d0ac8b3e6a9f69595d188515651142a96cca345915b58253e131453c0b3fc14c  freerdp3-x11.deb
-76175e21e734986a1338ca086b9e28e68bf0c9503512e9c6eef35775cbd89541  libfreerdp-client3-3.deb
-4f0f858a9572bd4560cee1d0bdfd8c118f65cd4c2d0eaebaa5bbfc663e50d257  libfreerdp3-3.deb
-70547fa80927d57c7bf73a39e36bf4ae26de1d606825d7231f44e0e6f3bbb849  libwinpr3-3.deb
+3a539d4f71998503e316fa0ee09398ce4bca998ffd40f3d0cc54ff716406f7c1  freerdp3-x11.deb
+994acd65ee873d7979ba80fb7db456fa535c4380a890f782f2f216bcc961034b  libfreerdp-client3-3.deb
+f0f29d14fadce258cca2ef4d99544dc261360cf6542dd1fa9c9b06834d632886  libfreerdp3-3.deb
+32ff64452d3273ac5094436fc1c1da0ceb4552edb539d7cbfa8f6c891c2be0b5  libwinpr3-3.deb
 DEBSUMS
     dpkg -i "${FREERDP_DEBS[@]}"
-    ok "FreeRDP rebuild installed (+slimeos7)"
+    ok "FreeRDP rebuild installed (+slimeos8)"
 else
     log "Non-amd64 architecture — skipping FreeRDP rebuild (no prebuilt debs); webcam redirection and UDP unavailable"
 fi

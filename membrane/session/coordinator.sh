@@ -278,6 +278,11 @@ chmod 700 "$CRED_DIR"
 # network blip instead; the outer reconnect loop still catches it if
 # FreeRDP exhausts its own (default 20) retries.
 SLIMEOS_FREERDP_EXTRA_FLAGS="/gfx:AVC444 /bpp:32 +video +auto-reconnect"
+# Hardware H.264 decode (VAAPI) is opt-in per hardware profile, off unless
+# the profile's hw-freerdp-flags sets SLIMEOS_VAAPI_DECODE="1" (plus, where
+# the default driver crashes, SLIMEOS_LIBVA_DRIVER). See connect.sh.
+SLIMEOS_VAAPI_DECODE=""
+SLIMEOS_LIBVA_DRIVER=""
 if [[ -f "$CONFIG_DIR/hw-freerdp-flags" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_DIR/hw-freerdp-flags"
