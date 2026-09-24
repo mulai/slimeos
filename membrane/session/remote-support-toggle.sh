@@ -9,10 +9,9 @@
 # last shut down. /etc/sudoers.d/slimeos-remote-support scopes the NOPASSWD
 # grant to exactly this one script, nothing broader.
 #
-# Reuses the exact same "ssh $SESSION_USER@<device's-wg-ip>" access pattern
-# membrane/tools/rescue-enable-ssh.sh documents for manual Rescue-mode setup
-# -- same account, same WireGuard-subnet-only reachability -- so on-device
-# support docs describe one story, not two. The difference is this path is
+# Same WireGuard-subnet-only port-22 rule as the manual Rescue-mode setup in
+# membrane/tools/rescue-enable-ssh.sh, but a different account ($SESSION_USER
+# here, RESCUE_USER there). The difference is this path is
 # live-toggleable from the kiosk itself and nothing it does is durable:
 #   * `on` only STARTS ssh.service (never `enable`s it) and adds a ufw
 #     rule that `off` deletes -- and slimeos-remote-support-reset.service
@@ -24,6 +23,20 @@
 #   * `off` also locks the account (`usermod -L`), which DOES persist --
 #     the extra belt-and-braces layer in case ssh.service or the firewall
 #     rule are ever left behind by a crash mid-toggle.
+#
+# Exception: if RESCUE_MARKER exists, `off` keeps ssh.service running and
+# the ufw rule open. That marker means membrane/tools/rescue-enable-ssh.sh
+# was run from the installer USB's Rescue mode: a technician with physical
+# access set up durable SSH for its own account, RESCUE_USER, and that has
+# to survive this script's boot-time reset. `off` still locks
+# $SESSION_USER either way, so the password `on` showed on screen never
+# outlives a reboot. firewall-setup.sh checks the same marker to keep its
+# ufw rule up. Without the marker, `off` also locks RESCUE_USER, so
+# revoking is `rm` the marker and reboot.
+#
+# ACTIVE_FLAG (in /run, so gone after every reboot) is what support.sh
+# reads to show the toggle as on. ssh.service alone can't tell it: with
+# the marker, sshd runs after every boot without Remote Support being on.
 set -euo pipefail
 
 SESSION_USER="slime"
@@ -33,6 +46,9 @@ SSH_PORT="22"
 INSTALL_DIR="/opt/slimeos"
 FIREWALL_SETUP="$INSTALL_DIR/firewall-setup.sh"
 FIREWALL_UNIT="/etc/systemd/system/slimeos-firewall.service"
+RESCUE_MARKER="/etc/slimeos/rescue-ssh-enabled"
+RESCUE_USER="slime-rescue"
+ACTIVE_FLAG="/run/slimeos-remote-support-on"
 
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ $# -eq 1 && ( "$1" == "on" || "$1" == "off" ) ]] || { echo "usage: $0 on|off" >&2; exit 2; }
@@ -106,6 +122,7 @@ case "$1" in
             exit 1
         fi
 
+        touch "$ACTIVE_FLAG"
         wg_ip=$(ip -4 -o addr show wg0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
         jq -nc --arg host "${wg_ip:-unknown}" --arg port "$SSH_PORT" --arg user "$SESSION_USER" --arg pw "$password" \
             '{host:$host, port:($port|tonumber), username:$user, password:$pw}'
@@ -115,7 +132,16 @@ case "$1" in
         # account and stopping ssh below matter more.
         migrate_firewall_unit || echo "firewall unit migration failed" >&2
         if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
+
+        rm -f "$ACTIVE_FLAG"
         usermod -L "$SESSION_USER" 2>/dev/null || true
+        if [[ -f "$RESCUE_MARKER" ]]; then
+            # Rescue-mode SSH lives on RESCUE_USER over this same port --
+            # see the RESCUE_MARKER note up top.
+            echo '{}'
+            exit 0
+        fi
+        usermod -L "$RESCUE_USER" 2>/dev/null || true
         systemctl stop ssh.service 2>/dev/null || true
         # `ufw delete` exits non-zero (and logs "Could not delete
         # non-existent rule") if this is called twice in a row or at boot

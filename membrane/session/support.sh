@@ -18,7 +18,7 @@
 # file set.
 #
 # `enabled` is never trusted as a local variable across iterations -- it's
-# re-derived from ssh.service's actual live state on every loop turn, so a
+# re-derived from the live state (support_is_active) on every loop turn, so a
 # stale coordinator restart mid-session can't show a wrong toggle position.
 #
 # One phase only (no "connecting"/"error" sub-screens): the toggle is a
@@ -45,8 +45,12 @@ MEMBRANE_VERSION="unknown"
 # every boot forces Remote Support off anyway (install.sh's boot-time unit).
 SUPPORT_CONNECTION="null"
 
+# Both: ssh.service alone isn't enough, since a device set up from Rescue
+# mode runs sshd on every boot without Remote Support being on. The flag is
+# written by remote-support-toggle.sh `on` and lives in /run, so a reboot
+# clears it.
 support_is_active() {
-    systemctl is-active --quiet ssh.service
+    [[ -f /run/slimeos-remote-support-on ]] && systemctl is-active --quiet ssh.service
 }
 
 do_support() {

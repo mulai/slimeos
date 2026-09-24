@@ -236,9 +236,9 @@ it always has; only the three top-level screens (`wifiList`, `pairEntry`,
 Support tab) lets a user opt a device in to SSH access for the Slime OS
 support team — off by default, and reachable only over the WireGuard
 subnet, mirroring `membrane/tools/rescue-enable-ssh.sh`'s manual Rescue-mode
-version of the same idea (same `slime` account, same `ufw allow from
-10.10.0.0/24 to any port 22` rule) so on-device docs describe one access
-path, not two. Ticking the checkbox (`slime:support-toggle`, `{enabled}`)
+version of the same idea (same `ufw allow from 10.10.0.0/24 to any port
+22` rule; Rescue mode uses its own `slime-rescue` account so Remote
+Support's password rotation and locking still apply to `slime`). Ticking the checkbox (`slime:support-toggle`, `{enabled}`)
 calls `sudo -n remote-support-toggle.sh on|off` — a root-owned helper
 scoped by a NOPASSWD sudoers entry to exactly that one script, since
 rotating the SSH password (`chpasswd`) and editing the firewall rule are
