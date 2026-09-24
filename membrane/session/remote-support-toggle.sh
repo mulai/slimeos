@@ -24,6 +24,19 @@
 #   * `off` also locks the account (`usermod -L`), which DOES persist --
 #     the extra belt-and-braces layer in case ssh.service or the firewall
 #     rule are ever left behind by a crash mid-toggle.
+#
+# Exception: if RESCUE_MARKER exists, `off` leaves the account and
+# ssh.service alone instead of locking/stopping them. That marker means
+# membrane/tools/rescue-enable-ssh.sh was run from the installer USB's
+# Rescue mode -- a technician with physical access chose a durable password
+# for this exact account over this exact tunnel, and that access is meant to
+# survive every boot, including this script's own boot-time reset
+# (slimeos-remote-support-reset.service calls `off` unconditionally on
+# every boot same as always). firewall-setup.sh checks the same marker to
+# keep its ufw rule up instead of dropping it. To fully revoke: remove the
+# marker (as root, e.g. over that same durable SSH session), then either
+# reboot or run `off` again -- with the marker gone there's nothing left to
+# skip.
 set -euo pipefail
 
 SESSION_USER="slime"
@@ -33,6 +46,7 @@ SSH_PORT="22"
 INSTALL_DIR="/opt/slimeos"
 FIREWALL_SETUP="$INSTALL_DIR/firewall-setup.sh"
 FIREWALL_UNIT="/etc/systemd/system/slimeos-firewall.service"
+RESCUE_MARKER="/etc/slimeos/rescue-ssh-enabled"
 
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ $# -eq 1 && ( "$1" == "on" || "$1" == "off" ) ]] || { echo "usage: $0 on|off" >&2; exit 2; }
@@ -115,6 +129,14 @@ case "$1" in
         # account and stopping ssh below matter more.
         migrate_firewall_unit || echo "firewall unit migration failed" >&2
         if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
+
+        if [[ -f "$RESCUE_MARKER" ]]; then
+            # Durable Rescue-mode SSH access lives on this account -- see
+            # the RESCUE_MARKER note up top. Nothing below this to undo.
+            echo '{}'
+            exit 0
+        fi
+
         usermod -L "$SESSION_USER" 2>/dev/null || true
         systemctl stop ssh.service 2>/dev/null || true
         # `ufw delete` exits non-zero (and logs "Could not delete

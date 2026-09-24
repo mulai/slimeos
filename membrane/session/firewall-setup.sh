@@ -18,12 +18,21 @@
 #   * `boot`: drop Remote Support's port-22 rule. The per-boot reset used to
 #     do this; devices installed before 2026-08-03 have no
 #     slimeos-remote-support-reset.service to do it instead.
+#   * `boot`, when RESCUE_MARKER exists: add the port-22 rule back instead of
+#     dropping it. membrane/tools/rescue-enable-ssh.sh (run from the
+#     installer USB's Rescue mode, with no live ufw to call directly) drops
+#     that marker to mean "SSH must keep working on this device"; unlike
+#     Remote Support's own rule, this one has to survive every boot, and
+#     remote-support-toggle.sh's own boot-time reset leaves it alone for the
+#     same reason (see that script). Idempotent either way -- ufw no-ops
+#     re-adding a rule that's already there.
 #
 # flock: the boot unit and the Remote Support reset unit can both call this
 # at boot; two concurrent ufw rebuilds are the same race again.
 set -euo pipefail
 
 MARKER="/etc/slimeos/firewall-initialized"
+RESCUE_MARKER="/etc/slimeos/rescue-ssh-enabled"
 
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 
@@ -52,5 +61,9 @@ if ! healthy; then
 fi
 
 if [[ "${1:-}" == "boot" ]]; then
-    ufw delete allow from 10.10.0.0/24 to any port 22 proto tcp >/dev/null 2>&1 || true
+    if [[ -f "$RESCUE_MARKER" ]]; then
+        ufw allow from 10.10.0.0/24 to any port 22 proto tcp comment 'slimeos rescue ssh' >/dev/null
+    else
+        ufw delete allow from 10.10.0.0/24 to any port 22 proto tcp >/dev/null 2>&1 || true
+    fi
 fi
