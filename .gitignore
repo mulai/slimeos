@@ -28,7 +28,6 @@ Thumbs.db
 
 # local Claude Code session notes -- not for public repo
 .claude/
-CLAUDE.md
 
 # build artifacts
 dist/
