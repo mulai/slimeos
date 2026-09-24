@@ -7,7 +7,7 @@
 # $DISPLAY_PREFS_FILE which coordinator.sh defines. `mode` is always
 # "settings" -- there is no boot-mode variant of this screen.
 #
-# Four knobs, all persisted to $DISPLAY_PREFS_FILE (a shell KEY="value"
+# Five knobs, all persisted to $DISPLAY_PREFS_FILE (a shell KEY="value"
 # fragment coordinator.sh sources after /etc/slimeos/config, so a choice
 # made here wins over the admin default):
 #
@@ -27,6 +27,13 @@
 #       fix for github.com/mulai/slimeos#15 (large TV, tiny icons) since
 #       Windows refuses to change this from inside the session itself.
 #       Next connect.
+#   RDP_UDP   off | on   -- carry the Brain's graphics and audio over RDP's
+#       UDP transport (MS-RDPEUDP2) instead of only TCP. Much steadier on
+#       lossy Wi-Fi (AMD box A/B 2026-09-23: 34-47 vs 18-28 fps). Needs the
+#       +slimeos7 FreeRDP build (see membrane/freerdp/udp-patches/README.md);
+#       on an older build the option is shown as unavailable. connect.sh
+#       reads it (next connect) and sets SLIMEOS_UDP_NATIVE for xfreerdp3.
+#       Beta, so off by default.
 #
 # Why the prefs file lives in $CRED_DIR and not next to /etc/slimeos/config:
 # config is root:$SESSION_USER 0640 (admin-writable only), and the session
@@ -42,6 +49,22 @@ DP_SCALES=("1" "1.25" "1.5" "2")
 # Allowed Brain DPI-scale factors -- the exact values FreeRDP's /scale:
 # accepts (confirmed via `xfreerdp3 /help`, not assumed). "100" = no scaling.
 DP_BRAIN_SCALES=("100" "140" "180")
+
+# True if the installed FreeRDP carries the Slime OS UDP transport. Looked
+# for by its log tag in libfreerdp3 rather than by package version, so any
+# build with the code qualifies (research builds included). Cached per
+# coordinator process: the package only ever changes across an OTA reboot.
+DP_UDP_SUPPORTED=""
+dp_udp_supported() {
+    if [[ -z "$DP_UDP_SUPPORTED" ]]; then
+        DP_UDP_SUPPORTED=no
+        local lib
+        for lib in /usr/lib/*/libfreerdp3.so.3; do
+            [[ -e "$lib" ]] && grep -qa "SLIMEOS-UDP-NATIVE" "$lib" 2>/dev/null && DP_UDP_SUPPORTED=yes
+        done
+    fi
+    [[ "$DP_UDP_SUPPORTED" == "yes" ]]
+}
 
 # resolution id -> "WIDTH HEIGHT" ("" = fullscreen/auto). Order here is the
 # order the <select> shows them.
@@ -84,11 +107,11 @@ dp_in_list() {
     return 1
 }
 
-# Atomically rewrite $DISPLAY_PREFS_FILE with the five keys. Same-dir temp
+# Atomically rewrite $DISPLAY_PREFS_FILE with the six keys. Same-dir temp
 # + mv so a crash mid-write can't leave coordinator.sh sourcing a half
 # file on the next boot. Returns non-zero (and writes nothing) on failure.
 dp_write_prefs() {
-    local scale="$1" res_w="$2" res_h="$3" audio="$4" brain_scale="$5" tmp
+    local scale="$1" res_w="$2" res_h="$3" audio="$4" brain_scale="$5" udp="$6" tmp
     tmp=$(mktemp "${DISPLAY_PREFS_FILE}.XXXXXX") || return 1
     {
         echo "# Slime OS — Display & Sound preferences (Settings > Display & Sound)."
@@ -99,6 +122,7 @@ dp_write_prefs() {
         echo "RDP_HEIGHT=\"${res_h}\""
         echo "AUDIO_OUTPUT=\"${audio}\""
         echo "RDP_SCALE_FACTOR=\"${brain_scale}\""
+        echo "RDP_UDP=\"${udp}\""
     } > "$tmp" || { rm -f "$tmp"; return 1; }
     chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$DISPLAY_PREFS_FILE" || { rm -f "$tmp"; return 1; }
@@ -120,13 +144,18 @@ do_display_settings() {
         grep -q "\"$audio\"" <<<"$outputs_json" || audio="auto"
         brain_scale="${RDP_SCALE_FACTOR:-100}"
         dp_in_list "$brain_scale" "${DP_BRAIN_SCALES[@]}" || brain_scale="100"
+        local udp="${RDP_UDP:-off}" udp_supported=false
+        [[ "$udp" == "on" ]] || udp="off"
+        dp_udp_supported && udp_supported=true
 
         emit_state displaySettings "$(jq -nc \
             --arg mode "$mode" --arg scale "$scale" --arg resolution "$resolution" \
             --arg audio "$audio" --argjson outputs "$outputs_json" \
-            --arg brainScale "$brain_scale" --arg error "$error" \
+            --arg brainScale "$brain_scale" --arg udp "$udp" \
+            --argjson udpSupported "$udp_supported" --arg error "$error" \
             '{mode:$mode, uiScale:$scale, resolution:$resolution,
               audioOutput:$audio, audioOutputs:$outputs, brainScale:$brainScale,
+              udp:$udp, udpSupported:$udpSupported,
               error:(if $error == "" then null else $error end)}')"
         error=""
 
@@ -135,11 +164,13 @@ do_display_settings() {
         ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
         case "$ev_type" in
             displaySet)
-                local want_scale want_res want_audio want_brain_scale res_dims res_w res_h
+                local want_scale want_res want_audio want_brain_scale want_udp res_dims res_w res_h
                 want_scale=$(jq -r '.uiScale // empty' <<<"$line")
                 want_res=$(jq -r '.resolution // empty' <<<"$line")
                 want_audio=$(jq -r '.audioOutput // empty' <<<"$line")
                 want_brain_scale=$(jq -r '.brainScale // empty' <<<"$line")
+                # Absent on a page that predates the UDP row: keep the saved value.
+                want_udp=$(jq -r --arg cur "${RDP_UDP:-off}" '.udp // $cur' <<<"$line")
 
                 if ! dp_in_list "$want_scale" "${DP_SCALES[@]}"; then
                     log "displaySet rejected: uiScale '$want_scale'"
@@ -161,10 +192,20 @@ do_display_settings() {
                     error="Couldn't apply that Brain display scaling."
                     continue
                 fi
+                if [[ "$want_udp" != "on" && "$want_udp" != "off" ]]; then
+                    log "displaySet rejected: udp '$want_udp'"
+                    error="Couldn't apply that connection setting."
+                    continue
+                fi
+                if [[ "$want_udp" == "on" ]] && ! dp_udp_supported; then
+                    log "displaySet rejected: udp on, but this FreeRDP build has no UDP transport"
+                    error="This device needs a software update before it can use the faster connection."
+                    continue
+                fi
                 res_w="${res_dims% *}"; res_h="${res_dims#* }"
                 [[ -n "$res_dims" ]] || { res_w=""; res_h=""; }
 
-                if ! dp_write_prefs "$want_scale" "$res_w" "$res_h" "$want_audio" "$want_brain_scale"; then
+                if ! dp_write_prefs "$want_scale" "$res_w" "$res_h" "$want_audio" "$want_brain_scale" "$want_udp"; then
                     log "displaySet: failed to write $DISPLAY_PREFS_FILE"
                     error="Couldn't save the change. Try again."
                     continue
@@ -178,8 +219,9 @@ do_display_settings() {
                 RDP_HEIGHT="$res_h"
                 AUDIO_OUTPUT="$want_audio"
                 RDP_SCALE_FACTOR="$want_brain_scale"
+                RDP_UDP="$want_udp"
                 compute_res_flags
-                log "Display & Sound: uiScale=$want_scale resolution=${want_res} audioOutput=$want_audio brainScale=$want_brain_scale"
+                log "Display & Sound: uiScale=$want_scale resolution=${want_res} audioOutput=$want_audio brainScale=$want_brain_scale udp=$want_udp"
                 # Pushes the new uiScale to the page (it zooms immediately);
                 # same explicit-send reasoning as timezone.sh's clock.
                 send_status

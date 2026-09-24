@@ -710,6 +710,26 @@ do_connect() {
                 log "Camera device present — enabling webcam redirection (SLIMEOS_ENABLE_CAMERA=0 to disable)"
             fi
 
+            # UDP transport (Settings > Display & Sound > Brain connection,
+            # RDP_UDP in display-prefs). Needs the +slimeos7 FreeRDP build,
+            # which only uses UDP when SLIMEOS_UDP_NATIVE=1 (graphics and
+            # audio ride an RDP-UDP2 tunnel, input and replies stay on TCP;
+            # if UDP goes quiet mid-session it drops back to TCP by itself,
+            # see membrane/freerdp/udp-patches/README.md). Otherwise the
+            # variable is explicitly removed so a stray one in the service
+            # environment can't turn UDP on behind this setting's back. The
+            # WLOG_FILTER lets the transport's own lines (tunnel up,
+            # fallback) into $FREERDP_LOG_FILE despite /log-level:WARN.
+            local udp_env="env -u SLIMEOS_UDP_NATIVE"
+            if [[ "${RDP_UDP:-off}" == "on" ]]; then
+                if dp_udp_supported; then
+                    udp_env="env SLIMEOS_UDP_NATIVE=1 WLOG_FILTER=com.freerdp.core.multitransport:INFO"
+                    log "UDP transport on (Settings > Display & Sound)"
+                else
+                    log "UDP transport requested but this FreeRDP build lacks it — staying on TCP"
+                fi
+            fi
+
             # Peripheral redirection (speaker/mic/USB storage):
             #   /sound, /microphone — explicit `sys:alsa` because the
             #     Membrane has no PulseAudio/PipeWire daemon installed;
@@ -736,7 +756,7 @@ do_connect() {
             # before trying this again — see membrane/freerdp/
             # action-noop.sh's own header for the postmortem.
             set +e
-            ${sound_alsa_env} xfreerdp3 \
+            ${sound_alsa_env} ${udp_env} xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
                 /u:"${slime_username}" \
                 /p:"${rdp_pass}" \

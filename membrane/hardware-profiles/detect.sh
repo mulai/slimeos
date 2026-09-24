@@ -113,3 +113,43 @@ applied_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
 log "Profile applied. Marker written to $APPLIED_MARKER"
+
+# ── FreeRDP package sync ──────────────────────────────────────────────────────
+# The patched FreeRDP build (camera + keyboard fixes + the UDP transport,
+# +slimeos7) ships as ordinary OTA bundle files under hardware-profiles/freerdp/,
+# already sha256-verified by update.sh. They live under hardware-profiles/ on
+# purpose: apply-update-helper.sh re-runs this script as root whenever a file
+# there lands, and that helper can't update itself, so this is the only root
+# hook an already-installed device has for installing packages. Idempotent:
+# does nothing when the bundled version is already installed. Leaves test
+# builds (version contains "research") and anything newer alone; a newer
+# Debian point release would drop the camera/keyboard/UDP patches, see
+# install.sh section 1b.
+FREERDP_DEB_DIR="$PROFILE_DIR/freerdp"
+FREERDP_DEBS=(freerdp3-x11.deb libfreerdp-client3-3.deb libfreerdp3-3.deb libwinpr3-3.deb)
+
+sync_freerdp() {
+    [[ "$(dpkg --print-architecture 2>/dev/null)" == "amd64" ]] || { log "FreeRDP sync: not amd64, skipping"; return 0; }
+    local deb want have
+    for deb in "${FREERDP_DEBS[@]}"; do
+        [[ -f "$FREERDP_DEB_DIR/$deb" ]] || { log "FreeRDP sync: $deb not in the bundle, skipping"; return 0; }
+    done
+    want=$(dpkg-deb -f "$FREERDP_DEB_DIR/freerdp3-x11.deb" Version) || return 1
+    have=$(dpkg-query -W -f='${Version}' freerdp3-x11 2>/dev/null || true)
+    if [[ "$have" == "$want" ]]; then
+        log "FreeRDP sync: $have already installed"
+        return 0
+    fi
+    if [[ "$have" == *research* ]]; then
+        log "FreeRDP sync: test build $have installed, leaving it (bundle has $want)"
+        return 0
+    fi
+    if [[ -n "$have" ]] && dpkg --compare-versions "$have" gt "$want"; then
+        log "FreeRDP sync: newer $have installed, not downgrading to $want"
+        return 0
+    fi
+    log "FreeRDP sync: ${have:-none} -> $want"
+    dpkg -i "${FREERDP_DEBS[@]/#/$FREERDP_DEB_DIR/}"
+}
+
+sync_freerdp || log "FreeRDP sync failed (non-fatal, retried on the next update)"

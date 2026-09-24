@@ -1,0 +1,1135 @@
+Index: freerdp3-3.15.0+dfsg/channels/rdpgfx/client/rdpgfx_main.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/channels/rdpgfx/client/rdpgfx_main.c
++++ freerdp3-3.15.0+dfsg/channels/rdpgfx/client/rdpgfx_main.c
+@@ -1111,6 +1111,22 @@ static UINT rdpgfx_recv_end_frame_pdu(GE
+ 
+ 	Stream_Read_UINT32(s, pdu.frameId); /* frameId (4 bytes) */
+ 	DEBUG_RDPGFX(gfx->log, "RecvEndFramePdu: frameId: %" PRIu32 "", pdu.frameId);
++	{
++		/* SLIMEOS-UDP-RESEARCH: frames/s counter for TCP-vs-UDP loss tests */
++		static UINT64 slimeosWindowStart = 0;
++		static UINT32 slimeosFrames = 0;
++		const UINT64 slimeosNow = winpr_GetTickCount64();
++		if (!slimeosWindowStart)
++			slimeosWindowStart = slimeosNow;
++		slimeosFrames++;
++		if (slimeosNow - slimeosWindowStart >= 2000)
++		{
++			WLog_Print(gfx->log, WLOG_INFO, "SLIMEOS-FPS: %.1f frames/s (last frameId %" PRIu32 ")",
++			           slimeosFrames * 1000.0 / (double)(slimeosNow - slimeosWindowStart), pdu.frameId);
++			slimeosFrames = 0;
++			slimeosWindowStart = slimeosNow;
++		}
++	}
+ 
+ 	const UINT64 start = GetTickCount64();
+ 	if (context)
+Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/multitransport.c
++++ freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
+@@ -48,6 +48,219 @@ enum
+ 
+ #define TAG FREERDP_TAG("core.multitransport")
+ 
++/* SLIMEOS-UDP-RESEARCH checkpoint 2: probe the MS-RDPEUDP handshake (SYN -> SYN+ACK)
++ * when the server asks for multitransport, then still decline so the session stays on
++ * TCP. Research build only; see docs in the slimeos repo (FreeRDP UDP transport). */
++#include <winpr/crypto.h>
++#include <sys/socket.h>
++#include <netdb.h>
++#include <poll.h>
++#include <unistd.h>
++#include <string.h>
++#include <sys/wait.h>
++#include <signal.h>
++#include <spawn.h>
++#include <stdlib.h>
++#include <time.h>
++extern char** environ;
++
++#define SLIMEOS_RDPUDP_MTU 1232
++
++static void slimeos_put16(BYTE* p, UINT16 v) { p[0] = (BYTE)(v >> 8); p[1] = (BYTE)v; }
++static void slimeos_put32(BYTE* p, UINT32 v)
++{
++	p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v;
++}
++static UINT16 slimeos_get16(const BYTE* p) { return (UINT16)((p[0] << 8) | p[1]); }
++static UINT32 slimeos_get32(const BYTE* p)
++{
++	return ((UINT32)p[0] << 24) | ((UINT32)p[1] << 16) | ((UINT32)p[2] << 8) | p[3];
++}
++
++#include "slimeos_rdpudp2.c"
++
++/* ver: 0 = no SYNEX (v1), else the uUdpVer to offer (0x0002, or 0x0101 with cookieHash).
++ * Returns 1 if the server answered, 0 if not, -1 on local error. */
++/* v3 cookieHash encoding (confirmed 2026-09-23 against Windows 11): the SHA-256 digest is
++ * treated as 8 little-endian UINT32s, each sent big-endian ("network byte order"), i.e.
++ * every 4-byte word of the raw digest byte-swapped (hashmode 1). The raw digest (0) and a
++ * fully reversed one (2) are silently dropped by the server. */
++static int slimeos_udp_try(const char* host, UINT32 port, UINT16 ver, BOOL lossy,
++                           const BYTE* cookie, int hashmode)
++{
++	struct addrinfo hints = { 0 };
++	struct addrinfo* ai = NULL;
++	char portstr[16];
++	(void)snprintf(portstr, sizeof(portstr), "%" PRIu32, port);
++	hints.ai_family = AF_UNSPEC;
++	hints.ai_socktype = SOCK_DGRAM;
++	if ((getaddrinfo(host, portstr, &hints, &ai) != 0) || !ai)
++		return -1;
++	int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
++	if ((fd < 0) || (connect(fd, ai->ai_addr, ai->ai_addrlen) != 0))
++	{
++		if (fd >= 0)
++			close(fd);
++		freeaddrinfo(ai);
++		return -1;
++	}
++	freeaddrinfo(ai);
++
++	BYTE pkt[SLIMEOS_RDPUDP_MTU] = { 0 };
++	UINT32 isn = 0;
++	winpr_RAND(&isn, sizeof(isn));
++	UINT16 flags = 0x0001; /* RDPUDP_FLAG_SYN */
++	if (lossy)
++		flags |= 0x0200; /* RDPUDP_FLAG_SYNLOSSY */
++	if (ver)
++		flags |= 0x1000; /* RDPUDP_FLAG_SYNEX */
++	slimeos_put32(pkt + 0, 0xFFFFFFFF); /* snSourceAck = -1 */
++	slimeos_put16(pkt + 4, 64);         /* uReceiveWindowSize (packets) */
++	slimeos_put16(pkt + 6, flags);
++	slimeos_put32(pkt + 8, isn); /* snInitialSequenceNumber */
++	slimeos_put16(pkt + 12, SLIMEOS_RDPUDP_MTU); /* uUpStreamMtu */
++	slimeos_put16(pkt + 14, SLIMEOS_RDPUDP_MTU); /* uDownStreamMtu */
++	if (ver)
++	{
++		slimeos_put16(pkt + 16, 0x0001); /* RDPUDP_VERSION_INFO_VALID */
++		slimeos_put16(pkt + 18, ver);
++		if (ver == 0x0101)
++		{
++			BYTE h[32];
++			(void)winpr_Digest(WINPR_MD_SHA256, cookie, RDPUDP_COOKIE_LEN, h, sizeof(h));
++			for (size_t i = 0; i < 32; i++)
++			{
++				if (hashmode == 1)
++					pkt[20 + i] = h[(i & ~(size_t)3) + (3 - (i & 3))];
++				else if (hashmode == 2)
++					pkt[20 + i] = h[31 - i];
++				else
++					pkt[20 + i] = h[i];
++			}
++		}
++	}
++
++	int rc = 0;
++	for (int attempt = 1; (attempt <= 3) && (rc == 0); attempt++)
++	{
++		if (send(fd, pkt, sizeof(pkt), 0) != (ssize_t)sizeof(pkt))
++		{
++			rc = -1;
++			break;
++		}
++		struct pollfd pfd = { .fd = fd, .events = POLLIN };
++		if (poll(&pfd, 1, 500) <= 0)
++		{
++			WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: ver=0x%04" PRIx16 " attempt %d: no reply", ver,
++			          attempt);
++			continue;
++		}
++		BYTE r[2048];
++		ssize_t n = recv(fd, r, sizeof(r), 0);
++		if (n < 8)
++		{
++			WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: short reply (%zd bytes)", n);
++			continue;
++		}
++		UINT16 rflags = slimeos_get16(r + 6);
++		WLog_INFO(TAG,
++		          "SLIMEOS-UDP-RESEARCH: ver=0x%04" PRIx16 " REPLY %zd bytes: snSourceAck=0x%08" PRIx32
++		          " (our ISN 0x%08" PRIx32 ") window=%" PRIu16 " flags=0x%04" PRIx16,
++		          ver, n, slimeos_get32(r), isn, slimeos_get16(r + 4), rflags);
++		if ((rflags & 0x0001) && (n >= 16))
++		{
++			WLog_INFO(TAG,
++			          "SLIMEOS-UDP-RESEARCH: server ISN=0x%08" PRIx32 " upMTU=%" PRIu16
++			          " downMTU=%" PRIu16,
++			          slimeos_get32(r + 8), slimeos_get16(r + 12), slimeos_get16(r + 14));
++			size_t off = 16;
++			if (rflags & 0x0800) /* RDPUDP_FLAG_CORRELATION_ID */
++				off += 32;
++			if ((rflags & 0x1000) && ((size_t)n >= off + 4))
++				WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: server SYNEX flags=0x%04" PRIx16
++				               " udpVer=0x%04" PRIx16,
++				          slimeos_get16(r + off), slimeos_get16(r + off + 2));
++		}
++		rc = 1;
++	}
++	close(fd);
++	return rc;
++}
++
++/* Research harness: if SLIMEOS_UDP_HELPER names an executable, hand it the pending
++ * multitransport request (host port requestId proto cookie-hex) and wait up to 60 s, so
++ * UDP experiments can iterate in a script without rebuilding FreeRDP. */
++/* Set by slimeos_udp_helper(): TRUE when the helper exited 0, i.e. it created the tunnel
++ * (and, in accept mode, keeps it alive in the background). */
++static BOOL slimeos_helper_tunnel_ok = FALSE;
++
++static BOOL slimeos_udp_helper(rdpMultitransport* multi, UINT32 reqId, UINT16 reqProto,
++                               const BYTE* cookie)
++{
++	slimeos_helper_tunnel_ok = FALSE;
++	const char* helper = getenv("SLIMEOS_UDP_HELPER");
++	if (!helper || !*helper)
++		return FALSE;
++	const rdpSettings* settings = multi->rdp->settings;
++	const char* host = freerdp_settings_get_string(settings, FreeRDP_ServerHostname);
++	char port[16], req[16], proto[8], hex[2 * RDPUDP_COOKIE_LEN + 1];
++	(void)snprintf(port, sizeof(port), "%" PRIu32,
++	               freerdp_settings_get_uint32(settings, FreeRDP_ServerPort));
++	(void)snprintf(req, sizeof(req), "%" PRIu32, reqId);
++	(void)snprintf(proto, sizeof(proto), "%" PRIu16, reqProto);
++	for (size_t i = 0; i < RDPUDP_COOKIE_LEN; i++)
++		(void)snprintf(hex + 2 * i, 3, "%02x", cookie[i]);
++	char* argv[] = { (char*)helper, (char*)(host ? host : ""), port, req, proto, hex, NULL };
++	pid_t pid = 0;
++	if (posix_spawn(&pid, helper, NULL, NULL, argv, environ) != 0)
++	{
++		WLog_ERR(TAG, "SLIMEOS-UDP-RESEARCH: could not start helper %s", helper);
++		return FALSE;
++	}
++	int status = 0;
++	for (int i = 0; i < 600; i++)
++	{
++		if (waitpid(pid, &status, WNOHANG) == pid)
++		{
++			WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: helper exited with %d", WEXITSTATUS(status));
++			slimeos_helper_tunnel_ok = WIFEXITED(status) && (WEXITSTATUS(status) == 0);
++			return TRUE;
++		}
++		const struct timespec ts = { 0, 100000000 };
++		nanosleep(&ts, NULL);
++	}
++	kill(pid, SIGKILL);
++	(void)waitpid(pid, &status, 0);
++	WLog_WARN(TAG, "SLIMEOS-UDP-RESEARCH: helper timed out, killed");
++	return TRUE;
++}
++
++static void slimeos_udp_probe(rdpMultitransport* multi, UINT16 reqProto, const BYTE* cookie)
++{
++	const rdpSettings* settings = multi->rdp->settings;
++	const char* host = freerdp_settings_get_string(settings, FreeRDP_ServerHostname);
++	const UINT32 port = freerdp_settings_get_uint32(settings, FreeRDP_ServerPort);
++	const BOOL lossy = (reqProto == INITIATE_REQUEST_PROTOCOL_UDPFECL);
++	const struct
++	{
++		UINT16 ver;
++		int hashmode;
++	} tries[] = { { 0x0101, 1 }, { 0x0002, 0 }, { 0x0000, 0 } };
++	if (!host)
++		return;
++	for (size_t i = 0; i < ARRAYSIZE(tries); i++)
++	{
++		const int rc =
++		    slimeos_udp_try(host, port, tries[i].ver, lossy, cookie, tries[i].hashmode);
++		WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: %s:%" PRIu32 " proto=%" PRIu16 " ver=0x%04" PRIx16
++		               " hashmode=%d -> %s",
++		          host, port, reqProto, tries[i].ver, tries[i].hashmode,
++		          (rc > 0) ? "SYN+ACK received" : ((rc < 0) ? "local error" : "no reply"));
++		if (rc > 0)
++			break;
++	}
++}
++
+ state_run_t multitransport_recv_request(rdpMultitransport* multi, wStream* s)
+ {
+ 	WINPR_ASSERT(multi);
+@@ -89,6 +302,7 @@ state_run_t multitransport_recv_request(
+ 	}
+ 
+ 	WINPR_ASSERT(multi->MtRequest);
++	WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: server requested multitransport, protocol=%"PRIu16, requestedProto);
+ 	return multi->MtRequest(multi, requestId, requestedProto, cookie);
+ }
+ 
+@@ -188,9 +402,37 @@ state_run_t multitransport_recv_response
+ }
+ 
+ static state_run_t multitransport_no_udp(rdpMultitransport* multi, UINT32 reqId,
+-                                         WINPR_ATTR_UNUSED UINT16 reqProto,
+-                                         WINPR_ATTR_UNUSED const BYTE* cookie)
++                                         UINT16 reqProto, const BYTE* cookie)
+ {
++	if (getenv("SLIMEOS_UDP_NATIVE") && (reqProto == INITIATE_REQUEST_PROTOCOL_UDPFECR) &&
++	    slimeos_rdpudp2_paused())
++	{
++		WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: requestId=%" PRIu32
++		          " -> UDP paused after a mid-session failure, answering E_ABORT (TCP only)",
++		          reqId);
++		return multitransport_client_send_response(multi, reqId, E_ABORT) ? STATE_RUN_SUCCESS
++		                                                                  : STATE_RUN_FAILED;
++	}
++	if (getenv("SLIMEOS_UDP_NATIVE") && (reqProto == INITIATE_REQUEST_PROTOCOL_UDPFECR))
++	{
++		const BOOL up = slimeos_rdpudp2_start(multi, reqId, cookie);
++		WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: requestId=%" PRIu32 " -> %s", reqId,
++		          up ? "tunnel up, answering S_OK" : "failed, answering E_ABORT");
++		return multitransport_client_send_response(multi, reqId, up ? S_OK : E_ABORT)
++		           ? STATE_RUN_SUCCESS
++		           : STATE_RUN_FAILED;
++	}
++	/* Research-only paths; with no SLIMEOS_* variable set this function behaves exactly like
++	 * stock FreeRDP (decline UDP, stay on TCP). */
++	if (!slimeos_udp_helper(multi, reqId, reqProto, cookie) && getenv("SLIMEOS_UDP_PROBE"))
++		slimeos_udp_probe(multi, reqProto, cookie);
++	else if (slimeos_helper_tunnel_ok && getenv("SLIMEOS_UDP_ACCEPT"))
++	{
++		WLog_INFO(TAG, "SLIMEOS-UDP-RESEARCH: tunnel up, answering requestId=%" PRIu32 " with S_OK",
++		          reqId);
++		return multitransport_client_send_response(multi, reqId, S_OK) ? STATE_RUN_SUCCESS
++		                                                               : STATE_RUN_FAILED;
++	}
+ 	return multitransport_client_send_response(multi, reqId, E_ABORT) ? STATE_RUN_SUCCESS
+ 	                                                                  : STATE_RUN_FAILED;
+ }
+@@ -233,5 +475,6 @@ rdpMultitransport* multitransport_new(rd
+ 
+ void multitransport_free(rdpMultitransport* multitransport)
+ {
++	slimeos_rdpudp2_stop(); /* research: stop the UDP receive thread (it frees itself) */
+ 	free(multitransport);
+ }
+Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
+===================================================================
+--- /dev/null
++++ freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
+@@ -0,0 +1,824 @@
++/* SLIMEOS-UDP-RESEARCH checkpoint 5a: native RDP-UDP2 (MS-RDPEUDP v3) client transport.
++ *
++ * Research code, #included by multitransport.c and only used with SLIMEOS_UDP_NATIVE=1.
++ * Receive path only: after the tunnel is up, RDP_TUNNEL_DATA payloads are handed to the
++ * drdynvc static-channel plugin exactly as if they had arrived over TCP. Replies still go
++ * over TCP. Wire facts (not all in the spec) come from an mstsc capture, see the slimeos
++ * repo's UDP research notes:
++ *  - v3 datagrams have bytes 0 and 7 swapped; byte 0 is a prefix (0xE0 data/ACK, 0xF0 dummy)
++ *  - little-endian flags|LogWindowSize word, then payloads in spec order
++ *  - DataSeqNum starts at 100 (counts every packet), ChannelSeqNum at 1 (real data only)
++ *  - the v3 SYN cookieHash is SHA-256(securityCookie) with each 4-byte word byte-swapped
++ */
++#include <openssl/ssl.h>
++#include <openssl/bio.h>
++#include <openssl/err.h>
++#include <pthread.h>
++#include <stdatomic.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <freerdp/svc.h>
++#include "client.h"
++#include "mcs.h"
++
++#define RU2_MTU 1232
++#define RU2_PFX_DATA 0xE0
++#define RU2_PFX_DUMMY 0xF0
++#define RU2_WIN 12
++#define RU2_F_ACK 0x001
++#define RU2_F_DATA 0x004
++#define RU2_F_ACKVEC 0x008
++#define RU2_F_AOA 0x010
++#define RU2_F_OVH 0x040
++#define RU2_F_DLY 0x100
++#define RU2_REORDER 4096 /* must divide 65536 */
++#define RU2_RXWIN 4096   /* must divide 65536 */
++
++typedef struct
++{
++	int fd;
++	freerdp* instance;
++	UINT16 dvcChannelId;
++	SSL_CTX* ctx;
++	SSL* ssl;
++	BIO* rbio; /* network -> TLS */
++	BIO* wbio; /* TLS -> network */
++	UINT16 dseq;
++	UINT16 cseq;
++	UINT16 nextRemoteCseq;
++	/* ChannelSeqNum runs 1..65535 and wraps 65535 -> 1, never using 0 (observed against
++	 * Windows 2026-09-23: treating it as plain 16-bit made the stream wait forever for "0"
++	 * after ~65k data packets). nextIdx is the unwrapped count of delivered packets. */
++	UINT32 nextIdx;
++	BOOL haveSlot[RU2_REORDER];
++	UINT32 slotIdx[RU2_REORDER];
++	BYTE* slotData[RU2_REORDER];
++	size_t slotLen[RU2_REORDER];
++	BYTE* plain; /* decrypted tunnel stream */
++	size_t plainLen;
++	size_t plainCap;
++	UINT64 t0;
++	atomic_bool stop;
++	UINT32 stats[5]; /* pkts, dummy, data, tunnelPdus, delivered */
++	UINT64 deliveredBytes;
++	UINT64 lastStatsUs;
++	/* Receive feedback (MS-RDPEUDP2 3.1.1.2.x): an ACK payload for sequence N makes the
++	 * sender mark every lower pending packet "Received", so a plain ACK is only correct while
++	 * nothing is missing. With a gap we must send an ACK Vector describing each packet's state,
++	 * or the sender never retransmits the lost one (found 2026-09-23 under 3% loss). */
++	UINT16 rxLow;  /* lowest sequence number not yet received */
++	UINT16 rxHigh; /* highest sequence number received */
++	BYTE rxMark[RU2_RXWIN];
++	UINT16 rxSeq[RU2_RXWIN];
++	/* Our last flight of handshake data (TLS / tunnel create), resent on stall with new
++	 * DataSeqNum but the same ChannelSeqNum. Cleared when the server sends real data. */
++	struct
++	{
++		UINT16 cseq;
++		size_t len;
++		BYTE data[1200];
++	} flight[16];
++	size_t flightN;
++	UINT64 lastProgressUs;
++	/* Mid-session fallback: UDP silence -> drop the TCP connection -> auto-reconnect (TCP). */
++	UINT64 lastRxUs;
++	UINT64 maxGapUs; /* longest gap between datagrams, logged to tune the dead threshold */
++	UINT64 lastProbeUs;
++	UINT32 probes;       /* keepalive dummies sent while the link was quiet (total) */
++	UINT32 probesUnans;  /* ... since the last datagram arrived */
++	int tcpFd;       /* the session's TCP socket to the same host:port, -1 if not found */
++	ino_t tcpIno;    /* its inode, so a reused fd number is never shut down by mistake */
++} Ru2;
++
++/* The live transport. Guarded by slimeos_ru2_lock: the receive thread frees its own Ru2 on
++ * exit, so others may only touch one (set stop) while it is still published here. */
++static Ru2* slimeos_ru2 = NULL;
++static pthread_mutex_t slimeos_ru2_lock = PTHREAD_MUTEX_INITIALIZER;
++/* After a mid-session UDP failure, answer E_ABORT (TCP only) until this time. */
++static _Atomic UINT64 slimeos_udp_paused_until_us = 0;
++
++static UINT64 ru2_now_us(void)
++{
++	struct timespec ts;
++	clock_gettime(CLOCK_MONOTONIC, &ts);
++	return (UINT64)ts.tv_sec * 1000000ull + (UINT64)ts.tv_nsec / 1000ull;
++}
++
++static void ru2_put16le(BYTE* p, UINT16 v)
++{
++	p[0] = (BYTE)v;
++	p[1] = (BYTE)(v >> 8);
++}
++
++static UINT16 ru2_get16le(const BYTE* p)
++{
++	return (UINT16)(p[0] | (p[1] << 8));
++}
++
++static UINT32 ru2_get32le(const BYTE* p)
++{
++	return (UINT32)p[0] | ((UINT32)p[1] << 8) | ((UINT32)p[2] << 16) | ((UINT32)p[3] << 24);
++}
++
++static void ru2_swap07(BYTE* b, size_t n)
++{
++	if (n >= 8)
++	{
++		const BYTE t = b[0];
++		b[0] = b[7];
++		b[7] = t;
++	}
++}
++
++static void ru2_send_ack(Ru2* u, UINT16 seq)
++{
++	BYTE b[10];
++	const UINT32 ts = (UINT32)((ru2_now_us() - u->t0) / 4) & 0xFFFFFF;
++	b[0] = RU2_PFX_DATA;
++	ru2_put16le(b + 1, (UINT16)(RU2_F_ACK | (RU2_WIN << 12)));
++	ru2_put16le(b + 3, seq);
++	b[5] = (BYTE)ts;
++	b[6] = (BYTE)(ts >> 8);
++	b[7] = (BYTE)(ts >> 16);
++	b[8] = 0; /* sendAckTimeGap */
++	b[9] = 0; /* numDelayedAcks | delayAckTimeScale */
++	ru2_swap07(b, sizeof(b));
++	(void)send(u->fd, b, sizeof(b), 0);
++}
++
++/* One DATA packet in the shape mstsc uses (DATA|AOA|DELAYACK, AOA=100). */
++static BOOL ru2_send_raw(Ru2* u, UINT16 cseq, const BYTE* data, size_t len)
++{
++	BYTE b[RU2_MTU];
++	const size_t hdr = 1 + 2 + 3 + 2 + 2 + 2;
++	if (len > sizeof(b) - hdr)
++		return FALSE;
++	b[0] = RU2_PFX_DATA;
++	ru2_put16le(b + 1, (UINT16)(RU2_F_DATA | RU2_F_AOA | RU2_F_DLY | (RU2_WIN << 12)));
++	b[3] = 1;                 /* DELAYACK: max delayed acks */
++	ru2_put16le(b + 4, 10);   /* DELAYACK: timeout ms */
++	ru2_put16le(b + 6, 100);  /* AOA */
++	ru2_put16le(b + 8, u->dseq++);
++	ru2_put16le(b + 10, cseq);
++	memcpy(b + hdr, data, len);
++	ru2_swap07(b, hdr + len);
++	return send(u->fd, b, hdr + len, 0) == (ssize_t)(hdr + len);
++}
++
++static BOOL ru2_send_data(Ru2* u, const BYTE* data, size_t len)
++{
++	const UINT16 cseq = u->cseq;
++	u->cseq = (u->cseq == 65535) ? 1 : (UINT16)(u->cseq + 1);
++	if (u->flightN < ARRAYSIZE(u->flight) && len <= sizeof(u->flight[0].data))
++	{
++		u->flight[u->flightN].cseq = cseq;
++		u->flight[u->flightN].len = len;
++		memcpy(u->flight[u->flightN].data, data, len);
++		u->flightN++;
++	}
++	return ru2_send_raw(u, cseq, data, len);
++}
++
++/* Keepalive probe: a dummy (filler) packet in our DataSeqNum space. Windows ACKs it like
++ * data, so an idle-but-healthy link still answers. Needed because an idle desktop sends
++ * nothing at all for seconds (fallback test 2026-09-24: silent > 3 s right after logon). */
++static void ru2_send_probe(Ru2* u)
++{
++	BYTE b[16] = { 0 };
++	b[0] = RU2_PFX_DUMMY;
++	ru2_put16le(b + 1, (UINT16)(RU2_F_DATA | RU2_F_AOA | RU2_F_DLY | (RU2_WIN << 12)));
++	b[3] = 1;                /* DELAYACK: max delayed acks */
++	ru2_put16le(b + 4, 10);  /* DELAYACK: timeout ms */
++	ru2_put16le(b + 6, 100); /* AOA */
++	ru2_put16le(b + 8, u->dseq++);
++	ru2_swap07(b, sizeof(b));
++	(void)send(u->fd, b, sizeof(b), 0);
++	u->probes++;
++	u->probesUnans++;
++	u->lastProbeUs = ru2_now_us();
++}
++
++static void ru2_resend_flight(Ru2* u)
++{
++	for (size_t i = 0; i < u->flightN; i++)
++		(void)ru2_send_raw(u, u->flight[i].cseq, u->flight[i].data, u->flight[i].len);
++	u->lastProgressUs = ru2_now_us();
++}
++
++/* ACK Vector: base = lowest missing packet, one bitmap byte per 7 packets up to rxHigh. */
++static void ru2_send_ackvec(Ru2* u)
++{
++	BYTE b[3 + 4 + 4 + 127];
++	UINT32 count = (UINT16)(u->rxHigh - u->rxLow) + 1u;
++	if (count > 127u * 7u)
++		count = 127u * 7u;
++	const BYTE nbytes = (BYTE)((count + 6) / 7);
++	const UINT32 ts = (UINT32)((ru2_now_us() - u->t0) / 4) & 0xFFFFFF;
++	size_t o = 0;
++	b[o++] = RU2_PFX_DATA;
++	ru2_put16le(b + o, (UINT16)(RU2_F_ACKVEC | (RU2_WIN << 12)));
++	o += 2;
++	ru2_put16le(b + o, u->rxLow); /* BaseSeqNum */
++	o += 2;
++	b[o++] = (BYTE)(0x80 | nbytes); /* codedAckVecSize, high bit: timestamp present */
++	b[o++] = (BYTE)ts;
++	b[o++] = (BYTE)(ts >> 8);
++	b[o++] = (BYTE)(ts >> 16);
++	b[o++] = 0; /* sendAckTimeGap */
++	for (BYTE k = 0; k < nbytes; k++)
++	{
++		BYTE bits = 0; /* bitmap mode (bit 7 clear), bit i = packet base+7k+i received */
++		for (int i = 0; i < 7; i++)
++		{
++			const UINT32 off = 7u * k + (UINT32)i;
++			const UINT16 seq = (UINT16)(u->rxLow + off);
++			if (off < count && u->rxMark[seq % RU2_RXWIN] && u->rxSeq[seq % RU2_RXWIN] == seq)
++				bits |= (BYTE)(1u << i);
++		}
++		b[o++] = bits;
++	}
++	ru2_swap07(b, o);
++	(void)send(u->fd, b, o, 0);
++}
++
++/* Record a received DataSeqNum (data or dummy) and send the right feedback. */
++static void ru2_rx_feedback(Ru2* u, UINT16 d)
++{
++	const UINT16 diff = (UINT16)(d - u->rxLow);
++	if (diff < RU2_RXWIN)
++	{
++		u->rxMark[d % RU2_RXWIN] = 1;
++		u->rxSeq[d % RU2_RXWIN] = d;
++		if ((UINT16)(d - u->rxHigh) < 0x8000)
++			u->rxHigh = d;
++		while (u->rxMark[u->rxLow % RU2_RXWIN] && u->rxSeq[u->rxLow % RU2_RXWIN] == u->rxLow)
++		{
++			u->rxMark[u->rxLow % RU2_RXWIN] = 0;
++			u->rxLow++;
++		}
++	}
++	if ((UINT16)(u->rxHigh - u->rxLow) >= 0x8000) /* rxHigh < rxLow: nothing missing */
++		ru2_send_ack(u, (UINT16)(u->rxLow - 1));
++	else
++		ru2_send_ackvec(u);
++}
++
++/* The sender gave up on everything below aoa (AckOfAcks): stop reporting it. */
++static void ru2_rx_aoa(Ru2* u, UINT16 aoa)
++{
++	while ((UINT16)(aoa - u->rxLow) != 0 && (UINT16)(aoa - u->rxLow) < 0x8000)
++	{
++		u->rxMark[u->rxLow % RU2_RXWIN] = 0;
++		u->rxLow++;
++	}
++	while (u->rxMark[u->rxLow % RU2_RXWIN] && u->rxSeq[u->rxLow % RU2_RXWIN] == u->rxLow)
++	{
++		u->rxMark[u->rxLow % RU2_RXWIN] = 0;
++		u->rxLow++;
++	}
++}
++
++/* Push everything OpenSSL wants to send, fragmented to fit the MTU. */
++static BOOL ru2_flush_tls(Ru2* u)
++{
++	BYTE buf[4096];
++	int n = 0;
++	while ((n = BIO_read(u->wbio, buf, sizeof(buf))) > 0)
++	{
++		for (int off = 0; off < n; off += 1100)
++		{
++			const int chunk = ((n - off) > 1100) ? 1100 : (n - off);
++			if (!ru2_send_data(u, buf + off, (size_t)chunk))
++				return FALSE;
++		}
++	}
++	return TRUE;
++}
++
++/* Parse one received datagram: ACK it, and if it carries real data, store it for in-order
++ * delivery into the TLS read BIO. */
++static void ru2_on_datagram(Ru2* u, BYTE* b, size_t n)
++{
++	u->stats[0]++;
++	if (n < 3)
++		return;
++	ru2_swap07(b, n);
++	const BYTE type = (b[0] >> 1) & 0xF;
++	const UINT16 fl = ru2_get16le(b + 1) & 0xFFF;
++	size_t o = 3;
++	if (fl & RU2_F_ACK)
++	{
++		if (o + 7 > n)
++			return;
++		o += 7 + (b[o + 6] & 0xF);
++	}
++	if (fl & RU2_F_OVH)
++		o += 1;
++	if (fl & RU2_F_DLY)
++		o += 3;
++	if (fl & RU2_F_AOA)
++	{
++		if (o + 2 <= n)
++			ru2_rx_aoa(u, ru2_get16le(b + o));
++		o += 2;
++	}
++	UINT16 dseq = 0;
++	if (fl & RU2_F_DATA)
++	{
++		if (o + 2 > n)
++			return;
++		dseq = ru2_get16le(b + o);
++		o += 2;
++	}
++	if (fl & RU2_F_ACKVEC)
++	{
++		if (o + 3 > n)
++			return;
++		const BYTE sz = b[o + 2];
++		o += 3 + (sz & 0x7F) + ((sz & 0x80) ? 4 : 0);
++	}
++	{
++		static int verbose = -1;
++		if (verbose < 0)
++			verbose = getenv("SLIMEOS_UDP_VERBOSE") ? atoi(getenv("SLIMEOS_UDP_VERBOSE")) : 0;
++		if (verbose >= 2)
++		{
++			char info[256];
++			size_t q = 3;
++			int w = snprintf(info, sizeof(info), "t=%" PRIu64 "ms type=%u flags=0x%03x win=%u", (ru2_now_us() - u->t0) / 1000,
++			                 type, fl, (unsigned)(ru2_get16le(b + 1) >> 12));
++			if ((fl & RU2_F_ACK) && q + 7 <= n)
++			{
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " ACK(seq=%u nd=%u)", ru2_get16le(b + q), b[q + 6] & 0xF);
++				q += 7 + (b[q + 6] & 0xF);
++			}
++			if (fl & RU2_F_OVH)
++			{
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " OVH=%u", b[q]);
++				q += 1;
++			}
++			if (fl & RU2_F_DLY)
++			{
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " DLY(%u,%u)", b[q], ru2_get16le(b + q + 1));
++				q += 3;
++			}
++			if (fl & RU2_F_AOA)
++			{
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " AOA=%u", ru2_get16le(b + q));
++				q += 2;
++			}
++			if (fl & RU2_F_DATA)
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " dseq=%u", dseq);
++			if ((fl & RU2_F_DATA) && type != 8 && o + 2 <= n)
++				w += snprintf(info + w, sizeof(info) - (size_t)w, " cseq=%u len=%zu", ru2_get16le(b + o), n - o - 2);
++			(void)w;
++			WLog_INFO(TAG, "SLIMEOS-RX %s (nextRemoteCseq=%u)", info, u->nextRemoteCseq);
++		}
++	}
++	if (!(fl & RU2_F_DATA))
++		return;
++	if (type == 8)
++	{
++		u->stats[1]++;
++		ru2_rx_feedback(u, dseq);
++		return;
++	}
++	if (o + 2 > n)
++		return;
++	u->stats[2]++;
++	u->flightN = 0; /* the server answered: our last flight arrived */
++	u->lastProgressUs = ru2_now_us();
++	const UINT16 cseq = ru2_get16le(b + o);
++	o += 2;
++	if (cseq == 0)
++		return; /* never used by the sender */
++	/* distance forward from the next expected cseq in the 1..65535 ring */
++	const UINT32 ahead = ((UINT32)(cseq - 1) + 65535u - (UINT32)(u->nextRemoteCseq - 1)) % 65535u;
++	const UINT32 idx = u->nextIdx + ahead;
++	const size_t slot = idx % RU2_REORDER;
++	if (ahead >= 32768u || (u->haveSlot[slot] && u->slotIdx[slot] == idx))
++	{
++		/* Already delivered or already buffered: a retransmission; acknowledge it again. */
++		ru2_rx_feedback(u, dseq);
++		return;
++	}
++	if (ahead >= RU2_REORDER)
++		return; /* can't buffer it: do NOT acknowledge, so the sender retransmits later */
++	u->slotData[slot] = malloc(n - o);
++	if (!u->slotData[slot])
++		return;
++	memcpy(u->slotData[slot], b + o, n - o);
++	u->slotLen[slot] = n - o;
++	u->slotIdx[slot] = idx;
++	u->haveSlot[slot] = TRUE;
++	ru2_rx_feedback(u, dseq); /* only now: the data is kept */
++	for (;;)
++	{
++		const size_t s = u->nextIdx % RU2_REORDER;
++		if (!u->haveSlot[s] || u->slotIdx[s] != u->nextIdx)
++			break;
++		(void)BIO_write(u->rbio, u->slotData[s], (int)u->slotLen[s]);
++		free(u->slotData[s]);
++		u->slotData[s] = NULL;
++		u->haveSlot[s] = FALSE;
++		u->nextIdx++;
++		u->nextRemoteCseq = (u->nextRemoteCseq == 65535) ? 1 : (UINT16)(u->nextRemoteCseq + 1);
++	}
++}
++
++static int ru2_recv_once(Ru2* u, int timeoutMs)
++{
++	struct pollfd pfd = { .fd = u->fd, .events = POLLIN };
++	const int pr = poll(&pfd, 1, timeoutMs);
++	if (pr <= 0)
++		return pr;
++	BYTE b[2048];
++	const ssize_t n = recv(u->fd, b, sizeof(b), 0);
++	if (n > 0)
++	{
++		const UINT64 now = ru2_now_us();
++		if (u->lastRxUs && (now - u->lastRxUs > u->maxGapUs))
++			u->maxGapUs = now - u->lastRxUs;
++		u->lastRxUs = now;
++		u->probesUnans = 0;
++		ru2_on_datagram(u, b, (size_t)n);
++	}
++	return (int)n;
++}
++
++static UINT64 ru2_env_ms(const char* name, UINT64 def)
++{
++	const char* v = getenv(name);
++	return (v && *v) ? strtoull(v, NULL, 10) : def;
++}
++
++/* The session's TCP socket: the stream socket whose peer is our UDP peer (same host:port). */
++static int ru2_find_tcp_fd(int udpFd, ino_t* ino)
++{
++	struct sockaddr_storage up = { 0 };
++	socklen_t ul = sizeof(up);
++	if (getpeername(udpFd, (struct sockaddr*)&up, &ul) != 0)
++		return -1;
++	for (int fd = 0; fd < 4096; fd++)
++	{
++		int type = 0;
++		socklen_t tl = sizeof(type);
++		struct sockaddr_storage p = { 0 };
++		socklen_t pl = sizeof(p);
++		struct stat st;
++		if ((fd == udpFd) || (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0) ||
++		    (type != SOCK_STREAM) || (getpeername(fd, (struct sockaddr*)&p, &pl) != 0) ||
++		    (pl != ul) || (memcmp(&p, &up, ul) != 0) || (fstat(fd, &st) != 0))
++			continue;
++		*ino = st.st_ino;
++		return fd;
++	}
++	return -1;
++}
++
++/* UDP went silent while TCP may still be up. Graphics/audio DVCs live on the tunnel and can't
++ * move back (no Soft-Sync), so drop the TCP connection: FreeRDP's auto-reconnect then resumes
++ * the same Windows session, and while the pause lasts that reconnect declines UDP. */
++static void ru2_fall_back_to_tcp(Ru2* u, UINT64 silentUs)
++{
++	struct stat st;
++	if ((u->tcpFd < 0) || (fstat(u->tcpFd, &st) != 0) || (st.st_ino != u->tcpIno))
++	{
++		WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: no UDP traffic for %" PRIu64
++		          " ms and the TCP connection is already gone; leaving recovery to auto-reconnect",
++		          silentUs / 1000);
++		return;
++	}
++	const UINT64 pauseMs = ru2_env_ms("SLIMEOS_UDP_PAUSE_MS", 300000);
++	atomic_store(&slimeos_udp_paused_until_us, ru2_now_us() + pauseMs * 1000ull);
++	WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: no UDP traffic for %" PRIu64
++	          " ms (%" PRIu32 " keepalive probes unanswered), falling back to TCP: dropping the "
++	          "TCP connection so auto-reconnect resumes the session, UDP paused for %" PRIu64 " s",
++	          silentUs / 1000, u->probesUnans, pauseMs / 1000);
++	(void)shutdown(u->tcpFd, SHUT_RDWR);
++}
++
++static BOOL slimeos_rdpudp2_paused(void)
++{
++	return ru2_now_us() < atomic_load(&slimeos_udp_paused_until_us);
++}
++
++/* Ask the published transport (if any) to stop; its thread frees it. */
++static void slimeos_rdpudp2_stop(void)
++{
++	pthread_mutex_lock(&slimeos_ru2_lock);
++	if (slimeos_ru2)
++		atomic_store(&slimeos_ru2->stop, true);
++	slimeos_ru2 = NULL;
++	pthread_mutex_unlock(&slimeos_ru2_lock);
++}
++
++static void ru2_free(Ru2* u)
++{
++	if (u->ssl)
++		SSL_free(u->ssl); /* frees the BIOs too */
++	else
++	{
++		if (u->rbio)
++			BIO_free(u->rbio);
++		if (u->wbio)
++			BIO_free(u->wbio);
++	}
++	if (u->ctx)
++		SSL_CTX_free(u->ctx);
++	if (u->fd >= 0)
++		close(u->fd);
++	for (size_t i = 0; i < RU2_REORDER; i++)
++		free(u->slotData[i]);
++	free(u->plain);
++	free(u);
++}
++
++/* Split the decrypted stream into tunnel PDUs; DATA payloads go to drdynvc. */
++static void ru2_dispatch_tunnel(Ru2* u)
++{
++	size_t off = 0;
++	while (u->plainLen - off >= 4)
++	{
++		const BYTE* p = u->plain + off;
++		const UINT16 plen = ru2_get16le(p + 1);
++		const BYTE hlen = p[3];
++		if (hlen < 4 || u->plainLen - off < (size_t)hlen + plen)
++			break;
++		u->stats[3]++;
++		const BYTE action = p[0] & 0xF;
++		if (action == 2 && hlen > 4 && getenv("SLIMEOS_UDP_VERBOSE"))
++		{
++			char hex[3 * 64 + 1] = { 0 };
++			for (size_t i = 4; (i < hlen) && (i < 4 + 64); i++)
++				(void)snprintf(hex + 3 * (i - 4), 4, "%02x ", p[i]);
++			WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: subheader(%u): %s plen=%u", (unsigned)(hlen - 4), hex,
++			          (unsigned)plen);
++		}
++		if (action == 2 && plen > 0)
++		{
++			const BYTE* d = p + hlen;
++			if (((d[0] >> 4) == 1) && (plen > 2)) /* DVC CREATE_REQUEST_PDU */
++				WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: DVC create request over UDP: id=%u name=%.*s",
++				          (unsigned)d[1], (int)(plen - 2), (const char*)(d + 2));
++			if (u->dvcChannelId &&
++			    freerdp_channels_data(u->instance, u->dvcChannelId, p + hlen, plen,
++			                          CHANNEL_FLAG_FIRST | CHANNEL_FLAG_LAST, plen))
++			{
++				u->stats[4]++;
++				u->deliveredBytes += plen;
++			}
++			else
++				WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: could not deliver %u-byte tunnel payload",
++				          (unsigned)plen);
++		}
++		off += (size_t)hlen + plen;
++	}
++	if (off > 0)
++	{
++		memmove(u->plain, u->plain + off, u->plainLen - off);
++		u->plainLen -= off;
++	}
++}
++
++static void* ru2_thread(void* arg)
++{
++	Ru2* u = arg;
++	WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: receive thread running (drdynvc channel id %" PRIu16
++	          ", TCP fd %d)",
++	          u->dvcChannelId, u->tcpFd);
++	const UINT64 deadUs = ru2_env_ms("SLIMEOS_UDP_DEAD_MS", 3000) * 1000ull;
++	const UINT64 probeUs = ru2_env_ms("SLIMEOS_UDP_PROBE_MS", 1000) * 1000ull;
++	u->lastRxUs = ru2_now_us();
++	while (!atomic_load(&u->stop))
++	{
++		if (ru2_recv_once(u, 200) < 0)
++			break;
++		const UINT64 silentUs = ru2_now_us() - u->lastRxUs;
++		if ((silentUs > probeUs) && (ru2_now_us() - u->lastProbeUs > 500000ull))
++			ru2_send_probe(u);
++		if (deadUs && (silentUs > deadUs) && !atomic_load(&u->stop))
++		{
++			ru2_fall_back_to_tcp(u, silentUs);
++			break;
++		}
++		for (;;)
++		{
++			if (u->plainCap - u->plainLen < 16384)
++			{
++				BYTE* np = realloc(u->plain, u->plainCap + 65536);
++				if (!np)
++					break;
++				u->plain = np;
++				u->plainCap += 65536;
++			}
++			const int r = SSL_read(u->ssl, u->plain + u->plainLen, (int)(u->plainCap - u->plainLen));
++			if (r <= 0)
++				break;
++			u->plainLen += (size_t)r;
++		}
++		ru2_dispatch_tunnel(u);
++		(void)ru2_flush_tls(u); /* TLS may want to send (alerts, renegotiation) */
++		if (ru2_now_us() - u->lastStatsUs > 2000000ull)
++		{
++			u->lastStatsUs = ru2_now_us();
++			WLog_INFO(TAG,
++			          "SLIMEOS-UDP-NATIVE: stats pkts=%" PRIu32 " dummy=%" PRIu32 " data=%" PRIu32
++			          " tunnelPdus=%" PRIu32 " delivered=%" PRIu32 " deliveredBytes=%" PRIu64
++			          " maxGapMs=%" PRIu64 " probes=%" PRIu32,
++			          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4],
++			          u->deliveredBytes, u->maxGapUs / 1000, u->probes);
++		}
++	}
++	WLog_INFO(TAG,
++	          "SLIMEOS-UDP-NATIVE: receive thread done: pkts=%" PRIu32 " dummy=%" PRIu32
++	          " data=%" PRIu32 " tunnelPdus=%" PRIu32 " delivered=%" PRIu32 " maxGapMs=%" PRIu64,
++	          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4], u->maxGapUs / 1000);
++	pthread_mutex_lock(&slimeos_ru2_lock);
++	if (slimeos_ru2 == u)
++		slimeos_ru2 = NULL;
++	pthread_mutex_unlock(&slimeos_ru2_lock);
++	ru2_free(u);
++	return NULL;
++}
++
++static UINT16 ru2_find_drdynvc(freerdp* instance)
++{
++	rdpMcs* mcs = instance->context->rdp->mcs;
++	for (UINT32 i = 0; mcs && (i < mcs->channelCount); i++)
++		if (strncmp(mcs->channels[i].Name, "drdynvc", 8) == 0)
++			return mcs->channels[i].ChannelId;
++	return 0;
++}
++
++/* Handshake + TLS + tunnel create; on success starts the receive thread and returns TRUE. */
++static BOOL slimeos_rdpudp2_start(rdpMultitransport* multi, UINT32 reqId, const BYTE* cookie)
++{
++	const rdpSettings* settings = multi->rdp->settings;
++	const char* host = freerdp_settings_get_string(settings, FreeRDP_ServerHostname);
++	char portstr[16];
++	(void)snprintf(portstr, sizeof(portstr), "%" PRIu32,
++	               freerdp_settings_get_uint32(settings, FreeRDP_ServerPort));
++	struct addrinfo hints = { 0 };
++	struct addrinfo* ai = NULL;
++	hints.ai_family = AF_UNSPEC;
++	hints.ai_socktype = SOCK_DGRAM;
++	/* A reconnect starts a fresh transport; retire the previous one (its thread frees it). */
++	slimeos_rdpudp2_stop();
++	if (!host || getaddrinfo(host, portstr, &hints, &ai) != 0 || !ai)
++		return FALSE;
++
++	Ru2* u = calloc(1, sizeof(Ru2));
++	if (!u)
++	{
++		freeaddrinfo(ai);
++		return FALSE;
++	}
++	u->fd = -1;
++	u->fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
++	if (u->fd < 0 || connect(u->fd, ai->ai_addr, ai->ai_addrlen) != 0)
++	{
++		freeaddrinfo(ai);
++		goto fail;
++	}
++	freeaddrinfo(ai);
++	u->instance = multi->rdp->context->instance;
++	u->dseq = 100;
++	u->cseq = 1;
++	u->nextRemoteCseq = 1;
++	u->rxLow = 100; /* server DataSeqNum starts at 100 (mstsc capture) */
++	u->rxHigh = 99;
++	u->t0 = ru2_now_us();
++
++	/* 1. v3 SYN (MS-RDPEUDP v1 framing, big-endian), expect SYN+ACK with udpVer 0x0101 */
++	BYTE syn[RU2_MTU] = { 0 };
++	UINT32 isn = 0;
++	winpr_RAND(&isn, sizeof(isn));
++	slimeos_put32(syn + 0, 0xFFFFFFFF);
++	slimeos_put16(syn + 4, 64);
++	slimeos_put16(syn + 6, 0x1001); /* SYN | SYNEX */
++	slimeos_put32(syn + 8, isn);
++	slimeos_put16(syn + 12, RU2_MTU);
++	slimeos_put16(syn + 14, RU2_MTU);
++	slimeos_put16(syn + 16, 0x0001);
++	slimeos_put16(syn + 18, 0x0101);
++	BYTE h[32];
++	(void)winpr_Digest(WINPR_MD_SHA256, cookie, RDPUDP_COOKIE_LEN, h, sizeof(h));
++	for (size_t i = 0; i < 32; i++)
++		syn[20 + i] = h[(i & ~(size_t)3) + (3 - (i & 3))];
++	BOOL synack = FALSE;
++	for (int attempt = 0; (attempt < 12) && !synack; attempt++)
++	{
++		(void)send(u->fd, syn, sizeof(syn), 0);
++		struct pollfd pfd = { .fd = u->fd, .events = POLLIN };
++		if (poll(&pfd, 1, 400) <= 0)
++			continue;
++		BYTE r[2048];
++		const ssize_t n = recv(u->fd, r, sizeof(r), 0);
++		if (n >= 8 && slimeos_get32(r) == isn && (slimeos_get16(r + 6) & 0x0005) == 0x0005)
++			synack = TRUE;
++	}
++	if (!synack)
++	{
++		WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: no SYN+ACK");
++		goto fail;
++	}
++
++	/* 2. TLS 1.2 client over the RDP-UDP2 stream, via memory BIOs */
++	u->ctx = SSL_CTX_new(TLS_client_method());
++	if (!u->ctx)
++		goto fail;
++	SSL_CTX_set_max_proto_version(u->ctx, TLS1_2_VERSION);
++	SSL_CTX_set_verify(u->ctx, SSL_VERIFY_NONE, NULL); /* research: cert not checked */
++	u->ssl = SSL_new(u->ctx);
++	u->rbio = BIO_new(BIO_s_mem());
++	u->wbio = BIO_new(BIO_s_mem());
++	if (!u->ssl || !u->rbio || !u->wbio)
++		goto fail;
++	BIO_set_mem_eof_return(u->rbio, -1);
++	SSL_set_bio(u->ssl, u->rbio, u->wbio);
++	SSL_set_connect_state(u->ssl);
++	u->lastProgressUs = ru2_now_us();
++	const UINT64 deadline = ru2_now_us() + 5000000ull;
++	int hs = 0;
++	while ((hs = SSL_do_handshake(u->ssl)) != 1)
++	{
++		const int e = SSL_get_error(u->ssl, hs);
++		if (e != SSL_ERROR_WANT_READ || !ru2_flush_tls(u) || ru2_now_us() > deadline)
++		{
++			WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: TLS handshake failed (ssl error %d)", e);
++			goto fail;
++		}
++		(void)ru2_recv_once(u, 100);
++		if (u->flightN && ru2_now_us() - u->lastProgressUs > 600000ull)
++			ru2_resend_flight(u);
++	}
++	(void)ru2_flush_tls(u);
++	WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: TLS up (%s, %s) after %" PRIu64 " ms", SSL_get_version(u->ssl),
++	          SSL_get_cipher_name(u->ssl), (ru2_now_us() - u->t0) / 1000);
++
++	/* 3. MS-RDPEMT Tunnel Create Request, wait for the response */
++	BYTE req[28] = { 0x00, 24, 0, 4 };
++	req[4] = (BYTE)reqId;
++	req[5] = (BYTE)(reqId >> 8);
++	req[6] = (BYTE)(reqId >> 16);
++	req[7] = (BYTE)(reqId >> 24);
++	memcpy(req + 12, cookie, RDPUDP_COOKIE_LEN);
++	if (SSL_write(u->ssl, req, sizeof(req)) != (int)sizeof(req) || !ru2_flush_tls(u))
++		goto fail;
++	BYTE resp[64];
++	size_t respLen = 0;
++	const UINT64 deadline2 = ru2_now_us() + 5000000ull;
++	u->lastProgressUs = ru2_now_us();
++	while (respLen < 8 && ru2_now_us() < deadline2)
++	{
++		(void)ru2_recv_once(u, 100);
++		if (u->flightN && ru2_now_us() - u->lastProgressUs > 600000ull)
++			ru2_resend_flight(u);
++		const int r = SSL_read(u->ssl, resp + respLen, (int)(sizeof(resp) - respLen));
++		if (r > 0)
++			respLen += (size_t)r;
++	}
++	if (respLen < 8 || (resp[0] & 0xF) != 1)
++	{
++		WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: no tunnel create response");
++		goto fail;
++	}
++	const UINT32 hr = ru2_get32le(resp + resp[3]);
++	WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: tunnel create response HrResponse=0x%08" PRIx32 " after %" PRIu64 " ms",
++	          hr, (ru2_now_us() - u->t0) / 1000);
++	if (hr != 0)
++		goto fail;
++	/* Keep anything already decrypted beyond the response PDU. */
++	const size_t used = (size_t)resp[3] + ru2_get16le(resp + 1);
++	u->plainCap = 65536;
++	u->plain = malloc(u->plainCap);
++	if (!u->plain)
++		goto fail;
++	if (respLen > used)
++	{
++		memcpy(u->plain, resp + used, respLen - used);
++		u->plainLen = respLen - used;
++	}
++
++	/* 4. Receive thread */
++	u->dvcChannelId = ru2_find_drdynvc(u->instance);
++	u->tcpFd = ru2_find_tcp_fd(u->fd, &u->tcpIno);
++	if (u->tcpFd < 0)
++		WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: TCP socket not found; mid-session fallback disabled");
++	pthread_mutex_lock(&slimeos_ru2_lock);
++	slimeos_ru2 = u;
++	pthread_t th;
++	const BOOL started = (pthread_create(&th, NULL, ru2_thread, u) == 0);
++	if (!started)
++		slimeos_ru2 = NULL;
++	pthread_mutex_unlock(&slimeos_ru2_lock);
++	if (!started)
++		goto fail;
++	pthread_detach(th);
++	return TRUE;
++
++fail:
++	ru2_free(u);
++	return FALSE;
++}

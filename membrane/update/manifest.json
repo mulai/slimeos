@@ -1,7 +1,7 @@
 {
-  "version": "0.3.26",
-  "released_at": "2026-09-23T06:55:00Z",
-  "changelog": "0.3.26\n- Lock screen: locks automatically after 1, 5 (default), 15 or 30 minutes idle on the Brain list or in Settings, or never (Settings > Security > Lock Screen).\n- New: name this Membrane (same tab). The name shows when you approve an unlock or sign-in on your phone, and in your Slime ID device list.\n\n0.3.25\n- Lock screen now opens on the recovery PIN, like Windows and macOS. Tap \"Unlock with phone\" to show a QR code instead; no unlock code is requested until you do.\n\n0.3.24\n- New: optional lock screen (Settings > Security > Lock Screen, needs Slime ID). When on, the Membrane locks at startup, after every Brain session, and from the new padlock icon. Unlock by scanning a QR code with your phone (only your own Slime ID can approve it), or with the recovery PIN shown at install, which also works offline. Wrong PINs are rate-limited.\n\n0.3.23\n- Settings > Remote Support now says plainly that the support team has full control of the device while Remote Support is on.\n\n0.3.22\n- Security: the recovery PIN is no longer kept in a readable file on the device after it has been shown once.\n\n0.3.21\n- Fix: Settings > Remote Support keeps showing the access details (host, user, password) after you switch tabs or close and reopen Settings, instead of losing them while Remote Support stays on. If they can\u2019t be shown (after the Membrane restarts its session), the screen now says to turn it off and on for a new password.\n\n0.3.20\n- Fix: the \"Technical details\" section on connection-error screens now opens with a normal mouse click; previously it could only be opened by clicking elsewhere and pressing Space.\n\n0.3.19\n- Fix: lowered the RDP audio playback buffer (~200ms -> ~100ms) to fix audio lagging behind video on Brains with hardware-accelerated (NVENC) video — the old buffer was tuned when video was still software-encoded and slower, so it went unnoticed until video sped up.\n\n0.3.18\n- Fix: Settings > Changelog only shows the notes for the version actually installed (or, for a pending update, the version being installed), instead of every past release's notes concatenated together (github.com/mulai/slimeos#16).\n\n0.3.17\n- Fix: a Windows Brain reconnecting to its own previous disconnected RDP session (instead of a fresh one) could leave the Membrane stuck showing a quarter-size Brain picker until the whole Brain was rebooted — the hub now force-clears the stale session right after every clean disconnect (github.com/mulai/slimeos#17).\n- Fix: NUC6CAxx (Celeron J3455) devices get a new dedicated hardware profile that switches to /gfx:AVC420 — xfreerdp3's AVC444 decode is single-threaded and was the real cause of choppy video playback on this board, not network or aggregate CPU (github.com/mulai/slimeos#14). Only shipped once #17 above was fixed, since switching codecs mid-session is exactly the kind of resize that could trigger it.\n\n0.3.16\n- New: \"Brain display scaling\" control in Settings > Display & Sound — fixes a large TV/monitor rendering a native-DPI desktop stretched across the whole screen (tiny icons/text), since Windows won't let you change Display settings from inside an RDP session itself (github.com/mulai/slimeos#15).\n\n0.3.15\n- Fix: capped the ALSA playback buffer used for Brain audio redirection, instead of letting FreeRDP request the hardware's maximum (up to ~11s on some onboard audio codecs) — stops residual audio lingering after stopping or adjusting volume on the Brain (github.com/mulai/slimeos#12).\n\n0.3.14\n- Fix: FreeRDP sessions now enable auto-reconnect globally, and profile 008 (Gigabyte 78LMT-S2P) falls back to /rfx, so a WiFi blip resumes the session instead of dropping it (github.com/mulai/slimeos#11).\n- hardware-profiles/*.sh and detect.sh are now updated over-the-air like every other file, instead of requiring a reinstall.",
+  "version": "0.3.27",
+  "released_at": "2026-09-24T01:16:59Z",
+  "changelog": "0.3.27\n- New: \"Brain connection\" in Settings > Display & Sound. \"Faster (beta)\" sends the Brain's picture and sound over UDP, which keeps video much smoother on weak or busy Wi-Fi. If UDP stops working mid-session, the Membrane reconnects over the standard connection on its own within a few seconds. Off by default.\n- FreeRDP is now updated over the air like everything else (new build +slimeos7: the camera and keyboard fixes plus the UDP transport). It installs during this update's restart.\n\n0.3.26\n- Lock screen: locks automatically after 1, 5 (default), 15 or 30 minutes idle on the Brain list or in Settings, or never (Settings > Security > Lock Screen).\n- New: name this Membrane (same tab). The name shows when you approve an unlock or sign-in on your phone, and in your Slime ID device list.\n\n0.3.25\n- Lock screen now opens on the recovery PIN, like Windows and macOS. Tap \"Unlock with phone\" to show a QR code instead; no unlock code is requested until you do.\n\n0.3.24\n- New: optional lock screen (Settings > Security > Lock Screen, needs Slime ID). When on, the Membrane locks at startup, after every Brain session, and from the new padlock icon. Unlock by scanning a QR code with your phone (only your own Slime ID can approve it), or with the recovery PIN shown at install, which also works offline. Wrong PINs are rate-limited.\n\n0.3.23\n- Settings > Remote Support now says plainly that the support team has full control of the device while Remote Support is on.\n\n0.3.22\n- Security: the recovery PIN is no longer kept in a readable file on the device after it has been shown once.\n\n0.3.21\n- Fix: Settings > Remote Support keeps showing the access details (host, user, password) after you switch tabs or close and reopen Settings, instead of losing them while Remote Support stays on. If they can’t be shown (after the Membrane restarts its session), the screen now says to turn it off and on for a new password.\n\n0.3.20\n- Fix: the \"Technical details\" section on connection-error screens now opens with a normal mouse click; previously it could only be opened by clicking elsewhere and pressing Space.\n\n0.3.19\n- Fix: lowered the RDP audio playback buffer (~200ms -> ~100ms) to fix audio lagging behind video on Brains with hardware-accelerated (NVENC) video — the old buffer was tuned when video was still software-encoded and slower, so it went unnoticed until video sped up.\n\n0.3.18\n- Fix: Settings > Changelog only shows the notes for the version actually installed (or, for a pending update, the version being installed), instead of every past release's notes concatenated together (github.com/mulai/slimeos#16).\n\n0.3.17\n- Fix: a Windows Brain reconnecting to its own previous disconnected RDP session (instead of a fresh one) could leave the Membrane stuck showing a quarter-size Brain picker until the whole Brain was rebooted — the hub now force-clears the stale session right after every clean disconnect (github.com/mulai/slimeos#17).\n- Fix: NUC6CAxx (Celeron J3455) devices get a new dedicated hardware profile that switches to /gfx:AVC420 — xfreerdp3's AVC444 decode is single-threaded and was the real cause of choppy video playback on this board, not network or aggregate CPU (github.com/mulai/slimeos#14). Only shipped once #17 above was fixed, since switching codecs mid-session is exactly the kind of resize that could trigger it.\n\n0.3.16\n- New: \"Brain display scaling\" control in Settings > Display & Sound — fixes a large TV/monitor rendering a native-DPI desktop stretched across the whole screen (tiny icons/text), since Windows won't let you change Display settings from inside an RDP session itself (github.com/mulai/slimeos#15).\n\n0.3.15\n- Fix: capped the ALSA playback buffer used for Brain audio redirection, instead of letting FreeRDP request the hardware's maximum (up to ~11s on some onboard audio codecs) — stops residual audio lingering after stopping or adjusting volume on the Brain (github.com/mulai/slimeos#12).\n\n0.3.14\n- Fix: FreeRDP sessions now enable auto-reconnect globally, and profile 008 (Gigabyte 78LMT-S2P) falls back to /rfx, so a WiFi blip resumes the session instead of dropping it (github.com/mulai/slimeos#11).\n- hardware-profiles/*.sh and detect.sh are now updated over-the-air like every other file, instead of requiring a reinstall.",
   "files": [
     {
       "src": "session/slimeos-session.sh",
@@ -57,15 +57,15 @@
     },
     {
       "src": "session/display-settings.sh",
-      "sha256": "da15dffcc239dcc4f7b67369dcb89715663c73d850414968d09faceac3afaff5"
+      "sha256": "ea15d9c3989f46dab8ee6206e22d878cef08dd5b88240d269024bbcf854bc85f"
     },
     {
       "src": "freerdp/connect.sh",
-      "sha256": "a9e7ebabe77191e826c21f36fc88bd43f16ae7c5d2235dcd59fddb3ba84dabc9"
+      "sha256": "1e806258d00688fbbae65ca78cd5d1f3b8af6604d4f45621acc044fe0b4e99b2"
     },
     {
       "src": "lockscreen/index.html",
-      "sha256": "994b35d66bd91e817406f1c08acb801287e3ab9a3609f9db6875576fc51d2e68"
+      "sha256": "96722694c1818117464afec1b4f1c73f2a7cbc22088d29cd0f23636a441be049"
     },
     {
       "src": "lockscreen/fonts/space-grotesk.woff2",
@@ -81,11 +81,11 @@
     },
     {
       "src": "update/dest-map.txt",
-      "sha256": "115e400ae9406d11199a1f4b5898ea6988dab0596f995cea3a8a0ae3461024ce"
+      "sha256": "39e3065335d1667a6cb01a992e6dcef43308cce04515cefe4a2acc944cc040d6"
     },
     {
       "src": "hardware-profiles/detect.sh",
-      "sha256": "275d2abf1eec8a22f7fb9671ed85b219fd7f2be6a596dc3cbee048f51131e193"
+      "sha256": "94373b16fc8c6e97db18a8878a1ed18cb6e2b20e55336ad01a6817adeddac420"
     },
     {
       "src": "hardware-profiles/000-generic.sh",
@@ -110,6 +110,22 @@
     {
       "src": "hardware-profiles/010-intel-nuc6-celeron.sh",
       "sha256": "96528626ee2392bd7ecd6767962e217b55c9fb6ef371f419e59457a6285b5330"
+    },
+    {
+      "src": "hardware-profiles/freerdp/freerdp3-x11.deb",
+      "sha256": "d0ac8b3e6a9f69595d188515651142a96cca345915b58253e131453c0b3fc14c"
+    },
+    {
+      "src": "hardware-profiles/freerdp/libfreerdp-client3-3.deb",
+      "sha256": "76175e21e734986a1338ca086b9e28e68bf0c9503512e9c6eef35775cbd89541"
+    },
+    {
+      "src": "hardware-profiles/freerdp/libfreerdp3-3.deb",
+      "sha256": "4f0f858a9572bd4560cee1d0bdfd8c118f65cd4c2d0eaebaa5bbfc663e50d257"
+    },
+    {
+      "src": "hardware-profiles/freerdp/libwinpr3-3.deb",
+      "sha256": "70547fa80927d57c7bf73a39e36bf4ae26de1d606825d7231f44e0e6f3bbb849"
     }
   ],
   "bridge": {

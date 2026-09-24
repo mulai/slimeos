@@ -186,6 +186,7 @@
                           resolution: 'auto'|'1920x1080'|'1280x720',
                           audioOutput: 'auto'|'analog'|'hdmi',
                           audioOutputs: string[], brainScale: '100'|'140'|'180',
+                          udp: 'off'|'on', udpSupported: boolean,
                           error: string | null }
                        // Settings panel's Display & Sound tab (see
                        // membrane/session/display-settings.sh). Four
@@ -371,8 +372,9 @@
    'slime:pair-skip'       {}                             // boot mode only
 
    'slime:support-toggle'  { enabled }                    // Settings panel's Support tab checkbox
-   'slime:display-set'     { uiScale, resolution, audioOutput, brainScale }  // Settings > Display & Sound -- always
-                                                          // the whole current set of four, fired on any segmented-row change
+   'slime:display-set'     { uiScale, resolution, audioOutput, brainScale, udp }  // Settings > Display & Sound -- always
+                                                          // the whole current set of five, fired on any segmented-row change
+                                                          // (udp is omitted when the row isn't shown, i.e. !udpSupported)
    'slime:timezone-set'    { timezone }                    // Settings panel's Timezone tab <select>
    'slime:feedback-submit' { category, message }           // Settings > Help > Send Feedback -- category: 'bug'|'feature'|'other'
    'slime:feedback-reset'  {}                              // "Send another" on the post-submit confirmation
@@ -1913,9 +1915,10 @@
     );
   }
 
-  // Settings > Display & Sound (see display-settings.sh). Three
-  // segmented pick-one rows. Selecting any option emits the whole current
-  // triplet as slime:display-set -- the backend validates + persists, then
+  // Settings > Display & Sound (see display-settings.sh). Segmented
+  // pick-one rows (the Brain connection row only when the installed FreeRDP
+  // has the UDP transport). Selecting any option emits the whole current
+  // set as slime:display-set -- the backend validates + persists, then
   // re-emits displaySettings so the authoritative selection is what
   // finally renders.
   function renderDisplaySettings(data){
@@ -1923,11 +1926,13 @@
     var resolution = data.resolution || 'auto';
     var audio = data.audioOutput || 'auto';
     var brainScale = data.brainScale || '100';
+    var udp = data.udp === 'on' ? 'on' : 'off';
     var outputs = (data.audioOutputs && data.audioOutputs.length) ? data.audioOutputs : ['auto', 'analog'];
     var error = data.error;
     var SCALE_OPTS = [['1', 'Normal'], ['1.25', 'Large'], ['1.5', 'Larger'], ['2', 'Largest']];
     var RES_OPTS = [['auto', 'Automatic'], ['1920x1080', '1920 × 1080'], ['1280x720', '1280 × 720']];
     var BRAIN_SCALE_OPTS = [['100', 'Normal'], ['140', 'Large'], ['180', 'Largest']];
+    var UDP_OPTS = [['off', 'Standard'], ['on', 'Faster (beta)']];
     var AUDIO_LABELS = { auto: 'Automatic', analog: 'Headphones / speakers', hdmi: 'TV / HDMI' };
     var audioOpts = outputs.map(function(id){ return [id, AUDIO_LABELS[id] || id]; });
     function seg(name, opts, sel, af){
@@ -1947,6 +1952,11 @@
           '<label class="field-label">Brain display scaling</label>' + seg('brainScale', BRAIN_SCALE_OPTS, brainScale) +
           '<p style="margin:-6px 0 14px;font-size:12px;line-height:1.5;color:var(--text-muted);">If the Brain’s desktop looks tiny on a big screen, raise this — Windows won’t let you change it from inside the session itself.</p>' +
           '<label class="field-label">Sound output</label>' + seg('audioOutput', audioOpts, audio) +
+          '<label class="field-label">Brain connection</label>' +
+          (data.udpSupported
+            ? seg('udp', UDP_OPTS, udp) +
+              '<p style="margin:-6px 0 14px;font-size:12px;line-height:1.5;color:var(--text-muted);">Faster sends the Brain’s picture and sound over UDP. Video stays much smoother on weak or busy Wi-Fi. If it ever stops working mid-session, the Membrane switches back to Standard on its own.</p>'
+            : '<p style="margin:0 0 14px;font-size:12.5px;line-height:1.5;color:var(--text-muted);">Standard. The faster connection needs a software update on this device.</p>') +
           (error ? '<p style="margin:4px 0 0;font-size:12.5px;color:var(--error);">' + escapeHtml(error) + '</p>' : '') +
         '</div>' +
       '</div>'
@@ -2630,7 +2640,8 @@
             uiScale: segCurrent('uiScale'),
             resolution: segCurrent('resolution'),
             audioOutput: segCurrent('audioOutput'),
-            brainScale: segCurrent('brainScale')
+            brainScale: segCurrent('brainScale'),
+            udp: segCurrent('udp') || undefined
           });
         };
         on(btn, 'click', choose);
@@ -3117,6 +3128,7 @@
     var demoResolution = 'auto';
     var demoAudioOutput = 'auto';
     var demoBrainScale = '100';
+    var demoUdp = 'off';
     var demoTimezone = 'UTC';
     var demoSignedInEmail = null;
     var demoSpeakerVolume = 65;
@@ -3177,7 +3189,7 @@
       } else if (tab === 'support'){
         window.SlimeUI.setState('supportSettings', { mode: 'settings', enabled: demoSupportEnabled, connection: demoSupportConnection, error: null, version: '0.1.0-demo' });
       } else if (tab === 'display'){
-        window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, error: null });
+        window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, udp: demoUdp, udpSupported: true, error: null });
       } else if (tab === 'timezone'){
         window.SlimeUI.setState('timezoneSettings', { mode: 'settings', current: demoTimezone, timezones: ['UTC', 'Asia/Kuala_Lumpur', 'Asia/Singapore', 'America/New_York', 'Europe/London'], error: null });
       } else if (tab === 'privacy'){
@@ -3242,8 +3254,9 @@
       if (d.resolution) demoResolution = d.resolution;
       if (d.audioOutput) demoAudioOutput = d.audioOutput;
       if (d.brainScale) demoBrainScale = d.brainScale;
+      if (d.udp) demoUdp = d.udp;
       window.SlimeUI.setStatus({ uiScale: demoUiScale });
-      window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, error: null });
+      window.SlimeUI.setState('displaySettings', { mode: 'settings', uiScale: demoUiScale, resolution: demoResolution, audioOutput: demoAudioOutput, audioOutputs: ['auto', 'analog', 'hdmi'], brainScale: demoBrainScale, udp: demoUdp, udpSupported: true, error: null });
     });
 
     document.addEventListener('slime:crash-report-toggle', function(e){
