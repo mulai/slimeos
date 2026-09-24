@@ -76,6 +76,13 @@ lets them into `connect.log` at INFO.
 
 ## Rebuild recipe
 
+Build machine: GCP `slimeos-freerdp-build` (e2-standard-4, Debian 13,
+asia-southeast1-b, OS Login), provisioned by `../build-vm-startup.sh`. It
+powers itself off after an idle hour: start it with
+`gcloud compute instances start slimeos-freerdp-build --zone=asia-southeast1-b`.
+The patched tree is in `~/membrane-build/`. A clean build takes about 3.5 minutes
+and reproduces the shipped +slimeos9 debs bit for bit.
+
 1. Get the **exact** deb13u3 source from the `.dsc`
    (`dget`/`dpkg-source -x freerdp3_3.15.0+dfsg-2.1+deb13u3.dsc`). On the
    build VM, `apt-get source freerdp3` picks up the 3.31 backport instead.
@@ -88,8 +95,9 @@ lets them into `connect.log` at INFO.
    installs with plain `dpkg -i`.
 3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos10`...).
    Write it by hand; `dch` hangs when run non-interactively.
-4. `DEB_BUILD_OPTIONS="parallel=8 nocheck noddebs" dpkg-buildpackage -b -us -uc`
-   takes about 1–2 minutes on 8 cores.
+4. `DEB_BUILD_OPTIONS="parallel=4 nocheck noddebs" dpkg-buildpackage -b -us -uc`
+   (install the tree's own build deps first:
+   `sudo mk-build-deps -i -r debian/control`).
 5. Copy `freerdp3-x11`, `libfreerdp-client3-3`, `libfreerdp3-3` and
    `libwinpr3-3` to `membrane/hardware-profiles/freerdp/<package>.deb`.
    Update the sums in `install.sh` section 1b, and let the release's
