@@ -98,6 +98,9 @@ log "Selected profile: $PROFILE"
 # ── Apply profile ─────────────────────────────────────────────────────────────
 # shellcheck source=/dev/null
 source "$PROFILE_PATH"
+# Profiles define their own log() with their own tag; restore ours so the
+# rest of this script (marker, FreeRDP sync) logs as hw-detect.
+log() { echo "[slimeos/hw-detect] $*"; }
 
 # Record what was applied
 mkdir -p /etc/slimeos
