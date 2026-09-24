@@ -245,8 +245,9 @@ rotating the SSH password (`chpasswd`) and editing the firewall rule are
 plain root operations with no D-Bus action for polkit to authorize, unlike
 the NetworkManager/power/WireGuard cases above. Nothing it does survives a
 reboot on purpose: `on` only *starts* `ssh.service` (never `enable`s it) and
-adds a live `ufw` rule (never touches the persisted
-`/etc/slimeos/firewall-setup.sh`); the password itself is re-randomized on
+adds a `ufw` rule that `off` removes again (and `on` first runs
+`firewall-setup.sh` to repair a disabled or half-loaded ufw, then checks the
+rule is in the live firewall); the password itself is re-randomized on
 every `on`, so an old screenshot of it is worthless. `install.sh` also
 enables `slimeos-remote-support-reset.service`, an unconditional
 `remote-support-toggle.sh off` on every boot, as a belt-and-braces reset

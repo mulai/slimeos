@@ -14,10 +14,10 @@
 # -- same account, same WireGuard-subnet-only reachability -- so on-device
 # support docs describe one story, not two. The difference is this path is
 # live-toggleable from the kiosk itself and nothing it does is durable:
-#   * `on` only STARTS ssh.service (never `enable`s it) and adds a live ufw
-#     rule (never touches the persisted /etc/slimeos/firewall-setup.sh) --
-#     both vanish on the next reboot even if a user forgets to flip this
-#     back off.
+#   * `on` only STARTS ssh.service (never `enable`s it) and adds a ufw
+#     rule that `off` deletes -- and slimeos-remote-support-reset.service
+#     runs `off` on every boot, so neither survives a reboot even if a user
+#     forgets to flip this back off.
 #   * the password is freshly randomized on every `on` -- flipping off then
 #     on again invalidates whatever was shared before, so an old screenshot
 #     or chat log of the connection info is worthless.
@@ -30,11 +30,49 @@ SESSION_USER="slime"
 WG_SUBNET="10.10.0.0/24"
 SSH_PORT="22"
 
+INSTALL_DIR="/opt/slimeos"
+FIREWALL_SETUP="$INSTALL_DIR/firewall-setup.sh"
+FIREWALL_UNIT="/etc/systemd/system/slimeos-firewall.service"
+
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ $# -eq 1 && ( "$1" == "on" || "$1" == "off" ) ]] || { echo "usage: $0 on|off" >&2; exit 2; }
 
+# One-time migration for devices installed before 0.3.32, whose boot unit
+# runs /etc/slimeos/firewall-setup.sh (a ufw reset on every boot, racing
+# ufw.service -- see firewall-setup.sh's header). This script is the only
+# OTA-delivered file that already runs as root at boot (via `off`), so it
+# repoints the unit at the OTA-delivered copy. The marker stops that copy
+# from doing its first-boot reset on an already-configured device.
+migrate_firewall_unit() {
+    [[ -x "$FIREWALL_SETUP" ]] || return 0
+    grep -qx "ExecStart=$FIREWALL_SETUP boot" "$FIREWALL_UNIT" 2>/dev/null && return 0
+    touch /etc/slimeos/firewall-initialized
+    cat > "$FIREWALL_UNIT" <<SERVICE
+[Unit]
+Description=Slime OS — Firewall setup (ufw)
+DefaultDependencies=no
+After=ufw.service
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=$FIREWALL_SETUP boot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+    rm -f /etc/slimeos/firewall-setup.sh
+    systemctl daemon-reload || true
+}
+
 case "$1" in
     on)
+        # Repair first: on a half-loaded ufw, `ufw allow` below only writes
+        # user.rules and never reaches the live firewall.
+        [[ -x "$FIREWALL_SETUP" ]] && "$FIREWALL_SETUP"
+
         # Excludes 0/O/1/l/I -- this gets read off a screen and typed by a
         # human on the other end, not pasted.
         #
@@ -58,11 +96,25 @@ case "$1" in
         # coordinator restart between toggles never got the matching `off`).
         ufw allow from "$WG_SUBNET" to any port "$SSH_PORT" proto tcp comment 'slimeos remote support' >/dev/null
 
+        # `ufw status` reads user.rules, not the live firewall, so check the
+        # live chain. Without this the kiosk shows working connection details
+        # for an SSH port nobody can reach.
+        if ! iptables -S ufw-user-input 2>/dev/null | grep -q -- "-s $WG_SUBNET .*--dport $SSH_PORT "; then
+            echo "ufw rule for port $SSH_PORT is not in the live firewall" >&2
+            usermod -L "$SESSION_USER" 2>/dev/null || true
+            systemctl stop ssh.service 2>/dev/null || true
+            exit 1
+        fi
+
         wg_ip=$(ip -4 -o addr show wg0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
         jq -nc --arg host "${wg_ip:-unknown}" --arg port "$SSH_PORT" --arg user "$SESSION_USER" --arg pw "$password" \
             '{host:$host, port:($port|tonumber), username:$user, password:$pw}'
         ;;
     off)
+        # Never let the migration or repair fail `off` itself: locking the
+        # account and stopping ssh below matter more.
+        migrate_firewall_unit || echo "firewall unit migration failed" >&2
+        if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
         usermod -L "$SESSION_USER" 2>/dev/null || true
         systemctl stop ssh.service 2>/dev/null || true
         # `ufw delete` exits non-zero (and logs "Could not delete

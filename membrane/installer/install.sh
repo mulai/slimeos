@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.31"
+SLIMEOS_VERSION="0.3.32"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -380,6 +380,8 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/timezone.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/remote-support-toggle.sh" \
      -o "$INSTALL_DIR/remote-support-toggle.sh"
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/firewall-setup.sh" \
+     -o "$INSTALL_DIR/firewall-setup.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/crash-reporting.sh" \
      -o "$INSTALL_DIR/crash-reporting.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/slime-id.sh" \
@@ -411,7 +413,7 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/feedback.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/firewall-setup.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh"
 
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --
@@ -922,27 +924,21 @@ ok "Unused services disabled"
 # oneshot unit here is safe (pure unit-file symlinking); actually running
 # ufw waits until the real kernel is up.
 log "Configuring firewall (ufw) for first boot..."
-cat > "$CONFIG_DIR/firewall-setup.sh" <<'FWSCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-ufw --force reset
-ufw default deny incoming
-ufw default allow outgoing
-# Allow WireGuard outbound (UDP to Brain server — added when WG config is loaded)
-ufw --force enable
-FWSCRIPT
-chmod +x "$CONFIG_DIR/firewall-setup.sh"
-
+# firewall-setup.sh (an OTA bundle file, downloaded with the session scripts
+# above) resets ufw on the first boot only, then on every boot repairs a
+# disabled or half-loaded ufw. After=ufw.service: before 0.3.32 the reset ran
+# every boot concurrently with ufw.service and could leave ufw broken.
 cat > "$SYSTEMD_DIR/slimeos-firewall.service" <<SERVICE
 [Unit]
 Description=Slime OS — Firewall setup (ufw)
 DefaultDependencies=no
+After=ufw.service
 Before=network-pre.target
 Wants=network-pre.target
 
 [Service]
 Type=oneshot
-ExecStart=${CONFIG_DIR}/firewall-setup.sh
+ExecStart=${INSTALL_DIR}/firewall-setup.sh boot
 RemainAfterExit=yes
 
 [Install]

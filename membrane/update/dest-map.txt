@@ -19,6 +19,7 @@ pair.sh:pair.sh
 support.sh:support.sh
 timezone.sh:timezone.sh
 remote-support-toggle.sh:remote-support-toggle.sh
+firewall-setup.sh:firewall-setup.sh
 crash-reporting.sh:crash-reporting.sh
 slime-id.sh:slime-id.sh
 lock.sh:lock.sh
