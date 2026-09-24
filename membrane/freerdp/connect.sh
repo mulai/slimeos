@@ -234,10 +234,19 @@ wake_brain() {
     [[ "$managed" != "true" ]] && return 0
     state=$(jq -r '.state // "unknown"' <<<"$response" 2>/dev/null || echo unknown)
     [[ "$state" == "running" ]] && return 0
-    log "Brain ${brain_name} is ${state} — waking it"
+    local stage="Waking up your Brain… (about a minute)"
+    if [[ "$state" == "cleaning" ]]; then
+        # The hub is still logging off the previous session (github.com/
+        # mulai/slimeos#17): reconnecting into it would inherit its old
+        # screen size. Usually ~10 s.
+        stage="Finishing your last session…"
+        log "Brain ${brain_name} is still closing the previous session — waiting"
+    else
+        log "Brain ${brain_name} is ${state} — waking it"
+    fi
 
-    emit_state connecting "$(jq -nc --arg n "$brain_name" \
-        '{brainName:$n,stage:"Waking up your Brain… (about a minute)"}')"
+    emit_state connecting "$(jq -nc --arg n "$brain_name" --arg s "$stage" \
+        '{brainName:$n,stage:$s}')"
 
     local waited=0
     while (( waited < 300 )); do
@@ -719,11 +728,13 @@ do_connect() {
             # variable is explicitly removed so a stray one in the service
             # environment can't turn UDP on behind this setting's back. The
             # WLOG_FILTER lets the transport's own lines (tunnel up,
-            # fallback) into $FREERDP_LOG_FILE despite /log-level:WARN.
+            # fallback) into $FREERDP_LOG_FILE despite /log-level:WARN; it's
+            # appended to any filter already in the service environment
+            # (e.g. rdpgfx INFO for the fps counter while debugging).
             local udp_env="env -u SLIMEOS_UDP_NATIVE"
             if [[ "${RDP_UDP:-off}" == "on" ]]; then
                 if dp_udp_supported; then
-                    udp_env="env SLIMEOS_UDP_NATIVE=1 WLOG_FILTER=com.freerdp.core.multitransport:INFO"
+                    udp_env="env SLIMEOS_UDP_NATIVE=1 WLOG_FILTER=${WLOG_FILTER:+${WLOG_FILTER},}com.freerdp.core.multitransport:INFO"
                     log "UDP transport on (Settings > Display & Sound)"
                 else
                     log "UDP transport requested but this FreeRDP build lacks it — staying on TCP"

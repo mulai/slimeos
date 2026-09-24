@@ -233,6 +233,9 @@ type hostState struct {
 	peerKey       string // WireGuard public key owning this host/32 (cached)
 	lastXfer      int64  // rx+tx at the previous watchdog tick
 	xferValid     bool   // lastXfer holds a real reading (not first tick)
+	// Stale-session cleanup (see resetStaleRDPSession) still running: /wake
+	// answers "cleaning" until it finishes or this deadline passes.
+	cleanupUntil time.Time
 }
 
 type server struct {
@@ -317,6 +320,18 @@ func (s *server) handleWake(w http.ResponseWriter, r *http.Request) {
 
 	switch state {
 	case "running":
+		// A reconnect that lands before the previous session's logoff has
+		// run would reattach to that stale session and inherit its old
+		// geometry (the quarter-screen of #17, seen again 2026-09-24 on
+		// reconnects ~3 s apart). The Membrane keeps polling on anything but
+		// "running", so hold it here until the cleanup finishes.
+		s.mu.Lock()
+		cleaning := time.Now().Before(hs.cleanupUntil)
+		s.mu.Unlock()
+		if cleaning {
+			writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "cleaning"})
+			return
+		}
 		writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "running"})
 
 	case "deallocated", "stopped":
@@ -413,6 +428,9 @@ func (s *server) handleSessionEnded(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
 		return
 	}
+	s.mu.Lock()
+	hs.cleanupUntil = time.Now().Add(cleanupMaxWait)
+	s.mu.Unlock()
 	go s.resetStaleRDPSession(hs, req.Host)
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true})
 }
@@ -577,21 +595,21 @@ func (s *server) armRequest(method, armURL string) (int, []byte, error) {
 // body (currently only runCommand below) — kept separate rather than
 // adding an unused-most-of-the-time body param to armRequest itself, since
 // every existing armRequest caller is a bare GET/POST.
-func (s *server) armRequestWithBody(method, armURL string, body []byte) (int, []byte, error) {
+func (s *server) armRequestWithBody(method, armURL string, body []byte) (int, []byte, http.Header, error) {
 	for attempt := 0; ; attempt++ {
 		tok, err := s.token()
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		req, err := http.NewRequest(method, armURL, bytes.NewReader(body))
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := s.httpc.Do(req)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
@@ -602,7 +620,7 @@ func (s *server) armRequestWithBody(method, armURL string, body []byte) (int, []
 			s.mu.Unlock()
 			continue
 		}
-		return resp.StatusCode, respBody, nil
+		return resp.StatusCode, respBody, resp.Header, nil
 	}
 }
 
@@ -627,6 +645,12 @@ func (s *server) armRequestWithBody(method, armURL string, body []byte) (int, []
 // here should only ever surface in this service's own log, never to a
 // Membrane or its user.
 func (s *server) resetStaleRDPSession(hs *hostState, host string) {
+	// However this ends, stop holding /wake callers.
+	defer func() {
+		s.mu.Lock()
+		hs.cleanupUntil = time.Time{}
+		s.mu.Unlock()
+	}()
 	const script = `$sessions = query session 2>$null
 foreach ($line in $sessions) {
     if ($line -notmatch '\bDisc\b') { continue }
@@ -647,7 +671,7 @@ foreach ($line in $sessions) {
 		log.Printf("session-ended %s: marshal runCommand body: %v", host, err)
 		return
 	}
-	status, respBody, err := s.armRequestWithBody("POST", vmBase(hs.ref)+"/runCommand?api-version="+armAPIVersion, body)
+	status, respBody, hdr, err := s.armRequestWithBody("POST", vmBase(hs.ref)+"/runCommand?api-version="+armAPIVersion, body)
 	if err != nil {
 		log.Printf("session-ended %s: runCommand request failed: %v", host, err)
 		return
@@ -657,6 +681,39 @@ foreach ($line in $sessions) {
 		return
 	}
 	log.Printf("session-ended %s: stale RDP session cleanup issued", host)
+	s.waitForAsyncOperation(hdr.Get("Azure-AsyncOperation"), host)
+}
+
+// cleanupMaxWait caps how long /wake holds a reconnecting Membrane while the
+// previous session's logoff runs. runCommand usually completes in ~10 s.
+const cleanupMaxWait = 45 * time.Second
+
+// waitForAsyncOperation polls an ARM async operation (the Azure-AsyncOperation
+// URL from runCommand's 202) until it leaves InProgress, or the cleanup
+// deadline passes. Only used to know when /wake may say "running" again.
+func (s *server) waitForAsyncOperation(opURL, host string) {
+	if opURL == "" {
+		return
+	}
+	deadline := time.Now().Add(cleanupMaxWait)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		status, body, err := s.armRequest("GET", opURL)
+		if err != nil || status != http.StatusOK {
+			continue
+		}
+		var op struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &op) != nil {
+			continue
+		}
+		if op.Status != "InProgress" && op.Status != "" {
+			log.Printf("session-ended %s: stale RDP session cleanup %s", host, op.Status)
+			return
+		}
+	}
+	log.Printf("session-ended %s: stale RDP session cleanup still running after %s; releasing /wake", host, cleanupMaxWait)
 }
 
 // vmState returns the VM's PowerState suffix: running, starting, stopping,
