@@ -16,8 +16,8 @@
 # to be run by hand, once, on each already-provisioned device. Safe to
 # re-run (idempotent).
 #
-# Usage — SSH in as 'slime' (Remote Support toggle, or the existing
-# rescue-enable-ssh.sh persistent setup), then:
+# Usage — SSH in as 'slime' (Remote Support toggle) or 'slime-rescue' (the
+# rescue-enable-ssh.sh setup from Rescue mode), then:
 #   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mulai/slimeos/main/membrane/tools/retrofit-recovery-account.sh)"
 set -euo pipefail
 

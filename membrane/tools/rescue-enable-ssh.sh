@@ -9,7 +9,7 @@
 #
 # FALLBACK ONLY as of the Settings panel's Support tab (see
 # membrane/session/support.sh / remote-support-toggle.sh): a working kiosk
-# can now enable the exact same access live, from the gear icon, with no USB
+# can now enable the same access live, from the gear icon, with no USB
 # stick and a fresh password shown on screen instead of one typed here by
 # hand. Reach for THIS script only when the kiosk itself is unreachable
 # (cage/cog crashed, black screen, etc) and Rescue mode is the only way in.
@@ -17,17 +17,20 @@
 # Usage — boot the installer USB → Advanced options → Rescue mode → pick the
 # root partition → "Execute a shell" (you are root; no sudo). Then:
 #
-#   passwd slime      # pick a password; SSH uses it
 #   rm -f /etc/resolv.conf; echo "nameserver 1.1.1.1" > /etc/resolv.conf
 #   curl -fsSL https://raw.githubusercontent.com/mulai/slimeos/main/membrane/tools/rescue-enable-ssh.sh | bash
+#   passwd slime-rescue      # pick a password; SSH uses it
 #
 # then exit the shell and reboot without the USB. Everything below takes
 # effect on that next real boot:
 #   * openssh-server installed
 #   * ssh.service enabled via a direct symlink (a rescue chroot has no live
 #     systemd to `enable --now` with — see the 2026-07-12 bring-up notes)
-#   * the 'slime' account unlocked (belt-and-braces on top of `passwd`
-#     above, which already drops any lock left by a previous boot's reset)
+#   * a dedicated 'slime-rescue' account (sudo). NOT 'slime': Remote Support
+#     rotates that account's password on every "on" and locks it on every
+#     "off" and every boot, and it must keep doing that on this device too,
+#     or the password shown on the kiosk would stay valid forever.
+#     remote-support-toggle.sh never changes this account's password.
 #   * /etc/slimeos/rescue-ssh-enabled dropped as a marker. Two OTA-delivered
 #     scripts read it, not this one, because this chroot can't run ufw or
 #     touch a live systemd (see above):
@@ -36,21 +39,19 @@
 #         marker is present, instead of leaving that port closed. The LAN
 #         still sees nothing — ufw's default deny incoming stands; only
 #         Brain-hub-side WireGuard peers (10.10.0.0/24) can reach sshd.
-#       - remote-support-toggle.sh (slimeos-remote-support-reset.service,
-#         every boot, forces Remote Support off) leaves the account and
-#         ssh.service alone when the marker is present, instead of locking
-#         the account and stopping sshd the way it normally does.
+#       - remote-support-toggle.sh (`off`, every boot) keeps ssh.service
+#         and that rule up when the marker is present. It still locks
+#         'slime' either way.
 #     Before 0.3.32 the rule lived in a per-device copy of
 #     /etc/slimeos/firewall-setup.sh that this script sed-edited directly;
 #     that file no longer exists (firewall-setup.sh is OTA-delivered straight
-#     to /opt/slimeos and reset ufw on every boot before it could be found
-#     and edited here), so the marker replaces the sed edit.
-#     To revoke this access later: as root over the same durable SSH session,
-#     `rm /etc/slimeos/rescue-ssh-enabled`, then either reboot or toggle
-#     Remote Support off once from the kiosk's Settings panel — either one
-#     runs remote-support-toggle.sh off with nothing left to skip, which
-#     locks the account, stops sshd and drops the firewall rule for real.
+#     to /opt/slimeos), so the marker replaces the sed edit.
+#     To revoke this access later: as root over the same SSH session,
+#     `rm /etc/slimeos/rescue-ssh-enabled`, then reboot. The boot-time
+#     `off` then stops sshd, drops the rule and locks 'slime-rescue'.
 set -euo pipefail
+
+RESCUE_USER="slime-rescue"
 
 [[ $EUID -eq 0 ]] || { echo "Run as root (you already are in a rescue chroot — don't use sudo)" >&2; exit 1; }
 
@@ -68,24 +69,22 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
 ln -sf /lib/systemd/system/ssh.service \
     /etc/systemd/system/multi-user.target.wants/ssh.service
 
+# Re-running on a device that already has the account is fine: `passwd`
+# afterwards replaces the hash, which also clears a lock left by a revoke.
+id "$RESCUE_USER" &>/dev/null || useradd -m -s /bin/bash -G sudo "$RESCUE_USER"
+
 # Marker for firewall-setup.sh and remote-support-toggle.sh (both
 # OTA-delivered, both re-read on every boot) -- see the header above for why
-# this script can't touch ufw or a live systemd itself, and can't edit a
-# per-device firewall-setup.sh copy the way it used to before 0.3.32.
+# this script can't touch ufw or a live systemd itself.
 mkdir -p /etc/slimeos
 touch /etc/slimeos/rescue-ssh-enabled
 
-# Belt-and-braces on top of `passwd` above, which already clears any lock
-# left by a previous boot's Remote Support reset when it sets the new hash.
-usermod -U slime 2>/dev/null || true
-
 echo ""
 echo "  ✓ SSH enabled for the next boot, and every boot after that"
-echo "    (WireGuard peers only, port 22)"
-echo "  ✓ Make sure you've set a password:  passwd slime"
+echo "    (WireGuard peers only, port 22, account '$RESCUE_USER')"
 echo ""
-echo "  Now: exit this shell, remove the USB, and reboot normally."
-echo "  Reach it from the Brain hub side, e.g.:  ssh slime@<this-device's-wg-ip>"
-echo "  To revoke later: rm /etc/slimeos/rescue-ssh-enabled, then reboot or"
-echo "  toggle Remote Support off once from the kiosk's Settings panel."
+echo "  Now set its password:  passwd $RESCUE_USER"
+echo "  Then: exit this shell, remove the USB, and reboot normally."
+echo "  Reach it from the Brain hub side, e.g.:  ssh $RESCUE_USER@<this-device's-wg-ip>"
+echo "  To revoke later: rm /etc/slimeos/rescue-ssh-enabled, then reboot."
 echo ""
