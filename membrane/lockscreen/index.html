@@ -691,8 +691,11 @@
      headings was taller than a 1024x600 screen and had to be scrolled. */
   .settings-shell{display:flex;flex:1;min-height:0;}
   .settings-sidebar{width:184px;flex-shrink:0;border-right:1px solid rgba(255,255,255,0.08);padding:16px 12px 20px;overflow-y:auto;}
-  .settings-main{flex:1;min-width:0;display:flex;flex-direction:column;}
-  .settings-subtabs{display:flex;gap:2px;padding:10px 16px 0;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;overflow-x:auto;}
+  /* The top tabs live inside .settings-body as a sticky header, not in a
+     flex column around it: WebKit (cog) didn't size a scroll area nested
+     in a stretched flex column, so a tall page (Camera) was cut off by the
+     panel instead of scrolling. */
+  .settings-subtabs{position:sticky;top:-6px;z-index:2;display:flex;gap:2px;margin:-6px -8px 0;padding:10px 16px 0;background:var(--surface);border-bottom:1px solid rgba(255,255,255,0.08);overflow-x:auto;}
   .settings-subtab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--text-muted);font-family:var(--font-display);font-weight:600;font-size:13px;padding:8px 12px 10px;white-space:nowrap;}
   .settings-subtab:hover{color:#C9D3DF;}
   .settings-subtab.active{color:var(--mint);border-bottom-color:var(--mint);}
@@ -1164,8 +1167,7 @@
           '</div>' +
           (showNav
             ? '<div class="settings-shell"><div class="settings-sidebar">' + navHtml + '</div>' +
-                '<div class="settings-main"><div class="settings-subtabs">' + renderSettingsSubtabs(activeTab) + '</div>' +
-                '<div class="settings-body">' + innerHtml + '</div></div></div>'
+                '<div class="settings-body"><div class="settings-subtabs">' + renderSettingsSubtabs(activeTab) + '</div>' + innerHtml + '</div></div>'
             : '<div class="settings-body">' + innerHtml + '</div>') +
         '</div>' +
       '</div>'
@@ -1279,6 +1281,7 @@
   // sidebar/header DOM (and their already-bound listeners) untouched. A
   // full rebuild happens only when the panel opens or its chrome changes.
   var lastSettingsSig = null;
+  var lastSettingsTab = null;
 
   function renderImpl(){
     var state = current.state, data = current.data || {};
@@ -1350,24 +1353,27 @@
         // switch the sidebar DOM is right as-is bar the highlight, so move
         // the .active class to the category we're now in, and rebuild the
         // top tabs (the category may have changed).
-        body.innerHTML = html;
         if (showNav){
           var activeTab = settingsTabForState(state);
           var activeGroup = settingsGroupFor(activeTab).group;
+          body.innerHTML = '<div class="settings-subtabs">' + renderSettingsSubtabs(activeTab) + '</div>' + html;
+          bindSettingsTabButtons(body.querySelectorAll('.settings-subtab'));
           Array.prototype.forEach.call(screenRoot.querySelectorAll('.settings-tab'), function(btn){
             btn.classList.toggle('active', btn.getAttribute('data-group') === activeGroup);
           });
-          var subtabs = screenRoot.querySelector('.settings-subtabs');
-          if (subtabs){
-            subtabs.innerHTML = renderSettingsSubtabs(activeTab);
-            bindSettingsTabButtons(subtabs.querySelectorAll('.settings-subtab'));
-          }
+          // A new page starts at the top; a re-emit of the same page (a
+          // Display toggle, feedback sending -> sent) keeps its scroll.
+          if (activeTab !== lastSettingsTab) body.scrollTop = 0;
+          lastSettingsTab = activeTab;
+        } else {
+          body.innerHTML = html;
         }
         bindScreen(state, data);
         autofocus(state);
         return; // render() still runs renderUpdateIcon() after this
       }
       lastSettingsSig = sig;
+      lastSettingsTab = settingsTabForState(state);
       html = renderSettingsShell(state, html);
     } else {
       lastSettingsSig = null;
