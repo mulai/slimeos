@@ -674,8 +674,14 @@
   .modal-card{width:100%;max-width:360px;background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:28px;}
 
   /* -------- settings panel (gear icon) -------- */
+  /* Fixed height, not max-height (github.com/mulai/slimeos#29): a
+     content-sized panel visibly resized and re-centred every time you
+     switched between a short page and a tall one (e.g. Network -> Camera),
+     which read as janky. Every page now sits inside a constant-size frame
+     and .settings-body's own overflow-y:auto (see below) handles a page
+     taller than the frame, same as it already did for Camera under #22. */
   .settings-panel{
-    width:100%;max-width:840px;max-height:min(680px,86vh);
+    width:100%;max-width:840px;height:min(680px,86vh);
     background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:20px;
     display:flex;flex-direction:column;overflow:hidden;
     box-shadow:0 30px 60px -20px rgba(0,0,0,0.55);
