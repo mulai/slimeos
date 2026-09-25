@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.45"
+SLIMEOS_VERSION="0.3.46"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -427,7 +427,9 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/feedback.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/update.sh" \
      -o "$INSTALL_DIR/update.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/firewall-setup.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh"
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/wg-install-helper.sh" \
+     -o "$INSTALL_DIR/wg-install-helper.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/firewall-setup.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh" "$INSTALL_DIR/wg-install-helper.sh"
 
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --
@@ -523,35 +525,20 @@ polkit.addRule(function(action, subject) {
 POLKIT
 ok "Power off/restart enabled for the kiosk UI"
 
-# ── 3d. Polkit rule: WireGuard pairing from the kiosk UI ─────────────────────
-# pair.sh's do_pair() calls `systemctl enable --now wg-quick@wg0` as
-# $SESSION_USER after fetching a config via the enrollment endpoint. Same
-# missing-active-session root cause as the two rules above. Two separate
-# systemd action IDs are needed, not one: manage-units covers start/stop,
-# manage-unit-files covers enable/disable (the [Install] symlink) --
-# granting only the first would bring the tunnel up now but silently fail
-# to make it survive a reboot.
-#
-# manage-unit-files does NOT reliably expose a per-unit action.lookup("unit")
-# detail the way manage-units does (confirmed live: a rule requiring it never
-# matched, `systemctl enable` fell through to polkit's default deny with
-# "Interactive authentication required" -- no interactive agent exists in
-# this headless kiosk, so it just failed). Scoped to $SESSION_USER only for
-# that action, not per-unit; manage-units keeps the tighter per-unit scope
-# since that one does support it.
-cat > /etc/polkit-1/rules.d/52-slimeos-wireguard.rules <<POLKIT
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "wg-quick@wg0.service" &&
-        subject.user == "${SESSION_USER}") {
-        return polkit.Result.YES;
-    }
-    if (action.id == "org.freedesktop.systemd1.manage-unit-files" &&
-        subject.user == "${SESSION_USER}") {
-        return polkit.Result.YES;
-    }
-});
-POLKIT
+# ── 3d. Sudoers grant: WireGuard pairing from the kiosk UI ─────────────────
+# pair.sh's do_pair() pipes the fetched config into wg-install-helper.sh
+# (zero args, enforced by the trailing ""), which sanitizes it, writes a
+# root-owned /etc/wireguard/wg0.conf and runs `systemctl enable --now
+# wg-quick@wg0`. Until 0.3.46 the session user owned /etc/wireguard and a
+# polkit rule let it start/enable wg-quick@wg0 (and enable any unit file),
+# which was a path to root (#48). remote-support-toggle.sh's
+# migrate_wireguard_root() moves existing devices to this setup.
+cat > /etc/sudoers.d/53-slimeos-wireguard <<SUDOERS
+${SESSION_USER} ALL=(root) NOPASSWD: ${INSTALL_DIR}/wg-install-helper.sh ""
+SUDOERS
+chmod 440 /etc/sudoers.d/53-slimeos-wireguard
+visudo -cf /etc/sudoers.d/53-slimeos-wireguard || die "generated sudoers file failed validation"
+rm -f /etc/polkit-1/rules.d/52-slimeos-wireguard.rules
 ok "WireGuard pairing enabled for the kiosk UI"
 
 # ── 3e. Polkit rule: USB storage automount (udiskie) for the Brain's /drive redirect ──
@@ -749,15 +736,11 @@ fi
 # exactly these entries, nothing else.
 chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/brains.json" "$CONFIG_DIR/brains" "$CONFIG_DIR/crash-reporting-consent" "$CONFIG_DIR/slime-id-session" "$CONFIG_DIR/recovery-pin-shown"
 
-# pair.sh's do_pair() writes /etc/wireguard/wg0.conf directly as
-# $SESSION_USER once it fetches a config from the enrollment endpoint --
-# same reasoning as the brains.json/brains chown above, this is a plain
-# filesystem write, not a D-Bus action, so no polkit rule covers it.
-# wireguard-tools (already in the package list) creates /etc/wireguard on
-# install; this only needs to hand it to the session user.
+# /etc/wireguard stays root-owned (wg-install-helper.sh writes it, see 3d);
+# 0755 only so coordinator.sh's have_wg_tunnel can see wg0.conf exists.
 mkdir -p /etc/wireguard
-chown "$SESSION_USER:$SESSION_USER" /etc/wireguard
-chmod 700 /etc/wireguard
+chown root:root /etc/wireguard
+chmod 755 /etc/wireguard
 
 # ── 6. Systemd service: slimeos-session ───────────────────────────────────────
 # WantedBy=multi-user.target, not graphical.target: with no display manager

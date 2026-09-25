@@ -125,17 +125,14 @@ pair_sanitize_config() {
     printf '[Interface]\n%s%s' "$iface" "$peers"
 }
 
+# Root does the install (#48): /etc/wireguard is root-owned and the session
+# user may only run wg-install-helper.sh, which sanitizes the config again
+# with pair_sanitize_config() before writing it and starting wg-quick@wg0.
+# The local check just gives a clear error without a sudo round trip.
 pair_install_config() {
-    local config="$1" tmp
+    local config="$1"
     config=$(pair_sanitize_config "$config") || { echo "$config"; return 1; }
-    tmp=$(mktemp /etc/wireguard/wg0.conf.XXXXXX)
-    printf '%s\n' "$config" > "$tmp"
-    chmod 600 "$tmp"
-    mv "$tmp" /etc/wireguard/wg0.conf
-    # Two separate polkit-authorized systemd actions under the hood (start +
-    # enable) -- see install.sh's 52-slimeos-wireguard.rules comment for why
-    # both are needed, not just one.
-    systemctl enable --now wg-quick@wg0
+    printf '%s\n' "$config" | sudo -n /opt/slimeos/wg-install-helper.sh
 }
 
 do_pair() {

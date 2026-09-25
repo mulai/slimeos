@@ -30,6 +30,7 @@ display-settings.sh:display-settings.sh
 feedback.sh:feedback.sh
 update.sh:update.sh
 apply-update-helper.sh:apply-update-helper.sh
+wg-install-helper.sh:wg-install-helper.sh
 index.html:lockscreen/index.html
 space-grotesk.woff2:lockscreen/fonts/space-grotesk.woff2
 plus-jakarta-sans.woff2:lockscreen/fonts/plus-jakarta-sans.woff2

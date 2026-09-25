@@ -83,6 +83,35 @@ SERVICE
     systemctl daemon-reload || true
 }
 
+# #48 migration (0.3.46), same reasoning as migrate_firewall_unit: this is the
+# OTA-delivered root script that runs at every boot. Takes /etc/wireguard back
+# from the session user, grants it wg-install-helper.sh instead, and only then
+# drops the polkit rule that let it write/enable wg-quick@wg0 (and enable any
+# other unit file). Idempotent; cheap enough to run every boot.
+WG_HELPER="$INSTALL_DIR/wg-install-helper.sh"
+WG_SUDOERS="/etc/sudoers.d/53-slimeos-wireguard"
+WG_POLKIT_RULE="/etc/polkit-1/rules.d/52-slimeos-wireguard.rules"
+migrate_wireguard_root() {
+    [[ -x "$WG_HELPER" ]] || return 0
+    if [[ ! -f "$WG_SUDOERS" ]]; then
+        local tmp
+        tmp=$(mktemp)
+        printf '%s ALL=(root) NOPASSWD: %s ""\n' "$SESSION_USER" "$WG_HELPER" > "$tmp"
+        visudo -cf "$tmp" >/dev/null || { rm -f "$tmp"; return 1; }
+        install -m 0440 -o root -g root "$tmp" "$WG_SUDOERS"
+        rm -f "$tmp"
+    fi
+    mkdir -p /etc/wireguard
+    chown root:root /etc/wireguard
+    chmod 755 /etc/wireguard
+    rm -f /etc/wireguard/wg0.conf.??????
+    if [[ -f /etc/wireguard/wg0.conf ]]; then
+        chown root:root /etc/wireguard/wg0.conf
+        chmod 600 /etc/wireguard/wg0.conf
+    fi
+    rm -f "$WG_POLKIT_RULE"
+}
+
 case "$1" in
     on)
         # Repair first: on a half-loaded ufw, `ufw allow` below only writes
@@ -131,6 +160,7 @@ case "$1" in
         # Never let the migration or repair fail `off` itself: locking the
         # account and stopping ssh below matter more.
         migrate_firewall_unit || echo "firewall unit migration failed" >&2
+        migrate_wireguard_root || echo "wireguard root migration failed" >&2
         if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
 
         rm -f "$ACTIVE_FLAG"
