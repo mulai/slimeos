@@ -1015,6 +1015,7 @@ while true; do
             # it sets SETTINGS_NEXT_TAB before returning. Only the latter
             # case loops back around; anything else falls through to the
             # normal post-flow resync below, same as every other case here.
+            log "Settings: opening"
             settings_tab="internet"
             while true; do
                 SETTINGS_NEXT_TAB=""

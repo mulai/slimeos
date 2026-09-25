@@ -110,8 +110,23 @@ active_connection_type() {
 # The active connection's *name* (con-name) is "slimeos-wifi-<ssid>" (see
 # nm_connect above), not the bare SSID -- query the real broadcast SSID
 # directly instead of stripping our own naming convention back apart.
+#
+# `nmcli ... dev wifi` (the AP list, even just to filter the active one) is
+# NOT a passive read: NetworkManager treats it as a scan request and blocks
+# for a fresh one if its cached AP list looks stale, up to several seconds
+# on some Wi-Fi chipsets (github.com/mulai/slimeos#34) -- unlike the
+# `nmcli device wifi rescan` this file already avoids in "settings" mode
+# (see the scan_now comment below), THIS call runs unconditionally, in
+# both modes, so it alone could reintroduce #13's whole symptom. Reading
+# the active connection's own ssid property instead touches only
+# NetworkManager's already-known state, never the radio.
 active_wifi_ssid() {
-    nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}'
+    local dev conn
+    dev=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="wifi"{print $1; exit}')
+    [[ -n "$dev" ]] || return 0
+    conn=$(nmcli -t -f GENERAL.CONNECTION device show "$dev" 2>/dev/null | cut -d: -f2-)
+    [[ -n "$conn" && "$conn" != "--" ]] || return 0
+    nmcli -t -f 802-11-wireless.ssid connection show "$conn" 2>/dev/null | cut -d: -f2-
 }
 
 do_network_setup() {
@@ -146,6 +161,7 @@ do_network_setup() {
                 scanned="true"
                 scan_now="false"
             fi
+            [[ "$mode" == "settings" ]] && log "Network setup (settings): rendering Internet tab"
             emit_state wifiList "$(jq -nc --argjson n "$last_scan" --arg mode "$mode" --arg connType "$conn_type" --arg connSsid "$conn_ssid" --argjson scanned "$scanned" \
                 '{networks:$n, scanning:false, scanned:$scanned, mode:$mode, connectionType:$connType, connectionSsid:$connSsid, skippable:($mode=="boot")}')"
 
