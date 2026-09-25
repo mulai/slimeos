@@ -289,7 +289,7 @@ wake_brain() {
         emit_state connecting "$(jq -nc --arg n "$brain_name" \
             '{brainName:$n,stage:"Brain is up — starting the desktop…"}')"
         while (( waited < 300 )); do
-            if timeout 2 bash -c "exec 3<>/dev/tcp/${vm_host}/${vm_port}" 2>/dev/null; then
+            if timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$vm_host" "$vm_port" 2>/dev/null; then
                 return 0
             fi
             if read -t 1 -r line <&0; then

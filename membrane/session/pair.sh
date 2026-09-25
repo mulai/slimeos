@@ -55,8 +55,79 @@ pair_fetch_config() {
     echo "$config"
 }
 
+# The config comes from whatever host was typed on the pairing screen, and
+# wg-quick runs PreUp/PostUp/PreDown/PostDown (and a few other keys) as root.
+# So never install it as received (#38): parse it, allow only the keys a
+# Slime OS tunnel needs, check each value's shape, and write a fresh config
+# from the parsed fields. Prints the rebuilt config, or an error and 1.
+pair_sanitize_config() {
+    local config="$1" line section="" key value
+    local iface="" peers="" peer="" have_iface=false n_peers=0
+    local re_key='^[A-Za-z0-9+/]{43}=$'
+    local re_ip='[0-9A-Fa-f:.]{2,45}'
+    local re_cidr_list="^${re_ip}(/[0-9]{1,3})?(, *${re_ip}(/[0-9]{1,3})?)*$"
+    local re_ip_list="^${re_ip}(, *${re_ip})*$"
+    local re_endpoint='^([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\]):[0-9]{1,5}$'
+
+    _pair_end_peer() {
+        [[ "$section" == peer ]] || return 0
+        grep -q '^PublicKey = ' <<<"$peer" && grep -q '^AllowedIPs = ' <<<"$peer" \
+            || { echo "Rejected WireGuard config: a [Peer] lacks PublicKey or AllowedIPs"; return 1; }
+        peers+=$'\n[Peer]\n'"$peer"
+        peer=""
+    }
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+
+        case "${line,,}" in
+            '[interface]')
+                $have_iface && { echo "Rejected WireGuard config: more than one [Interface]"; return 1; }
+                have_iface=true; section=interface; continue ;;
+            '[peer]')
+                _pair_end_peer || return 1
+                section=peer; n_peers=$((n_peers + 1)); peer=""; continue ;;
+        esac
+
+        [[ "$line" == *=* ]] || { echo "Rejected WireGuard config: unexpected line"; return 1; }
+        key="${line%%=*}"; value="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        # provision-peer.sh writes `DNS = ` when the hub has no DNS line.
+        [[ -z "$value" ]] && continue
+
+        case "$section:${key,,}" in
+            interface:privatekey)   [[ "$value" =~ $re_key ]] && iface+="PrivateKey = $value"$'\n' ;;
+            interface:address)      [[ "$value" =~ $re_cidr_list ]] && iface+="Address = $value"$'\n' ;;
+            interface:dns)          [[ "$value" =~ $re_ip_list ]] && iface+="DNS = $value"$'\n' ;;
+            interface:mtu)          [[ "$value" =~ ^[0-9]{3,4}$ ]] && (( 10#$value >= 576 && 10#$value <= 9000 )) \
+                                        && iface+="MTU = $value"$'\n' ;;
+            peer:publickey)         [[ "$value" =~ $re_key ]] && peer+="PublicKey = $value"$'\n' ;;
+            peer:presharedkey)      [[ "$value" =~ $re_key ]] && peer+="PresharedKey = $value"$'\n' ;;
+            peer:endpoint)          [[ "$value" =~ $re_endpoint ]] && peer+="Endpoint = $value"$'\n' ;;
+            # A Slime OS tunnel only routes to Brains; never let a pairing
+            # host take over the device's whole default route.
+            peer:allowedips)        [[ "$value" =~ $re_cidr_list && ! "$value" =~ (^|[ ,])(0\.0\.0\.0|::)/0($|[ ,]) ]] \
+                                        && peer+="AllowedIPs = $value"$'\n' ;;
+            peer:persistentkeepalive) [[ "$value" =~ ^([0-9]{1,5}|off)$ ]] && peer+="PersistentKeepalive = $value"$'\n' ;;
+            *)  echo "Rejected WireGuard config: key '${key//[^A-Za-z]/}' is not allowed"; return 1 ;;
+        esac || { echo "Rejected WireGuard config: bad value for ${key//[^A-Za-z]/}"; return 1; }
+    done <<<"$config"
+    _pair_end_peer || return 1
+
+    $have_iface && grep -q '^PrivateKey = ' <<<"$iface" && grep -q '^Address = ' <<<"$iface" \
+        || { echo "Rejected WireGuard config: [Interface] lacks PrivateKey or Address"; return 1; }
+    (( n_peers >= 1 )) || { echo "Rejected WireGuard config: no [Peer]"; return 1; }
+    printf '[Interface]\n%s%s' "$iface" "$peers"
+}
+
 pair_install_config() {
     local config="$1" tmp
+    config=$(pair_sanitize_config "$config") || { echo "$config"; return 1; }
     tmp=$(mktemp /etc/wireguard/wg0.conf.XXXXXX)
     printf '%s\n' "$config" > "$tmp"
     chmod 600 "$tmp"

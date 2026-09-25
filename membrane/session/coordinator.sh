@@ -208,9 +208,22 @@ have_wg_tunnel() { [[ -f /etc/wireguard/wg0.conf ]]; }
 # any hot/polling path, so a few seconds' timeout here is fine. Exit
 # status is meant to be tested directly in an `if`/`&&` -- safe under
 # set -e (both are standard exemptions), never called bare.
+#
+# host/port come from the Add Brain form and Slime ID bookmarks, so they're
+# validated first and handed to the sub-shell as arguments, never spliced
+# into its code (#37: a host like `x$(cmd)` used to run as the session user).
 brain_reachable() {
     local host="$1" port="$2"
-    timeout 3 bash -c "echo > /dev/tcp/${host}/${port}" 2>/dev/null
+    valid_brain_endpoint "$host" "$port" || return 1
+    timeout 3 bash -c 'echo > "/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null
+}
+
+# A hostname, IPv4 or IPv6 literal, and a port 1-65535. Anything else (spaces,
+# quotes, `$`, `/`...) is rejected before it reaches a probe, a URL or jq.
+valid_brain_endpoint() {
+    local host="$1" port="$2"
+    [[ "$host" =~ ^[A-Za-z0-9.:-]{1,253}$ && "$host" != -* ]] || return 1
+    [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 ))
 }
 
 read_event() {
@@ -612,11 +625,14 @@ brain_probes_start() {
         [[ -z "$id" ]] && continue
         (
             local status="offline"
-            if brain_reachable "$host" "$port"; then
+            if ! valid_brain_endpoint "$host" "$port"; then
+                :
+            elif brain_reachable "$host" "$port"; then
                 status="online"
             elif have_wg_tunnel; then
                 local resp managed
-                resp=$(curl -fsS -m 3 "${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}/status?host=${host}" 2>/dev/null)
+                resp=$(curl -fsS -m 3 -G --data-urlencode "host=${host}" \
+                    "${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}/status" 2>/dev/null)
                 managed=$(jq -r '.managed // false' <<<"$resp" 2>/dev/null || echo false)
                 [[ "$managed" == "true" ]] && status="asleep"
             fi
@@ -898,6 +914,10 @@ while true; do
             name=$(jq -r '.name // empty' <<<"$line")
             host=$(jq -r '.host // empty' <<<"$line")
             port=$(jq -r '.port // "3389"' <<<"$line")
+            if [[ -n "$host" ]] && ! valid_brain_endpoint "$host" "$port"; then
+                log "Add Brain: rejected invalid host/port"
+                host=""
+            fi
             [[ -n "$host" ]] && add_brain "${name:-Untitled Brain}" "$host" "$port"
             show_picker_or_empty
             # Opt-in, never automatic (see brains-save.ts) -- only offered
@@ -913,7 +933,7 @@ while true; do
                 sname=$(jq -r '.name // empty' <<<"$line")
                 shost=$(jq -r '.host // empty' <<<"$line")
                 sport=$(jq -r '.port // empty' <<<"$line")
-                [[ -n "$shost" ]] && save_remote_brain "${sname:-Untitled Brain}" "$shost" "$sport"
+                valid_brain_endpoint "$shost" "${sport:-3389}" && save_remote_brain "${sname:-Untitled Brain}" "$shost" "$sport"
             fi
             ;;
         removeBrain)
@@ -996,6 +1016,9 @@ while true; do
 
                 reachable=false
                 wake_cancelled=false
+                # A bookmark is server data: never let a malformed one reach
+                # add_brain() or the pairing hint (#37).
+                valid_brain_endpoint "$rhost" "$rport" || rhost=""
                 if have_wg_tunnel && [[ -n "$rhost" ]]; then
                     if brain_reachable "$rhost" "$rport"; then
                         reachable=true
