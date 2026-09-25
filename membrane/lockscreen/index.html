@@ -626,7 +626,11 @@
   .brain-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
   .brain-id{display:flex;align-items:center;gap:12px;min-width:0;}
   .brain-avatar{width:36px;height:36px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;font-size:15px;color:#04221f;}
-  .brain-name{font-family:var(--font-display);font-weight:600;font-size:15.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .brain-name{font-family:var(--font-display);font-weight:600;font-size:15.5px;color:var(--text);white-space:nowrap;display:flex;align-items:center;min-width:0;}
+  /* Only the name truncates; the status/Slime ID badge after it always stays
+     visible (it used to vanish into the ellipsis on long names). */
+  .brain-name-text{overflow:hidden;text-overflow:ellipsis;min-width:0;}
+  .brain-name .brain-status-badge,.brain-name .brain-bookmark-badge{flex-shrink:0;}
   .brain-host{font-family:var(--font-mono);font-size:11px;color:#7d8a9a;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .brain-remove{background:none;border:none;color:var(--text-dim);font-size:16px;line-height:1;padding:4px 6px;border-radius:6px;}
   .brain-remove:hover{color:var(--error);background:rgba(255,107,107,0.08);}
@@ -1428,7 +1432,7 @@
             '<div class="brain-id">' +
               '<span class="brain-avatar" style="background:' + accent + ';">' + escapeHtml(initial) + '</span>' +
               '<div style="min-width:0;">' +
-                '<div class="brain-name">' + escapeHtml(b.name) + (isRemote ? ' <span class="brain-bookmark-badge">Slime ID</span>' : statusBadge) + '</div>' +
+                '<div class="brain-name"><span class="brain-name-text">' + escapeHtml(b.name) + '</span>' + (isRemote ? ' <span class="brain-bookmark-badge">Slime ID</span>' : statusBadge) + '</div>' +
                 '<div class="brain-host">' + escapeHtml(b.host) + '</div>' +
               '</div>' +
             '</div>' +
@@ -1609,7 +1613,7 @@
             '<div class="brain-id">' +
               '<span class="brain-avatar" style="background:' + badgeColor + ';font-size:14px;">' + badgeGlyph + '</span>' +
               '<div style="min-width:0;">' +
-                '<div class="brain-name">' + escapeHtml(n.ssid) + '</div>' +
+                '<div class="brain-name"><span class="brain-name-text">' + escapeHtml(n.ssid) + '</span></div>' +
                 '<div class="brain-host">' + (n.secured ? 'Secured' : 'Open') + (n.signal != null ? (' &middot; signal ' + escapeHtml(n.signal) + '%') : '') + '</div>' +
               '</div>' +
             '</div>' +
