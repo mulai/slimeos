@@ -33,7 +33,9 @@
 #       +slimeos7 FreeRDP build (see membrane/freerdp/udp-patches/README.md);
 #       on an older build the option is shown as unavailable. connect.sh
 #       reads it (next connect) and sets SLIMEOS_UDP_NATIVE for xfreerdp3.
-#       Beta, so off by default.
+#       On by default since 2026-09-25, after a positive AMD-box daily-use
+#       trial; still falls back to Standard automatically if it stops
+#       working mid-session.
 #
 # Why the prefs file lives in $CRED_DIR and not next to /etc/slimeos/config:
 # config is root:$SESSION_USER 0640 (admin-writable only), and the session
@@ -144,7 +146,7 @@ do_display_settings() {
         grep -q "\"$audio\"" <<<"$outputs_json" || audio="auto"
         brain_scale="${RDP_SCALE_FACTOR:-100}"
         dp_in_list "$brain_scale" "${DP_BRAIN_SCALES[@]}" || brain_scale="100"
-        local udp="${RDP_UDP:-off}" udp_supported=false
+        local udp="${RDP_UDP:-on}" udp_supported=false
         [[ "$udp" == "on" ]] || udp="off"
         dp_udp_supported && udp_supported=true
 
@@ -170,7 +172,7 @@ do_display_settings() {
                 want_audio=$(jq -r '.audioOutput // empty' <<<"$line")
                 want_brain_scale=$(jq -r '.brainScale // empty' <<<"$line")
                 # Absent on a page that predates the UDP row: keep the saved value.
-                want_udp=$(jq -r --arg cur "${RDP_UDP:-off}" '.udp // $cur' <<<"$line")
+                want_udp=$(jq -r --arg cur "${RDP_UDP:-on}" '.udp // $cur' <<<"$line")
 
                 if ! dp_in_list "$want_scale" "${DP_SCALES[@]}"; then
                     log "displaySet rejected: uiScale '$want_scale'"
