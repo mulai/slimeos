@@ -583,9 +583,30 @@ refresh_remote_brains() {
 # apply to this passive display query, and calling /wake here would
 # start (and bill for) every idle managed Brain on every picker refresh.
 refresh_brain_status() {
-    local tmpdir
-    tmpdir=$(mktemp -d)
+    brain_probes_start
+    brain_probes_collect
+}
 
+# refresh_brain_status() in two halves, so the probes can run while the
+# lock screen waits for the PIN instead of after it. One offline Brain
+# holds the batch for the full 3s timeout, which used to hold the picker
+# back that long after every unlock at boot and after a session; "Lock
+# now" never probed, so it felt twice as fast. With "remote", the Slime ID
+# bookmark list (refresh_remote_brains) is fetched in the same batch.
+BRAIN_PROBE_DIR=""
+BRAIN_PROBE_PIDS=()
+BRAIN_PROBE_STARTED=0
+brain_probes_start() {
+    brain_probes_collect
+    BRAIN_PROBE_DIR=$(mktemp -d)
+    BRAIN_PROBE_STARTED=$(date +%s)
+    if [[ "${1:-}" == "remote" ]]; then
+        fetch_remote_brains > "$BRAIN_PROBE_DIR/remote" </dev/null &
+        BRAIN_PROBE_PIDS+=("$!")
+    fi
+
+    # </dev/null: the jobs may run alongside the lock screen's own reads
+    # of the event stream, and must never take a line from it.
     local id host port
     while IFS=$'\t' read -r id host port; do
         [[ -z "$id" ]] && continue
@@ -599,13 +620,44 @@ refresh_brain_status() {
                 managed=$(jq -r '.managed // false' <<<"$resp" 2>/dev/null || echo false)
                 [[ "$managed" == "true" ]] && status="asleep"
             fi
-            jq -nc --arg id "$id" --arg status "$status" '{($id):$status}' > "$tmpdir/$id.json"
-        ) &
+            jq -nc --arg id "$id" --arg status "$status" '{($id):$status}' > "$BRAIN_PROBE_DIR/$id.json"
+        ) </dev/null &
+        BRAIN_PROBE_PIDS+=("$!")
     done < <(jq -r '.[] | [.id, .host, (.port // "3389")] | @tsv' "$BRAINS_FILE")
-    wait
+}
 
-    BRAIN_STATUS_JSON=$(jq -sc 'add // {}' "$tmpdir"/*.json 2>/dev/null || echo '{}')
-    rm -rf "$tmpdir"
+# Waits for the batch brain_probes_start() began (instant if it's done) and
+# applies it. No-op if none is pending.
+brain_probes_collect() {
+    [[ -n "$BRAIN_PROBE_DIR" ]] || return 0
+    # Never a bare `wait` (it would also wait on any unrelated job).
+    (( ${#BRAIN_PROBE_PIDS[@]} == 0 )) || wait "${BRAIN_PROBE_PIDS[@]}" 2>/dev/null || :
+    if [[ -f "$BRAIN_PROBE_DIR/remote" ]]; then
+        REMOTE_BRAINS_JSON=$(cat "$BRAIN_PROBE_DIR/remote")
+        [[ -n "$REMOTE_BRAINS_JSON" ]] || REMOTE_BRAINS_JSON='[]'
+    fi
+    BRAIN_STATUS_JSON=$(jq -sc 'add // {}' "$BRAIN_PROBE_DIR"/*.json 2>/dev/null || echo '{}')
+    rm -rf "$BRAIN_PROBE_DIR"
+    BRAIN_PROBE_DIR=""
+    BRAIN_PROBE_PIDS=()
+}
+
+# The picker after a lock screen (or a Brain session with the lock off),
+# with the batch started before it. Normally that batch finished while the
+# PIN was typed, so this shows at once. If the lock screen sat for over a
+# minute, those badges may be out of date: show them anyway, probe again,
+# and re-render only if a badge changed (every render replays the screen's
+# fade-in, so an identical one would just flicker).
+show_picker_after_probes() {
+    [[ -n "$BRAIN_PROBE_DIR" ]] || brain_probes_start "$@"
+    local started=$BRAIN_PROBE_STARTED
+    brain_probes_collect
+    send_status
+    show_picker_or_empty
+    (( $(date +%s) - started > 60 )) || return 0
+    local shown=$BRAIN_STATUS_JSON
+    refresh_brain_status
+    [[ "$BRAIN_STATUS_JSON" == "$shown" ]] || show_picker_or_empty
 }
 
 # Best-effort POST to /api/device/brains-save -- only ever called after the
@@ -799,6 +851,7 @@ while true; do
             fi
             if ! $lock_checked; then
                 lock_checked=true
+                brain_probes_start remote
                 do_lock_screen
             fi
             if ! $wg_checked; then
@@ -806,12 +859,11 @@ while true; do
                 if ! have_wg_tunnel; then
                     log "No WireGuard tunnel configured — entering pairing (boot mode)"
                     do_pair boot
+                    # A new tunnel: anything probed before it is moot.
+                    brain_probes_start remote
                 fi
             fi
-            refresh_remote_brains
-            refresh_brain_status
-            send_status
-            show_picker_or_empty
+            show_picker_after_probes remote
             # Once only, ever, per device. install.sh seeds this file with
             # literal content "unset" at install time (so crashConsent's
             # write handler is always an overwrite, never a create -- see
@@ -976,10 +1028,11 @@ while true; do
                 session_ran=true
             fi
             # Lock screen (lock.sh): locks after every Brain session ends.
-            $session_ran && do_lock_screen
-            refresh_brain_status
-            send_status
-            show_picker_or_empty
+            if $session_ran; then
+                brain_probes_start
+                do_lock_screen
+            fi
+            show_picker_after_probes
             ;;
         slimeIdStart)
             do_slime_id_login
