@@ -2056,6 +2056,18 @@
           upRel + upNotes +
           '<button class="btn-primary" id="btnChangelogUpdateNow" style="margin-top:16px;width:100%;padding:11px;box-shadow:none;">Update now</button>' +
           '<p style="margin:10px 0 0;font-size:12px;line-height:1.5;color:var(--text-faint);">Any active session will disconnect and the device will restart.</p>' +
+          // Same button id/click-target as the no-update-yet branch below,
+          // so the existing binding code (bindScreen's changelogSettings
+          // case) picks it up with no JS change -- it already only checks
+          // `if (clCheck)` before attaching. Lets a user re-check for an
+          // even newer release without applying the one already found
+          // (github.com/mulai/slimeos#35: the device could detect a
+          // release moments before GitHub's raw CDN had fully propagated
+          // every file for it, "Update now" would then correctly refuse to
+          // apply, and there was previously no way back to a fresh check
+          // short of a reinstall or waiting for the 6-hourly background
+          // tick).
+          '<button class="btn-secondary" id="btnChangelogCheck" style="margin-top:10px;width:100%;">Check again</button>' +
         '</div>';
     } else if (data.checkState === 'checking'){
       updatesBlock =
