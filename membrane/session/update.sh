@@ -7,24 +7,19 @@
 #   {"type":"_updateTick"}  bridge-synthesized (see main.go's update ticker) -> do_update_check
 #   {"type":"applyUpdate"}  see index.html's 'slime:apply-update'            -> do_apply_update
 #
-# v1 explicitly cannot update ITSELF: this file, apply-update-helper.sh, the
-# /etc/sudoers.d/51-slimeos-update grant, and the update-staging/
-# update-previous directories are all install.sh-provisioned artifacts,
-# absent on any device that hasn't been (re)installed since this feature
-# shipped. A device already in the field before this ships can only pick it
-# up via a manual reinstall -- there's no "next tick retries" story for that
-# gap, unlike a bad checksum below, which genuinely is self-healing.
+# Since 0.3.45 this file and apply-update-helper.sh ship like any other
+# bundle file (manifest + dest-map.txt): the helper already on a device
+# installs the next one. Only the /etc/sudoers.d/51-slimeos-update grant is
+# still install.sh-only.
 #
 # The manifest versions the WHOLE bundle as ONE number (Tommy's explicit
-# design call) -- excludes only this file + apply-update-helper.sh
-# themselves (the bootstrap problem above). hardware-profiles/*.sh +
+# design call). hardware-profiles/*.sh +
 # detect.sh ARE ordinary bundle entries (since v0.3.14): apply-update-helper.sh
 # re-runs detect.sh itself, right after staging, whenever one of those files
 # changed -- see its own comment near hw_profile_changed.
 
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 MANIFEST_URL="$REPO_BASE/membrane/update/manifest.json"
-UPDATE_STAGING_DIR="$CONFIG_DIR/update-staging"
 
 emit_update_failed() { jq -nc --arg m "$1" '{type:"updateFailed", data:{message:$m}}'; }
 
@@ -95,12 +90,11 @@ do_update_check() {
 
 # Re-fetches the manifest fresh (a TOCTOU guard against `main` moving since
 # the last do_update_check) rather than trusting update_available_version's
-# cached value, downloads + sha256-verifies every listed file plus the
-# arch-matched bridge binary into $UPDATE_STAGING_DIR, then hands off to the
-# privileged root helper. Any failure aborts cleanly, leaves the current
-# install untouched, and reports 'updateFailed' -- the current version
-# marker is only ever advanced by the helper itself, as its last step,
-# after every file lands, so a partial run here never corrupts anything.
+# cached value, then hands off to the privileged root helper, which
+# downloads and sha256-verifies every file itself into a root-only
+# directory and installs them (#39: this side used to stage and verify, and
+# the helper trusted a directory this user could write). Any failure leaves
+# the current install untouched and reports 'updateFailed'.
 do_apply_update() {
     local target_version="$update_available_version"
     if [[ -z "$target_version" ]]; then
@@ -126,73 +120,34 @@ do_apply_update() {
         return 0
     fi
 
-    # Clear CONTENTS only, never rm -rf the directory itself: $CONFIG_DIR is
-    # root-owned, so if this ever removed the directory, the unprivileged
-    # slime user could never mkdir it back (found live on the UTM VM --
-    # install.sh's own chown only ever runs once, at install time). mkdir -p
-    # + chmod stay as a harmless no-op in the normal case and a defensive
-    # self-heal if the directory is somehow already gone.
-    mkdir -p "$UPDATE_STAGING_DIR"
-    chmod 700 "$UPDATE_STAGING_DIR"
-    rm -rf "${UPDATE_STAGING_DIR:?}"/* 2>/dev/null || true
-    # Read by apply-update-helper.sh as the trusted new version marker --
-    # already confirmed equal to $remote_version above, and this file is
-    # never executed, only cat'd into $CONFIG_DIR/version, so no checksum
-    # is needed for it the way every other staged file gets one.
-    echo "$remote_version" > "$UPDATE_STAGING_DIR/version"
-    # Same reasoning as version above -- read by changelog.sh's do_changelog()
-    # for the Settings panel's Changelog tab, never executed. Empty manifest
-    # field degrades to an empty file, which changelog.sh's own read falls
-    # back from gracefully (see its header comment).
-    jq -r '.changelog // ""' <<<"$manifest" 2>/dev/null > "$UPDATE_STAGING_DIR/changelog" || true
-    jq -r '.released_at // ""' <<<"$manifest" 2>/dev/null > "$UPDATE_STAGING_DIR/changelog-released-at" || true
+    # The helper's output goes to the log, not to stdout (that's the UI's
+    # event stream). Its "verified" line means every file checked out and
+    # it's installing, then it reboots -- that's when the overlay shows.
+    log "Handing off to the privileged apply helper (downloads, verifies, installs, reboots)"
+    local rc
+    set +e
+    sudo -n /opt/slimeos/apply-update-helper.sh 2>&1 | while IFS= read -r line; do
+        log "$line"
+        [[ "$line" == "[apply-update] verified"* ]] && jq -nc '{type:"updateApplying"}'
+    done
+    rc=${PIPESTATUS[0]}
+    set -e
 
-    local staged_ok=true src sha256 base dest
-    while IFS=$'\t' read -r src sha256; do
-        [[ -z "$src" ]] && continue
-        base=$(basename "$src")
-        dest="$UPDATE_STAGING_DIR/$base"
-        if ! curl -fsS -m 30 "$REPO_BASE/membrane/$src" -o "$dest" 2>/dev/null; then
-            log "Apply update: download failed for $src"
-            staged_ok=false
-            break
-        fi
-        if ! echo "$sha256  $dest" | sha256sum -c - >/dev/null 2>&1; then
-            log "Apply update: checksum mismatch for $src"
-            staged_ok=false
-            break
-        fi
-    done < <(jq -r '.files[] | [.src, .sha256] | @tsv' <<<"$manifest" 2>/dev/null)
-
-    if $staged_ok; then
-        local bridge_arch bridge_src bridge_sha bridge_dest
-        bridge_arch=$(dpkg --print-architecture)
-        bridge_src=$(jq -r --arg a "$bridge_arch" '.bridge[$a].src // empty' <<<"$manifest" 2>/dev/null || echo "")
-        bridge_sha=$(jq -r --arg a "$bridge_arch" '.bridge[$a].sha256 // empty' <<<"$manifest" 2>/dev/null || echo "")
-        bridge_dest="$UPDATE_STAGING_DIR/slimeos-bridge"
-        if [[ -z "$bridge_src" ]]; then
-            log "Apply update: no bridge binary listed for arch $bridge_arch"
-            staged_ok=false
-        elif ! curl -fsS -m 30 "$REPO_BASE/membrane/$bridge_src" -o "$bridge_dest" 2>/dev/null; then
-            log "Apply update: bridge binary download failed"
-            staged_ok=false
-        elif ! echo "$bridge_sha  $bridge_dest" | sha256sum -c - >/dev/null 2>&1; then
-            log "Apply update: bridge binary checksum mismatch"
-            staged_ok=false
-        fi
-    fi
-
-    if ! $staged_ok; then
-        log "Apply update: aborting, leaving the current install untouched (will retry on the next check)"
-        rm -rf "${UPDATE_STAGING_DIR:?}"/* 2>/dev/null || true
-        emit_update_failed "Couldn't verify the update. It will be offered again later."
-        return 0
-    fi
-
-    log "Update staged and verified -- handing off to the privileged apply helper (this reboots the device)"
-    jq -nc '{type:"updateApplying"}'
-    if ! sudo -n /opt/slimeos/apply-update-helper.sh; then
-        log "ERROR: apply-update-helper.sh failed or the sudoers grant is missing -- this device likely needs a reinstall before it can auto-update"
-        emit_update_failed "This device needs a reinstall before it can auto-update."
-    fi
+    case "$rc" in
+        0) ;;
+        3)
+            log "Apply update: helper couldn't download/verify -- current install untouched (will retry on the next check)"
+            emit_update_failed "Couldn't verify the update. It will be offered again later."
+            ;;
+        4)
+            log "Apply update: helper found nothing newer to install"
+            update_available_version=""
+            send_status
+            emit_update_failed "The update changed while you were looking -- check again."
+            ;;
+        *)
+            log "ERROR: apply-update-helper.sh failed (exit $rc) or the sudoers grant is missing -- this device likely needs a reinstall before it can auto-update"
+            emit_update_failed "This device needs a reinstall before it can auto-update."
+            ;;
+    esac
 }

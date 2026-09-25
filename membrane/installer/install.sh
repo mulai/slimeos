@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.44"
+SLIMEOS_VERSION="0.3.45"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -406,9 +406,8 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/recovery-pin-check"
 chmod 0755 "$INSTALL_DIR/recovery-pin-check"
 # changelog.sh is an ordinary bundle file (part of the auto-update manifest,
-# same as timezone.sh/support.sh) -- unlike update.sh/apply-update-helper.sh
-# just below, which are deliberately excluded from that manifest (see
-# update.sh's own header comment on why v1 can't update itself).
+# same as timezone.sh/support.sh). Since 0.3.45 so are update.sh and
+# apply-update-helper.sh below.
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/changelog.sh" \
      -o "$INSTALL_DIR/changelog.sh"
 # hardware-test.sh: Settings > Devices > Speaker/Microphone/Camera local
@@ -433,7 +432,7 @@ chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTA
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --
 # an ordinary bundle file like changelog.sh above, laid down here for
-# consistency even though the helper only ever reads it fresh from staging.
+# consistency even though the helper only ever reads a freshly verified copy.
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/update/dest-map.txt" \
      -o "$INSTALL_DIR/dest-map.txt"
 
@@ -641,34 +640,28 @@ ok "Changelog recorded"
 
 # ── 3i. Sudoers + staging dirs: in-kiosk update mechanism ─────────────────────
 # update.sh's do_apply_update() calls `sudo -n apply-update-helper.sh` (zero
-# args) as $SESSION_USER once a staged update is fully downloaded and
-# sha256-verified -- same "narrowly scoped to exactly one script, no shell,
-# no arbitrary root commands" posture as the Remote Support sudoers grant
-# above (section 3f), not a D-Bus action polkit could authorize instead.
+# args, enforced by the trailing "") as $SESSION_USER; the helper downloads,
+# verifies and installs the update itself -- same "narrowly scoped to exactly
+# one script, no shell, no arbitrary root commands" posture as the Remote
+# Support sudoers grant above (section 3f), not a D-Bus action polkit could
+# authorize instead.
 #
-# v1 explicitly cannot update itself: this grant, apply-update-helper.sh, and
-# these two directories only exist on a device that's run THIS install.sh —
-# a device already in the field before this feature shipped needs a manual
-# reinstall to pick it up, there's no "next tick" that fixes that gap (see
-# update.sh's own header comment).
+# This grant is the one piece that can't update itself: it only exists on a
+# device that's run THIS install.sh (see update.sh's own header comment).
 cat > /etc/sudoers.d/51-slimeos-update <<SUDOERS
-${SESSION_USER} ALL=(root) NOPASSWD: ${INSTALL_DIR}/apply-update-helper.sh
+${SESSION_USER} ALL=(root) NOPASSWD: ${INSTALL_DIR}/apply-update-helper.sh ""
 SUDOERS
 chmod 440 /etc/sudoers.d/51-slimeos-update
 visudo -cf /etc/sudoers.d/51-slimeos-update || die "generated sudoers file failed validation"
 ok "Update-apply sudo grant installed"
 
-# update-staging: do_apply_update() downloads+verifies here as $SESSION_USER
-# before handing off to the root helper. update-previous: the helper's own
-# one-generation rollback snapshot (manual rescue-mode restore target only,
-# no automatic rollback) -- root-owned, since only the helper itself ever
-# writes there.
-mkdir -p "$CONFIG_DIR/update-staging"
-chown "$SESSION_USER:$SESSION_USER" "$CONFIG_DIR/update-staging"
-chmod 700 "$CONFIG_DIR/update-staging"
+# update-previous: the helper's one-generation rollback snapshot (manual
+# rescue-mode restore target only, no automatic rollback) -- root-owned,
+# since only the helper itself ever writes there. No session-user staging
+# dir any more (#39): the helper stages in a fresh root-only mktemp dir.
 mkdir -p "$CONFIG_DIR/update-previous"
 chmod 700 "$CONFIG_DIR/update-previous"
-ok "Update staging directories created"
+ok "Update rollback directory created"
 
 # ── 4. Hardware profile detection and application ─────────────────────────────
 log "Detecting hardware profile..."

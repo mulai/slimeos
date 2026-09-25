@@ -79,10 +79,10 @@
 #     status strip's update icon (shown client-side only on the idle empty/picker screens, see
 #     index.html) after the user confirms in its modal. Calls do_apply_update() (update.sh):
 #     re-fetches the manifest fresh (a TOCTOU guard against `main` moving since the last
-#     _updateTick), downloads + sha256-verifies every listed file into $CONFIG_DIR/update-staging,
-#     then hands off to the privileged /opt/slimeos/apply-update-helper.sh (via sudo -n, zero args,
-#     see its own header) which copies the verified files into place and reboots. Emits a one-shot
-#     'updateApplying' right before that handoff, or 'updateFailed' if verification/handoff fails at
+#     _updateTick), then hands off to the privileged /opt/slimeos/apply-update-helper.sh (via
+#     sudo -n, zero args, see its own header) which downloads + sha256-verifies every listed file
+#     itself, copies them into place and reboots. Emits a one-shot 'updateApplying' once the helper
+#     reports everything verified, or 'updateFailed' if download/verification/handoff fails at
 #     any point — see both below. Never destructive on failure: the current install is always left
 #     untouched unless every file was verified.
 #

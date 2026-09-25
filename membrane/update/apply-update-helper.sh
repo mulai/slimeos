@@ -2,15 +2,29 @@
 # Slime OS — privileged update-apply helper (root)
 #
 # Invoked as `apply-update-helper.sh` with NO arguments, via `sudo -n` by
-# membrane/session/update.sh's do_apply_update() (itself running
-# unprivileged, as $SESSION_USER) once every staged file has been
-# downloaded AND sha256-verified. /etc/sudoers.d/51-slimeos-update scopes
-# the NOPASSWD grant to exactly this one script, no args -- same precedent
-# as remote-support-toggle.sh.
+# membrane/session/update.sh's do_apply_update() (running unprivileged, as
+# $SESSION_USER). /etc/sudoers.d/51-slimeos-update scopes the NOPASSWD
+# grant to exactly this one script -- same precedent as
+# remote-support-toggle.sh.
 #
-# Deliberately does NO networking: every file it touches is read from a
-# fixed, hardcoded staging path ($STAGING_DIR, below), already
-# checksum-verified by the caller before this ever runs.
+# Downloads and verifies EVERYTHING ITSELF, as root, into a fresh root-only
+# directory (#39). Until 0.3.45 the session user downloaded + checked the
+# files into its own /etc/slimeos/update-staging and this script installed
+# whatever was there, so any code running as the session user could plant
+# files and have them installed as root. Nothing the session user can write
+# is read here any more: the manifest URL is hardcoded, and every file
+# (dest-map.txt included) must match the manifest's sha256 before use.
+# Remaining trust root: the manifest on GitHub `main` (signing it is the
+# follow-up, see #39).
+#
+# Exit codes read by update.sh: 3 = couldn't download/verify (retry later),
+# 4 = the manifest isn't newer than what's installed. A line starting with
+# "[apply-update] verified" on stdout means every file checked out and the
+# install is starting (update.sh shows the reboot overlay on it).
+#
+# Since 0.3.45 this script and update.sh are ordinary manifest/dest-map
+# entries: the helper already on a device installs the next one, so the
+# "v1 can't update itself" limit below only applies to the sudoers grant.
 #
 # Destination mapping is READ FROM STAGED DATA (dest-map.txt, part of the
 # regular bundle, see membrane/update/dest-map.txt), not hardcoded --
@@ -27,7 +41,7 @@
 # generic, checksummed staging pipeline every other file already goes
 # through means a future new file only ever needs a new line in
 # dest-map.txt, which flows to every device automatically. Checksum
-# verification (already done by the caller) only ever covered file
+# verification (fetch_verified, below) only ever covers file
 # CONTENT, never where a file claims it should go -- now that the mapping
 # itself is untrusted data, DEST_SAFE below is the thing that closes that
 # gap: any `dest` containing `..` or starting with `/` is rejected outright,
@@ -56,15 +70,77 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 [[ $# -eq 0 ]] || { echo "usage: $0 (no arguments)" >&2; exit 2; }
 
+REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
+MANIFEST_URL="$REPO_BASE/membrane/update/manifest.json"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
-STAGING_DIR="$CONFIG_DIR/update-staging"
 PREVIOUS_DIR="$CONFIG_DIR/update-previous"
+# Session-user-owned staging dir from before 0.3.45. Never read; removed.
+LEGACY_STAGING_DIR="$CONFIG_DIR/update-staging"
 
-[[ -d "$STAGING_DIR" ]] || { echo "no staged update found at $STAGING_DIR" >&2; exit 1; }
-[[ -f "$STAGING_DIR/dest-map.txt" ]] || { echo "no staged dest-map.txt -- refusing to guess destinations" >&2; exit 1; }
+fail() { echo "[apply-update] $*" >&2; exit 3; }
 
-# Build the name -> destination map from staged, already-verified data.
+# Same X.Y.Z compare as update.sh's. Returns 0 if $1 > $2.
+version_gt() {
+    local a="$1" b="$2" i an bn
+    local -a av bv
+    IFS='.' read -r -a av <<<"$a"
+    IFS='.' read -r -a bv <<<"$b"
+    for i in 0 1 2; do
+        an="${av[$i]:-0}"; bn="${bv[$i]:-0}"
+        (( 10#$an > 10#$bn )) && return 0
+        (( 10#$an < 10#$bn )) && return 1
+    done
+    return 1
+}
+
+rm -rf "${LEGACY_STAGING_DIR:?}" 2>/dev/null || true
+
+# mktemp -d under root-owned /var/lib: created 0700 root, a fresh name
+# every run, so nothing can be pre-planted in it.
+STAGING_DIR=$(mktemp -d /var/lib/slimeos-update.XXXXXX)
+trap 'rm -rf "$STAGING_DIR"' EXIT
+
+manifest=$(curl -fsS -m 15 "$MANIFEST_URL") || fail "manifest fetch failed"
+remote_version=$(jq -r '.version // empty' <<<"$manifest" 2>/dev/null) || remote_version=""
+[[ "$remote_version" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$ ]] || fail "manifest has no valid version"
+local_version=$(cat "$CONFIG_DIR/version" 2>/dev/null || echo "0.0.0")
+if ! version_gt "$remote_version" "$local_version"; then
+    echo "[apply-update] manifest $remote_version is not newer than installed $local_version" >&2
+    exit 4
+fi
+
+# Downloads $1 (a path under membrane/ in the repo) to $3 and checks it
+# against sha256 $2. Staged by basename, same as update.sh always did.
+fetch_verified() {
+    local src="$1" sha="$2" out="$3"
+    [[ "$src" =~ ^[A-Za-z0-9._/-]+$ && "$src" != *..* && "$src" != /* ]] || fail "unsafe path in manifest: $src"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 for $src"
+    curl -fsS -m 120 "$REPO_BASE/membrane/$src" -o "$out" || fail "download failed for $src"
+    echo "$sha  $out" | sha256sum -c - >/dev/null 2>&1 || fail "checksum mismatch for $src"
+}
+
+echo "[apply-update] downloading $remote_version"
+while IFS=$'\t' read -r src sha256; do
+    [[ -z "$src" ]] && continue
+    fetch_verified "$src" "$sha256" "$STAGING_DIR/$(basename "$src")"
+done < <(jq -r '.files[] | [.src, .sha256] | @tsv' <<<"$manifest")
+
+bridge_arch=$(dpkg --print-architecture)
+bridge_src=$(jq -r --arg a "$bridge_arch" '.bridge[$a].src // empty' <<<"$manifest")
+bridge_sha=$(jq -r --arg a "$bridge_arch" '.bridge[$a].sha256 // empty' <<<"$manifest")
+[[ -n "$bridge_src" ]] || fail "no bridge binary listed for arch $bridge_arch"
+fetch_verified "$bridge_src" "$bridge_sha" "$STAGING_DIR/slimeos-bridge"
+
+# Never executed, only copied into $CONFIG_DIR below.
+echo "$remote_version" > "$STAGING_DIR/version"
+jq -r '.changelog // ""' <<<"$manifest" > "$STAGING_DIR/changelog" || true
+jq -r '.released_at // ""' <<<"$manifest" > "$STAGING_DIR/changelog-released-at" || true
+
+[[ -f "$STAGING_DIR/dest-map.txt" ]] || fail "manifest lists no dest-map.txt -- refusing to guess destinations"
+echo "[apply-update] verified $remote_version, installing"
+
+# Build the name -> destination map from staged, just-verified data.
 # Both fields are validated before either is trusted with anything -- name
 # is used to locate the STAGED source file ($STAGING_DIR/$name), dest the
 # INSTALLED destination ($INSTALL_DIR/$dest), so both need the same
@@ -100,6 +176,7 @@ for name in "${!DEST_FOR[@]}"; do
     dest="${DEST_FOR[$name]}"
     mkdir -p "$(dirname "$dest")"
     case "$name" in
+        apply-update-helper.sh) mode=0700 ;;
         *.sh|slimeos-bridge) mode=0755 ;;
         *) mode=0644 ;;
     esac
@@ -139,13 +216,6 @@ fi
 if [[ -f "$STAGING_DIR/version" ]]; then
     install -m 0644 -o root -g root "$STAGING_DIR/version" "$CONFIG_DIR/version"
 fi
-
-# Clear CONTENTS only, never rm -rf the directory itself: it's slime:slime-
-# owned (set once by install.sh), and this helper running as root could
-# recreate the directory but never restore that ownership correctly for the
-# NEXT unprivileged do_apply_update() run -- same reasoning as update.sh's
-# own staging-dir cleanup.
-rm -rf "${STAGING_DIR:?}"/*
 
 echo "[apply-update] rebooting to complete the update"
 systemctl reboot
