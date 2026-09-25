@@ -163,3 +163,17 @@ sync_freerdp() {
 }
 
 sync_freerdp || log "FreeRDP sync failed (non-fatal, retried on the next update)"
+
+# ── Wi-Fi power saving off ────────────────────────────────────────────────────
+# Power saving lets the Wi-Fi chip doze between beacons, which adds delay
+# spikes of tens of milliseconds to incoming packets: stutter and input lag
+# in a Brain session. A Membrane is a thin client whose only job is that
+# stream, so it's off on every profile. 2 = disable, as NetworkManager's
+# default for every connection that doesn't set its own value (nmcli-created
+# ones don't). Takes effect when a connection next comes up; an update
+# reboots anyway.
+WIFI_POWERSAVE_CONF="/etc/NetworkManager/conf.d/20-slimeos-wifi-powersave.conf"
+if [[ -d /etc/NetworkManager/conf.d ]]; then
+    printf '[connection]\nwifi.powersave=2\n' > "$WIFI_POWERSAVE_CONF"
+    log "Wi-Fi power saving off ($WIFI_POWERSAVE_CONF)"
+fi

@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.34"
+SLIMEOS_VERSION="0.3.35"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -467,6 +467,8 @@ cat > /etc/NetworkManager/conf.d/10-slimeos-managed.conf <<'NMCONF'
 [ifupdown]
 managed=true
 NMCONF
+# Wi-Fi power saving is turned off by hardware-profiles/detect.sh (run
+# below), so over-the-air updates can change it too.
 
 # network-setup.sh runs nmcli as the unprivileged $SESSION_USER (netdev
 # group). This kiosk deliberately skips PAMName=login on its systemd units
