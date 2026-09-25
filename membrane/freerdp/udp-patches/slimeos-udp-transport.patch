@@ -2,7 +2,7 @@ Index: freerdp3-3.15.0+dfsg/channels/rdpgfx/client/rdpgfx_main.c
 ===================================================================
 --- freerdp3-3.15.0+dfsg.orig/channels/rdpgfx/client/rdpgfx_main.c
 +++ freerdp3-3.15.0+dfsg/channels/rdpgfx/client/rdpgfx_main.c
-@@ -1111,6 +1111,22 @@ static UINT rdpgfx_recv_end_frame_pdu(GE
+@@ -1111,6 +1111,22 @@
  
  	Stream_Read_UINT32(s, pdu.frameId); /* frameId (4 bytes) */
  	DEBUG_RDPGFX(gfx->log, "RecvEndFramePdu: frameId: %" PRIu32 "", pdu.frameId);
@@ -29,7 +29,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
 ===================================================================
 --- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/multitransport.c
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
-@@ -48,6 +48,219 @@ enum
+@@ -48,6 +48,219 @@
  
  #define TAG FREERDP_TAG("core.multitransport")
  
@@ -249,7 +249,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
  state_run_t multitransport_recv_request(rdpMultitransport* multi, wStream* s)
  {
  	WINPR_ASSERT(multi);
-@@ -89,6 +302,7 @@ state_run_t multitransport_recv_request(
+@@ -89,6 +302,7 @@
  	}
  
  	WINPR_ASSERT(multi->MtRequest);
@@ -257,7 +257,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
  	return multi->MtRequest(multi, requestId, requestedProto, cookie);
  }
  
-@@ -188,9 +402,37 @@ state_run_t multitransport_recv_response
+@@ -188,9 +402,37 @@
  }
  
  static state_run_t multitransport_no_udp(rdpMultitransport* multi, UINT32 reqId,
@@ -297,7 +297,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
  	return multitransport_client_send_response(multi, reqId, E_ABORT) ? STATE_RUN_SUCCESS
  	                                                                  : STATE_RUN_FAILED;
  }
-@@ -231,7 +473,14 @@ rdpMultitransport* multitransport_new(rd
+@@ -231,7 +473,21 @@
  	return multi;
  }
  
@@ -305,6 +305,13 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.c
 +{
 +	WINPR_UNUSED(multi);
 +	slimeos_rdpudp2_stop();
++}
++
++BOOL multitransport_client_send_udp(rdpMultitransport* multi, UINT16 channelId, const BYTE* data,
++                                    size_t size)
++{
++	WINPR_UNUSED(multi);
++	return slimeos_rdpudp2_try_send(channelId, data, size);
 +}
 +
  void multitransport_free(rdpMultitransport* multitransport)
@@ -316,14 +323,15 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 ===================================================================
 --- /dev/null
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
-@@ -0,0 +1,828 @@
-+/* SLIMEOS-UDP-RESEARCH checkpoint 5a: native RDP-UDP2 (MS-RDPEUDP v3) client transport.
+@@ -0,0 +1,1285 @@
++/* Native RDP-UDP2 (MS-RDPEUDP v3) client transport.
 + *
-+ * Research code, #included by multitransport.c and only used with SLIMEOS_UDP_NATIVE=1.
-+ * Receive path only: after the tunnel is up, RDP_TUNNEL_DATA payloads are handed to the
-+ * drdynvc static-channel plugin exactly as if they had arrived over TCP. Replies still go
-+ * over TCP. Wire facts (not all in the spec) come from an mstsc capture, see the slimeos
-+ * repo's UDP research notes:
++ * #included by multitransport.c and only used with SLIMEOS_UDP_NATIVE=1. After the tunnel is
++ * up, RDP_TUNNEL_DATA payloads are handed to the drdynvc static-channel plugin exactly as if
++ * they had arrived over TCP. With SLIMEOS_UDP_SEND=1, DVC traffic for the channels Windows
++ * created on the tunnel also goes back over it (reliably: retransmitted until ACKed);
++ * otherwise replies go over TCP, which Windows accepts too. Wire facts (not all in the spec)
++ * come from an mstsc capture, see the slimeos repo's UDP research notes:
 + *  - v3 datagrams have bytes 0 and 7 swapped; byte 0 is a prefix (0xE0 data/ACK, 0xF0 dummy)
 + *  - little-endian flags|LogWindowSize word, then payloads in spec order
 + *  - DataSeqNum starts at 100 (counts every packet), ChannelSeqNum at 1 (real data only)
@@ -352,6 +360,23 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +#define RU2_F_DLY 0x100
 +#define RU2_REORDER 4096 /* must divide 65536 */
 +#define RU2_RXWIN 4096   /* must divide 65536 */
++#define RU2_CHUNK 1100   /* TLS bytes per data packet */
++#define RU2_TXQ 2048     /* our unACKed data packets */
++#define RU2_TUNNEL_CH 64
++
++/* One of our data packets, kept until the server ACKs it. A retransmission reuses the
++ * ChannelSeqNum with a new DataSeqNum, like the handshake flight resend. */
++typedef struct
++{
++	BOOL used;
++	UINT16 cseq;
++	UINT16 dseq;
++	UINT32 tries;
++	UINT64 firstUs;
++	UINT64 sentUs;
++	size_t len;
++	BYTE data[RU2_CHUNK];
++} Ru2Tx;
 +
 +typedef struct
 +{
@@ -409,6 +434,30 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	BOOL threadRunning;
 +	int tcpFd;       /* the session's TCP socket to the same host:port, -1 if not found */
 +	ino_t tcpIno;    /* its inode, so a reused fd number is never shut down by mistake */
++	/* The main thread sends DVC data while the receive thread reads, ACKs and retransmits:
++	 * everything touching ssl, dseq/cseq, the tx queue or the tunnel-channel set holds lock.
++	 * Never held while delivering into the channels. */
++	pthread_mutex_t lock;
++	BOOL lockInit;
++	atomic_bool dead;   /* receive thread has exited */
++	BOOL sendEnabled;   /* SLIMEOS_UDP_SEND=1 */
++	BOOL tracking;      /* tunnel up and sending: data packets are queued until ACKed */
++	Ru2Tx* tx;
++	UINT32 txHead;
++	UINT32 txTail;
++	UINT64 srttUs;
++	UINT64 rttvarUs;
++	UINT64 rtoUs;
++	UINT16 txHighAck; /* newest of our DataSeqNums the server has ACKed */
++	BOOL haveHighAck;
++	UINT32 txPkts, txRetx, txAcked, txFull, txRle, rttReplies, sentPdus;
++	UINT64 sentBytes;
++	UINT32 txDropPct; /* research: simulated upstream loss, SLIMEOS_UDP_TX_DROP */
++	UINT32 rng;
++	UINT32 tunnelCh[RU2_TUNNEL_CH]; /* DVC channel ids Windows created over the tunnel */
++	size_t tunnelChN;
++	UINT16 seenAdTypes[16]; /* auto-detect request types already logged */
++	size_t seenAdTypesN;
 +} Ru2;
 +
 +/* The live transport. Guarded by slimeos_ru2_lock: the receive thread frees its own Ru2 on
@@ -467,7 +516,33 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	(void)send(u->fd, b, sizeof(b), 0);
 +}
 +
-+/* One DATA packet in the shape mstsc uses (DATA|AOA|DELAYACK, AOA=100). */
++/* AckOfAcks for our next packet: the server may stop reporting every DataSeqNum below it.
++ * That is safe for anything we no longer wait for, so it is our oldest unACKed packet (or
++ * the next DataSeqNum). Before the tunnel is up we send 100, as mstsc does. */
++static UINT16 ru2_tx_aoa(const Ru2* u)
++{
++	if (!u->tracking)
++		return 100;
++	UINT16 low = u->dseq;
++	for (UINT32 i = u->txHead; i != u->txTail; i++)
++	{
++		const Ru2Tx* e = &u->tx[i % RU2_TXQ];
++		if (e->used && (UINT16)(u->dseq - e->dseq) > (UINT16)(u->dseq - low))
++			low = e->dseq;
++	}
++	return low;
++}
++
++/* Research: drop this percentage of our tracked data packets to exercise retransmission. */
++static BOOL ru2_tx_drop(Ru2* u)
++{
++	if (!u->tracking || !u->txDropPct)
++		return FALSE;
++	u->rng = u->rng * 1103515245u + 12345u;
++	return ((u->rng >> 16) % 100u) < u->txDropPct;
++}
++
++/* One DATA packet in the shape mstsc uses (DATA|AOA|DELAYACK). Uses the next DataSeqNum. */
 +static BOOL ru2_send_raw(Ru2* u, UINT16 cseq, const BYTE* data, size_t len)
 +{
 +	BYTE b[RU2_MTU];
@@ -478,11 +553,13 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	ru2_put16le(b + 1, (UINT16)(RU2_F_DATA | RU2_F_AOA | RU2_F_DLY | (RU2_WIN << 12)));
 +	b[3] = 1;                 /* DELAYACK: max delayed acks */
 +	ru2_put16le(b + 4, 10);   /* DELAYACK: timeout ms */
-+	ru2_put16le(b + 6, 100);  /* AOA */
++	ru2_put16le(b + 6, ru2_tx_aoa(u));
 +	ru2_put16le(b + 8, u->dseq++);
 +	ru2_put16le(b + 10, cseq);
 +	memcpy(b + hdr, data, len);
 +	ru2_swap07(b, hdr + len);
++	if (ru2_tx_drop(u))
++		return TRUE;
 +	return send(u->fd, b, hdr + len, 0) == (ssize_t)(hdr + len);
 +}
 +
@@ -490,14 +567,165 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +{
 +	const UINT16 cseq = u->cseq;
 +	u->cseq = (u->cseq == 65535) ? 1 : (UINT16)(u->cseq + 1);
-+	if (u->flightN < ARRAYSIZE(u->flight) && len <= sizeof(u->flight[0].data))
++	if (!u->tracking)
 +	{
-+		u->flight[u->flightN].cseq = cseq;
-+		u->flight[u->flightN].len = len;
-+		memcpy(u->flight[u->flightN].data, data, len);
-+		u->flightN++;
++		if (u->flightN < ARRAYSIZE(u->flight) && len <= sizeof(u->flight[0].data))
++		{
++			u->flight[u->flightN].cseq = cseq;
++			u->flight[u->flightN].len = len;
++			memcpy(u->flight[u->flightN].data, data, len);
++			u->flightN++;
++		}
++		return ru2_send_raw(u, cseq, data, len);
 +	}
++	if (len > RU2_CHUNK)
++		return FALSE;
++	if (u->txTail - u->txHead >= RU2_TXQ)
++	{
++		/* Only if one packet stays unACKed for ages; the give-up check falls back to TCP. */
++		if (u->txFull++ == 0)
++			WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: retransmission queue full, sending untracked");
++		return ru2_send_raw(u, cseq, data, len);
++	}
++	Ru2Tx* e = &u->tx[u->txTail++ % RU2_TXQ];
++	e->used = TRUE;
++	e->cseq = cseq;
++	e->dseq = u->dseq; /* ru2_send_raw uses it next, so the AOA accounts for this packet */
++	e->tries = 1;
++	e->firstUs = e->sentUs = ru2_now_us();
++	e->len = len;
++	memcpy(e->data, data, len);
++	u->txPkts++;
 +	return ru2_send_raw(u, cseq, data, len);
++}
++
++static void ru2_rtt_sample(Ru2* u, UINT64 r)
++{
++	if (!u->srttUs)
++	{
++		u->srttUs = r;
++		u->rttvarUs = r / 2;
++	}
++	else
++	{
++		const UINT64 d = (u->srttUs > r) ? u->srttUs - r : r - u->srttUs;
++		u->rttvarUs = (3 * u->rttvarUs + d) / 4;
++		u->srttUs = (7 * u->srttUs + r) / 8;
++	}
++	UINT64 rto = u->srttUs + ((4 * u->rttvarUs > 10000) ? 4 * u->rttvarUs : 10000);
++	if (rto < 30000)
++		rto = 30000;
++	if (rto > 1000000)
++		rto = 1000000;
++	u->rtoUs = rto;
++}
++
++static void ru2_tx_trim(Ru2* u)
++{
++	while (u->txHead != u->txTail && !u->tx[u->txHead % RU2_TXQ].used)
++		u->txHead++;
++}
++
++static void ru2_tx_note_high(Ru2* u, UINT16 seq)
++{
++	if (!u->haveHighAck || (UINT16)(seq - u->txHighAck) < 0x8000)
++		u->txHighAck = seq;
++	u->haveHighAck = TRUE;
++}
++
++/* The server received our packet seq. Only that one: a plain ACK's delayed-ack count and
++ * Windows' cumulative reading aren't confirmed for its own ACKs, and a packet wrongly taken as
++ * delivered would stall the TLS stream for good, while one resent needlessly costs only bytes. */
++static void ru2_tx_on_ack(Ru2* u, UINT16 seq)
++{
++	const UINT64 now = ru2_now_us();
++	for (UINT32 i = u->txHead; i != u->txTail; i++)
++	{
++		Ru2Tx* e = &u->tx[i % RU2_TXQ];
++		if (!e->used || e->dseq != seq)
++			continue;
++		if (e->tries == 1) /* Karn: no RTT sample from a retransmitted packet */
++			ru2_rtt_sample(u, now - e->sentUs);
++		e->used = FALSE;
++		u->txAcked++;
++		break;
++	}
++	ru2_tx_note_high(u, seq);
++	ru2_tx_trim(u);
++}
++
++/* ACK Vector from the server: everything below base is received or no longer tracked (only
++ * packets below our AOA, which we no longer wait for), then bitmap elements, one bit per
++ * packet, set = received (the encoding Windows accepts from us). Run-length elements aren't
++ * decoded yet: stop there, so nothing is ever taken as received by mistake. */
++static void ru2_tx_on_ackvec(Ru2* u, UINT16 base, const BYTE* vec, size_t vlen)
++{
++	for (UINT32 i = u->txHead; i != u->txTail; i++)
++	{
++		Ru2Tx* e = &u->tx[i % RU2_TXQ];
++		const UINT16 back = (UINT16)(base - e->dseq);
++		if (e->used && back != 0 && back < 0x8000)
++		{
++			e->used = FALSE;
++			u->txAcked++;
++		}
++	}
++	UINT32 pos = 0;
++	for (size_t k = 0; k < vlen; k++)
++	{
++		const BYTE el = vec[k];
++		if (el & 0x80)
++		{
++			u->txRle++;
++			break;
++		}
++		for (int b = 0; b < 7; b++, pos++)
++		{
++			if (!(el & (1u << b)))
++				continue;
++			const UINT16 seq = (UINT16)(base + pos);
++			ru2_tx_note_high(u, seq);
++			for (UINT32 i = u->txHead; i != u->txTail; i++)
++			{
++				Ru2Tx* e = &u->tx[i % RU2_TXQ];
++				if (e->used && e->dseq == seq)
++				{
++					e->used = FALSE;
++					u->txAcked++;
++				}
++			}
++		}
++	}
++	ru2_tx_trim(u);
++}
++
++/* Receive thread, under lock: retransmit what timed out, or what newer ACKs show was lost
++ * (3 later packets ACKed). FALSE if a packet has been stuck so long the tunnel is useless. */
++static BOOL ru2_tx_check(Ru2* u, UINT64 giveUpUs)
++{
++	const UINT64 now = ru2_now_us();
++	for (UINT32 i = u->txHead; i != u->txTail; i++)
++	{
++		Ru2Tx* e = &u->tx[i % RU2_TXQ];
++		if (!e->used)
++			continue;
++		if (now - e->firstUs > giveUpUs)
++			return FALSE;
++		const UINT32 shift = (e->tries - 1 < 4) ? e->tries - 1 : 4;
++		const UINT64 rto = u->rtoUs << shift;
++		const UINT16 behind = (UINT16)(u->txHighAck - e->dseq);
++		const BOOL fast = u->haveHighAck && (behind >= 3) && (behind < 0x8000) &&
++		                  (now - e->sentUs > u->srttUs / 2 + 2000);
++		if ((now - e->sentUs > rto) || fast)
++		{
++			e->dseq = u->dseq;
++			e->sentUs = now;
++			e->tries++;
++			u->txRetx++;
++			(void)ru2_send_raw(u, e->cseq, e->data, e->len);
++		}
++	}
++	return TRUE;
 +}
 +
 +/* Keepalive probe: a dummy (filler) packet in our DataSeqNum space. Windows ACKs it like
@@ -510,7 +738,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	ru2_put16le(b + 1, (UINT16)(RU2_F_DATA | RU2_F_AOA | RU2_F_DLY | (RU2_WIN << 12)));
 +	b[3] = 1;                /* DELAYACK: max delayed acks */
 +	ru2_put16le(b + 4, 10);  /* DELAYACK: timeout ms */
-+	ru2_put16le(b + 6, 100); /* AOA */
++	ru2_put16le(b + 6, ru2_tx_aoa(u));
 +	ru2_put16le(b + 8, u->dseq++);
 +	ru2_swap07(b, sizeof(b));
 +	(void)send(u->fd, b, sizeof(b), 0);
@@ -631,6 +859,8 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	{
 +		if (o + 7 > n)
 +			return;
++		if (u->tracking)
++			ru2_tx_on_ack(u, ru2_get16le(b + o));
 +		o += 7 + (b[o + 6] & 0xF);
 +	}
 +	if (fl & RU2_F_OVH)
@@ -656,7 +886,11 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		if (o + 3 > n)
 +			return;
 +		const BYTE sz = b[o + 2];
-+		o += 3 + (sz & 0x7F) + ((sz & 0x80) ? 4 : 0);
++		const size_t vlen = sz & 0x7F;
++		const size_t tsLen = (sz & 0x80) ? 4 : 0;
++		if (u->tracking && (o + 3 + tsLen + vlen <= n))
++			ru2_tx_on_ackvec(u, ru2_get16le(b + o), b + o + 3 + tsLen, vlen);
++		o += 3 + vlen + tsLen;
 +	}
 +	{
 +		static int verbose = -1;
@@ -760,9 +994,11 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		const UINT64 now = ru2_now_us();
 +		if (u->lastRxUs && (now - u->lastRxUs > u->maxGapUs))
 +			u->maxGapUs = now - u->lastRxUs;
++		pthread_mutex_lock(&u->lock);
 +		u->lastRxUs = now;
 +		u->probesUnans = 0;
 +		ru2_on_datagram(u, b, (size_t)n);
++		pthread_mutex_unlock(&u->lock);
 +	}
 +	return (int)n;
 +}
@@ -863,10 +1099,124 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	for (size_t i = 0; i < RU2_REORDER; i++)
 +		free(u->slotData[i]);
 +	free(u->plain);
++	free(u->tx);
++	if (u->lockInit)
++		pthread_mutex_destroy(&u->lock);
 +	free(u);
 +}
 +
-+/* Split the decrypted stream into tunnel PDUs; DATA payloads go to drdynvc. */
++/* DVC PDU header (MS-RDPEDYC 2.2): Cmd in the high nibble, cbChId in the low 2 bits, then the
++ * channel id. FALSE for commands without a channel id (capabilities, soft-sync). */
++static BOOL ru2_dvc_hdr(const BYTE* d, size_t n, BYTE* cmd, UINT32* id, size_t* hdrLen)
++{
++	if (n < 1)
++		return FALSE;
++	*cmd = d[0] >> 4;
++	const BYTE cb = d[0] & 3;
++	if (cb == 3)
++		return FALSE;
++	const size_t idLen = (cb == 0) ? 1 : ((cb == 1) ? 2 : 4);
++	if (n < 1 + idLen)
++		return FALSE;
++	switch (*cmd)
++	{
++		case 1: /* CREATE */
++		case 2: /* DATA_FIRST */
++		case 3: /* DATA */
++		case 4: /* CLOSE */
++		case 6: /* DATA_FIRST_COMPRESSED */
++		case 7: /* DATA_COMPRESSED */
++			break;
++		default:
++			return FALSE;
++	}
++	*id = (cb == 0) ? d[1] : ((cb == 1) ? ru2_get16le(d + 1) : ru2_get32le(d + 1));
++	*hdrLen = 1 + idLen;
++	return TRUE;
++}
++
++static BOOL ru2_is_tunnel_ch(const Ru2* u, UINT32 id)
++{
++	for (size_t i = 0; i < u->tunnelChN; i++)
++		if (u->tunnelCh[i] == id)
++			return TRUE;
++	return FALSE;
++}
++
++static void ru2_add_tunnel_ch(Ru2* u, UINT32 id)
++{
++	if (!ru2_is_tunnel_ch(u, id) && u->tunnelChN < RU2_TUNNEL_CH)
++		u->tunnelCh[u->tunnelChN++] = id;
++}
++
++static void ru2_del_tunnel_ch(Ru2* u, UINT32 id)
++{
++	for (size_t i = 0; i < u->tunnelChN; i++)
++		if (u->tunnelCh[i] == id)
++		{
++			u->tunnelCh[i] = u->tunnelCh[--u->tunnelChN];
++			return;
++		}
++}
++
++/* One RDP_TUNNEL_DATA PDU (MS-RDPEMT 2.2.2.3) with optional subheaders. Under lock. */
++static BOOL ru2_send_tunnel_pdu(Ru2* u, const BYTE* sub, size_t subLen, const BYTE* payload,
++                                size_t plen)
++{
++	BYTE stackBuf[2048];
++	BYTE* buf = stackBuf;
++	const size_t total = 4 + subLen + plen;
++	if ((4 + subLen > 255) || (plen > 0xFFFF))
++		return FALSE;
++	if (total > sizeof(stackBuf))
++	{
++		buf = malloc(total);
++		if (!buf)
++			return FALSE;
++	}
++	buf[0] = 0x02; /* Action DATA, Flags 0 */
++	ru2_put16le(buf + 1, (UINT16)plen);
++	buf[3] = (BYTE)(4 + subLen);
++	if (subLen)
++		memcpy(buf + 4, sub, subLen);
++	if (plen)
++		memcpy(buf + 4 + subLen, payload, plen);
++	const BOOL ok = (SSL_write(u->ssl, buf, (int)total) == (int)total) && ru2_flush_tls(u);
++	if (buf != stackBuf)
++		free(buf);
++	return ok;
++}
++
++/* Auto-detect request carried as a tunnel subheader (MS-RDPBCGR 2.2.14). Network
++ * Characteristics Results (0x0840/0x0880/0x08C0, Windows' own view of the link) need no
++ * reply. An RTT Measure Request gets an RTT Measure Response back over the tunnel. */
++static void ru2_on_autodetect(Ru2* u, UINT16 seq, UINT16 reqType)
++{
++	if ((reqType == 0x0840) || (reqType == 0x0880) || (reqType == 0x08C0))
++		return;
++	pthread_mutex_lock(&u->lock);
++	if (((reqType == 0x0001) || (reqType == 0x1001)) && u->sendEnabled)
++	{
++		const BYTE rsp[6] = { 6, 0x01, (BYTE)seq, (BYTE)(seq >> 8), 0x00, 0x00 };
++		if (ru2_send_tunnel_pdu(u, rsp, sizeof(rsp), NULL, 0))
++			u->rttReplies++;
++	}
++	BOOL seen = FALSE;
++	for (size_t i = 0; i < u->seenAdTypesN; i++)
++		seen = seen || (u->seenAdTypes[i] == reqType);
++	if (!seen && u->seenAdTypesN < ARRAYSIZE(u->seenAdTypes))
++		u->seenAdTypes[u->seenAdTypesN++] = reqType;
++	pthread_mutex_unlock(&u->lock);
++	if (!seen)
++		WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: auto-detect request type 0x%04" PRIx16 " over UDP%s",
++		          reqType,
++		          ((reqType == 0x0001) || (reqType == 0x1001))
++		              ? (u->sendEnabled ? ", answering with RTT responses" : ", not answered")
++		              : ", not handled");
++}
++
++/* Split the decrypted stream into tunnel PDUs; DATA payloads go to drdynvc. Runs on the
++ * receive thread WITHOUT the lock held: delivery into the channels can lead to sends. */
 +static void ru2_dispatch_tunnel(Ru2* u)
 +{
 +	size_t off = 0;
@@ -887,12 +1237,35 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +			WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: subheader(%u): %s plen=%u", (unsigned)(hlen - 4), hex,
 +			          (unsigned)plen);
 +		}
++		if (action == 2)
++		{
++			for (size_t i = 4; i + 2 <= hlen;)
++			{
++				const BYTE sl = p[i];
++				if ((sl < 2) || (i + sl > hlen))
++					break;
++				if ((p[i + 1] == 0x00) && (sl >= 6)) /* TYPE_ID_AUTODETECT_REQUEST */
++					ru2_on_autodetect(u, ru2_get16le(p + i + 2), ru2_get16le(p + i + 4));
++				i += sl;
++			}
++		}
 +		if (action == 2 && plen > 0)
 +		{
 +			const BYTE* d = p + hlen;
-+			if (((d[0] >> 4) == 1) && (plen > 2)) /* DVC CREATE_REQUEST_PDU */
-+				WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: DVC create request over UDP: id=%u name=%.*s",
-+				          (unsigned)d[1], (int)(plen - 2), (const char*)(d + 2));
++			BYTE cmd = 0;
++			UINT32 id = 0;
++			size_t dh = 0;
++			if (ru2_dvc_hdr(d, plen, &cmd, &id, &dh) && (cmd == 1))
++			{
++				/* Registered before delivery, so the create response already goes back here. */
++				pthread_mutex_lock(&u->lock);
++				if (u->sendEnabled)
++					ru2_add_tunnel_ch(u, id);
++				pthread_mutex_unlock(&u->lock);
++				WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: DVC create request over UDP: id=%" PRIu32
++				          " name=%.*s",
++				          id, (int)(plen - dh), (const char*)(d + dh));
++			}
 +			if (u->dvcChannelId &&
 +			    freerdp_channels_data(u->instance, u->dvcChannelId, p + hlen, plen,
 +			                          CHANNEL_FLAG_FIRST | CHANNEL_FLAG_LAST, plen))
@@ -921,19 +1294,40 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	          u->dvcChannelId, u->tcpFd);
 +	const UINT64 deadUs = ru2_env_ms("SLIMEOS_UDP_DEAD_MS", 3000) * 1000ull;
 +	const UINT64 probeUs = ru2_env_ms("SLIMEOS_UDP_PROBE_MS", 1000) * 1000ull;
++	const UINT64 giveUpUs = ru2_env_ms("SLIMEOS_UDP_TX_GIVEUP_MS", 10000) * 1000ull;
++	pthread_mutex_lock(&u->lock);
 +	u->lastRxUs = ru2_now_us();
++	pthread_mutex_unlock(&u->lock);
 +	while (!atomic_load(&u->stop))
 +	{
-+		if (ru2_recv_once(u, 200) < 0)
++		pthread_mutex_lock(&u->lock);
++		/* Poll briefly while our own data waits for ACKs, so retransmission timers fire. */
++		const int pollMs = (u->tracking && (u->txHead != u->txTail)) ? 10 : 200;
++		pthread_mutex_unlock(&u->lock);
++		if (ru2_recv_once(u, pollMs) < 0)
 +			break;
++		pthread_mutex_lock(&u->lock);
 +		const UINT64 silentUs = ru2_now_us() - u->lastRxUs;
 +		if ((silentUs > probeUs) && (ru2_now_us() - u->lastProbeUs > 500000ull))
 +			ru2_send_probe(u);
++		BOOL giveUp = FALSE;
++		if (u->tracking && !ru2_tx_check(u, giveUpUs))
++			giveUp = TRUE;
++		pthread_mutex_unlock(&u->lock);
 +		if (deadUs && (silentUs > deadUs) && !atomic_load(&u->stop))
 +		{
 +			ru2_fall_back_to_tcp(u, silentUs);
 +			break;
 +		}
++		if (giveUp && !atomic_load(&u->stop))
++		{
++			WLog_WARN(TAG, "SLIMEOS-UDP-NATIVE: our data unACKed for over %" PRIu64
++			          " ms, giving up on the tunnel",
++			          giveUpUs / 1000);
++			ru2_fall_back_to_tcp(u, silentUs);
++			break;
++		}
++		pthread_mutex_lock(&u->lock);
 +		for (;;)
 +		{
 +			if (u->plainCap - u->plainLen < 16384)
@@ -949,7 +1343,6 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +				break;
 +			u->plainLen += (size_t)r;
 +		}
-+		ru2_dispatch_tunnel(u);
 +		(void)ru2_flush_tls(u); /* TLS may want to send (alerts, renegotiation) */
 +		if (ru2_now_us() - u->lastStatsUs > 2000000ull)
 +		{
@@ -960,13 +1353,59 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +			          " maxGapMs=%" PRIu64 " probes=%" PRIu32,
 +			          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4],
 +			          u->deliveredBytes, u->maxGapUs / 1000, u->probes);
++			if (u->sendEnabled)
++				WLog_INFO(TAG,
++				          "SLIMEOS-UDP-NATIVE: tx sentPdus=%" PRIu32 " sentBytes=%" PRIu64
++				          " pkts=%" PRIu32 " retx=%" PRIu32 " acked=%" PRIu32
++				          " outstanding=%" PRIu32 " srttMs=%.1f rtoMs=%.1f rle=%" PRIu32
++				          " full=%" PRIu32 " rttReplies=%" PRIu32 " tunnelChannels=%zu",
++				          u->sentPdus, u->sentBytes, u->txPkts, u->txRetx, u->txAcked,
++				          u->txTail - u->txHead, (double)u->srttUs / 1000.0,
++				          (double)u->rtoUs / 1000.0, u->txRle, u->txFull, u->rttReplies,
++				          u->tunnelChN);
 +		}
++		pthread_mutex_unlock(&u->lock);
++		ru2_dispatch_tunnel(u);
 +	}
++	atomic_store(&u->dead, true);
 +	WLog_INFO(TAG,
 +	          "SLIMEOS-UDP-NATIVE: receive thread done: pkts=%" PRIu32 " dummy=%" PRIu32
-+	          " data=%" PRIu32 " tunnelPdus=%" PRIu32 " delivered=%" PRIu32 " maxGapMs=%" PRIu64,
-+	          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4], u->maxGapUs / 1000);
++	          " data=%" PRIu32 " tunnelPdus=%" PRIu32 " delivered=%" PRIu32 " maxGapMs=%" PRIu64
++	          " txPkts=%" PRIu32 " retx=%" PRIu32,
++	          u->stats[0], u->stats[1], u->stats[2], u->stats[3], u->stats[4], u->maxGapUs / 1000,
++	          u->txPkts, u->txRetx);
 +	return NULL; /* slimeos_rdpudp2_stop() joins this thread and frees u */
++}
++
++/* Main thread (rdp_send_channel_data): send a drdynvc PDU over the tunnel if it belongs to a
++ * channel Windows created there. FALSE = not ours, send it over TCP as usual. The global lock
++ * is held throughout, so slimeos_rdpudp2_stop() can't free the transport mid-send. */
++static BOOL slimeos_rdpudp2_try_send(UINT16 mcsChannelId, const BYTE* data, size_t size)
++{
++	BOOL sent = FALSE;
++	pthread_mutex_lock(&slimeos_ru2_lock);
++	Ru2* u = slimeos_ru2;
++	if (u && u->sendEnabled && !atomic_load(&u->dead) && (mcsChannelId == u->dvcChannelId))
++	{
++		BYTE cmd = 0;
++		UINT32 id = 0;
++		size_t dh = 0;
++		pthread_mutex_lock(&u->lock);
++		if (ru2_dvc_hdr(data, size, &cmd, &id, &dh) && ru2_is_tunnel_ch(u, id))
++		{
++			sent = ru2_send_tunnel_pdu(u, NULL, 0, data, size);
++			if (sent)
++			{
++				u->sentPdus++;
++				u->sentBytes += size;
++			}
++			if (cmd == 4) /* CLOSE: the id may be reused, possibly over TCP */
++				ru2_del_tunnel_ch(u, id);
++		}
++		pthread_mutex_unlock(&u->lock);
++	}
++	pthread_mutex_unlock(&slimeos_ru2_lock);
++	return sent;
 +}
 +
 +static UINT16 ru2_find_drdynvc(freerdp* instance)
@@ -1002,6 +1441,13 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		return FALSE;
 +	}
 +	u->fd = -1;
++	if (pthread_mutex_init(&u->lock, NULL) != 0)
++	{
++		freeaddrinfo(ai);
++		free(u);
++		return FALSE;
++	}
++	u->lockInit = TRUE;
 +	u->fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 +	if (u->fd < 0 || connect(u->fd, ai->ai_addr, ai->ai_addrlen) != 0)
 +	{
@@ -1128,7 +1574,25 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		u->plainLen = respLen - used;
 +	}
 +
-+	/* 4. Receive thread */
++	/* 4. Send path (opt-in while it is being validated) */
++	{
++		const char* s = getenv("SLIMEOS_UDP_SEND");
++		u->sendEnabled = s && (atoi(s) != 0);
++	}
++	if (u->sendEnabled)
++	{
++		u->tx = calloc(RU2_TXQ, sizeof(Ru2Tx));
++		u->sendEnabled = (u->tx != NULL);
++		u->rtoUs = 200000;
++		u->txDropPct = (UINT32)ru2_env_ms("SLIMEOS_UDP_TX_DROP", 0);
++		u->rng = (UINT32)ru2_now_us();
++		u->flightN = 0;
++		u->tracking = u->sendEnabled;
++		WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: send path %s%s", u->sendEnabled ? "on" : "off (no memory)",
++		          u->txDropPct ? " (research: simulated upstream loss)" : "");
++	}
++
++	/* 5. Receive thread */
 +	u->dvcChannelId = ru2_find_drdynvc(u->instance);
 +	u->tcpFd = ru2_find_tcp_fd(u->fd, &u->tcpIno);
 +	if (u->tcpFd < 0)
@@ -1149,7 +1613,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/connection.c
 ===================================================================
 --- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/connection.c
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/connection.c
-@@ -486,6 +486,9 @@ BOOL rdp_client_disconnect(rdpRdp* rdp)
+@@ -486,6 +486,9 @@
  
  	context = rdp->context;
  
@@ -1163,12 +1627,30 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.h
 ===================================================================
 --- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/multitransport.h
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/multitransport.h
-@@ -52,6 +52,8 @@ FREERDP_LOCAL BOOL multitransport_client
+@@ -52,6 +52,11 @@
                                                         HRESULT hr);
  
  FREERDP_LOCAL void multitransport_free(rdpMultitransport* multi);
 +/* Slime OS: stop and join the RDP-UDP2 receive thread before channels are torn down. */
 +FREERDP_LOCAL void multitransport_client_stop_udp(rdpMultitransport* multi);
++/* Slime OS: send a drdynvc PDU over the UDP tunnel if its channel lives there (else FALSE). */
++FREERDP_LOCAL BOOL multitransport_client_send_udp(rdpMultitransport* multi, UINT16 channelId,
++                                                  const BYTE* data, size_t size);
  
  WINPR_ATTR_MALLOC(multitransport_free, 1)
  FREERDP_LOCAL rdpMultitransport* multitransport_new(rdpRdp* rdp, UINT16 protocol);
+Index: freerdp3-3.15.0+dfsg/libfreerdp/core/rdp.c
+===================================================================
+--- freerdp3-3.15.0+dfsg.orig/libfreerdp/core/rdp.c
++++ freerdp3-3.15.0+dfsg/libfreerdp/core/rdp.c
+@@ -2219,6 +2219,10 @@
+ 
+ BOOL rdp_send_channel_data(rdpRdp* rdp, UINT16 channelId, const BYTE* data, size_t size)
+ {
++	/* Slime OS: DVC traffic for channels Windows opened on the UDP tunnel goes back over it. */
++	if (!rdp->settings->ServerMode &&
++	    multitransport_client_send_udp(rdp->multitransport, channelId, data, size))
++		return TRUE;
+ 	return freerdp_channel_send(rdp, channelId, data, size);
+ }
+ 

@@ -720,22 +720,27 @@ do_connect() {
             fi
 
             # UDP transport (Settings > Display & Sound > Brain connection,
-            # RDP_UDP in display-prefs). Needs the +slimeos7 FreeRDP build,
+            # RDP_UDP in display-prefs). Needs the +slimeos10 FreeRDP build,
             # which only uses UDP when SLIMEOS_UDP_NATIVE=1 (graphics and
-            # audio ride an RDP-UDP2 tunnel, input and replies stay on TCP;
-            # if UDP goes quiet mid-session it drops back to TCP by itself,
-            # see membrane/freerdp/udp-patches/README.md). Otherwise the
-            # variable is explicitly removed so a stray one in the service
+            # audio ride an RDP-UDP2 tunnel; if UDP goes quiet mid-session it
+            # drops back to TCP by itself, see
+            # membrane/freerdp/udp-patches/README.md). SLIMEOS_UDP_SEND=1
+            # additionally sends DVC replies (graphics/audio acks, channel
+            # open/close) back over the same tunnel instead of TCP —
+            # reliable, retransmitted until Windows acknowledges each
+            # packet. Input still goes over TCP either way (Windows' UDP
+            # input channel is undocumented). Both variables are explicitly
+            # removed when the setting is off, so a stray one in the service
             # environment can't turn UDP on behind this setting's back. The
             # WLOG_FILTER lets the transport's own lines (tunnel up,
             # fallback) into $FREERDP_LOG_FILE despite /log-level:WARN; it's
             # appended to any filter already in the service environment
             # (e.g. rdpgfx INFO for the fps counter while debugging).
-            local udp_env="env -u SLIMEOS_UDP_NATIVE"
+            local udp_env="env -u SLIMEOS_UDP_NATIVE -u SLIMEOS_UDP_SEND"
             if [[ "${RDP_UDP:-on}" == "on" ]]; then
                 if dp_udp_supported; then
-                    udp_env="env SLIMEOS_UDP_NATIVE=1 WLOG_FILTER=${WLOG_FILTER:+${WLOG_FILTER},}com.freerdp.core.multitransport:INFO"
-                    log "UDP transport on (Settings > Display & Sound)"
+                    udp_env="env SLIMEOS_UDP_NATIVE=1 SLIMEOS_UDP_SEND=1 WLOG_FILTER=${WLOG_FILTER:+${WLOG_FILTER},}com.freerdp.core.multitransport:INFO"
+                    log "UDP transport on, both directions (Settings > Display & Sound)"
                 else
                     log "UDP transport requested but this FreeRDP build lacks it — staying on TCP"
                 fi

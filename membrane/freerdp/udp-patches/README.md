@@ -11,12 +11,14 @@ hardware profiles that opt in (today only 010, the NUC6CAxx, with
 `LIBVA_DRIVER_NAME=i965`, because Intel's iHD driver segfaults there:
 FreeRDP#8276).
 
-**Status (2026-09-24):** in daily use on the AMD box over Wi-Fi. Shipped
-as `+slimeos7` (v0.3.27), `+slimeos8` (v0.3.28, adds opt-in VAAPI), then
-`+slimeos9` (v0.3.29, fixes a crash on disconnect),
-together with the camera and keyboard patches. Users
-switch it on per device in Settings > Display & Sound > Brain connection
-> "Faster (beta)". It is off by default.
+**Status (2026-09-25):** in daily use on the AMD box over Wi-Fi. Shipped
+as `+slimeos7` (v0.3.27), `+slimeos8` (v0.3.28, adds opt-in VAAPI),
+`+slimeos9` (v0.3.29, fixes a crash on disconnect), then `+slimeos10`
+(adds the send path below), together with the camera and keyboard
+patches. Users switch it on per device in Settings > Display & Sound >
+Brain connection > "Faster (beta)". It is off by default. The send path
+was validated with simulated loss on the build VM (0/5/15% upstream drop
+against the real Azure Brain) but not yet on real lossy Wi-Fi.
 
 ## What it does
 
@@ -26,11 +28,21 @@ switch it on per device in Settings > Display & Sound > Brain connection
   answers the request with S_OK. Windows then creates the latency-sensitive
   dynamic channels on the tunnel: graphics, cursor, video and audio
   playback.
-- **Only the receive path goes over UDP.** Tunnel data is handed to drdynvc
-  exactly as if it came over TCP. Channel replies and keyboard/mouse input
-  still go over TCP, which Windows accepts.
-- Loss handling: ACK vectors, reorder by ChannelSeqNum (which wraps
-  65535 → 1, skipping 0), and AckOfAcks.
+- **Receive path:** tunnel data is handed to drdynvc exactly as if it came
+  over TCP. Loss handling: ACK vectors, reorder by ChannelSeqNum (which
+  wraps 65535 → 1, skipping 0), and AckOfAcks.
+- **Send path** (`SLIMEOS_UDP_SEND=1`, alongside `SLIMEOS_UDP_NATIVE=1`):
+  DVC replies for channels Windows created on the tunnel (graphics/audio
+  acks, channel open/close) go back over it too, instead of TCP. Reliable:
+  each packet is queued and retransmitted (RFC 6298-style RTO, min 30 ms;
+  fast retransmit once 3 newer packets are ACKed) until Windows
+  acknowledges it specifically — a plain ACK credits only that exact
+  DataSeqNum, an ACK vector's bitmap credits each bit it sets, run-length
+  elements aren't decoded yet (so nothing is ever assumed received by
+  mistake). Gives up and falls back to TCP if one packet stays unACKed for
+  10 s. Keyboard/mouse input still goes over TCP either way — Windows'
+  UDP input channel (`Microsoft::Windows::RDS::CoreInput`) is
+  undocumented.
 - **Mid-session fallback.** After 1 s of silence the client sends keepalive
   dummy packets, which Windows ACKs. If nothing at all arrives for 3 s, it
   `shutdown()`s the session's TCP socket, and FreeRDP's auto-reconnect
@@ -46,9 +58,10 @@ switch it on per device in Settings > Display & Sound > Brain connection
 
 Tuning (environment, all optional): `SLIMEOS_UDP_DEAD_MS` (3000),
 `SLIMEOS_UDP_PROBE_MS` (1000), `SLIMEOS_UDP_PAUSE_MS` (300000),
-`SLIMEOS_UDP_VERBOSE` (1/2, packet logging). Log lines are tagged
-`SLIMEOS-UDP-NATIVE` under `com.freerdp.core.multitransport`. connect.sh
-lets them into `connect.log` at INFO.
+`SLIMEOS_UDP_TX_GIVEUP_MS` (10000, send path), `SLIMEOS_UDP_VERBOSE`
+(1/2, packet logging). Log lines are tagged `SLIMEOS-UDP-NATIVE` under
+`com.freerdp.core.multitransport`. connect.sh lets them into
+`connect.log` at INFO.
 
 ## Measured
 
@@ -58,14 +71,21 @@ lets them into `connect.log` at INFO.
 - 30-minute soak at 3% loss: steady ~32 fps, flat memory, 145 MB over UDP.
 - AMD box on real Wi-Fi, full-screen YouTube video: TCP 18–28 fps with
   skipped frames, UDP 34–47 fps. A/V sync was "spot on" on 2026-09-24.
+- Send path against the real Azure Brain (build VM, simulated upstream
+  loss via `SLIMEOS_UDP_TX_DROP`): 0/5/15% loss all held a steady ~32 fps
+  scrolling console with every packet eventually ACKed (43/92/240
+  retransmits, 0 stuck). Not yet tried on real lossy Wi-Fi.
 
 ## Known limits
 
 - No Soft-Sync, so channels can't move between transports live. The
   fallback reconnects instead.
+- Input (keyboard/mouse) isn't on the send path yet — Windows' UDP input
+  channel (`Microsoft::Windows::RDS::CoreInput`) is undocumented and needs
+  decoding from a Windows client capture first.
 - Research-only paths are still compiled in, inert unless their variables
-  are set: `SLIMEOS_UDP_HELPER`, `SLIMEOS_UDP_PROBE`, `SLIMEOS_UDP_ACCEPT`.
-  Remove them before upstreaming.
+  are set: `SLIMEOS_UDP_HELPER`, `SLIMEOS_UDP_PROBE`, `SLIMEOS_UDP_ACCEPT`,
+  `SLIMEOS_UDP_TX_DROP`. Remove them before upstreaming.
 - The UDP-side TLS doesn't verify the server certificate. This matches the
   TCP side (`/cert:ignore`). Both run inside WireGuard.
 - If UDP is blackholed *silently* while TCP keeps working (only
