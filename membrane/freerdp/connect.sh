@@ -732,7 +732,7 @@ do_connect() {
             # appended to any filter already in the service environment
             # (e.g. rdpgfx INFO for the fps counter while debugging).
             local udp_env="env -u SLIMEOS_UDP_NATIVE"
-            if [[ "${RDP_UDP:-off}" == "on" ]]; then
+            if [[ "${RDP_UDP:-on}" == "on" ]]; then
                 if dp_udp_supported; then
                     udp_env="env SLIMEOS_UDP_NATIVE=1 WLOG_FILTER=${WLOG_FILTER:+${WLOG_FILTER},}com.freerdp.core.multitransport:INFO"
                     log "UDP transport on (Settings > Display & Sound)"
