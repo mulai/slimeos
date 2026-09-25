@@ -323,7 +323,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 ===================================================================
 --- /dev/null
 +++ freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
-@@ -0,0 +1,1285 @@
+@@ -0,0 +1,1313 @@
 +/* Native RDP-UDP2 (MS-RDPEUDP v3) client transport.
 + *
 + * #included by multitransport.c and only used with SLIMEOS_UDP_NATIVE=1. After the tunnel is
@@ -450,7 +450,9 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	UINT64 rtoUs;
 +	UINT16 txHighAck; /* newest of our DataSeqNums the server has ACKed */
 +	BOOL haveHighAck;
-+	UINT32 txPkts, txRetx, txAcked, txFull, txRle, rttReplies, sentPdus;
++	UINT32 txPkts, txRetx, txRetxFast, txAcked, txFull, txRle, rttReplies, sentPdus;
++	UINT32 txCumAcks; /* plain ACKs that credited more than one packet */
++	UINT32 ackNda[3]; /* plain ACKs by numDelayedAcks: 0, 1, 2+ */
 +	UINT64 sentBytes;
 +	UINT32 txDropPct; /* research: simulated upstream loss, SLIMEOS_UDP_TX_DROP */
 +	UINT32 rng;
@@ -633,23 +635,31 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +	u->haveHighAck = TRUE;
 +}
 +
-+/* The server received our packet seq. Only that one: a plain ACK's delayed-ack count and
-+ * Windows' cumulative reading aren't confirmed for its own ACKs, and a packet wrongly taken as
-+ * delivered would stall the TLS stream for good, while one resent needlessly costs only bytes. */
-+static void ru2_tx_on_ack(Ru2* u, UINT16 seq)
++/* A plain ACK for seq means the server holds every packet of ours up to seq that it still
++ * tracks: Windows' own sender marks all lower pending packets received when it gets a plain
++ * ACK (found 2026-09-23), so as a receiver it only sends one with no gap below (with a gap it
++ * sends an ACK Vector). That also covers its delayed ACKs (numDelayedAcks): crediting only the
++ * exact packet made the AMD box resend more packets than it sent once video + audio replies
++ * were ~10 ms apart (2026-09-25). */
++static void ru2_tx_on_ack(Ru2* u, UINT16 seq, BYTE nda)
 +{
 +	const UINT64 now = ru2_now_us();
++	UINT32 n = 0;
 +	for (UINT32 i = u->txHead; i != u->txTail; i++)
 +	{
 +		Ru2Tx* e = &u->tx[i % RU2_TXQ];
-+		if (!e->used || e->dseq != seq)
++		const UINT16 back = (UINT16)(seq - e->dseq);
++		if (!e->used || back >= 0x8000)
 +			continue;
-+		if (e->tries == 1) /* Karn: no RTT sample from a retransmitted packet */
++		if (back == 0 && e->tries == 1) /* Karn: no RTT sample from a retransmitted packet */
 +			ru2_rtt_sample(u, now - e->sentUs);
 +		e->used = FALSE;
 +		u->txAcked++;
-+		break;
++		n++;
 +	}
++	if (n > 1)
++		u->txCumAcks++;
++	u->ackNda[(nda < 2) ? nda : 2]++;
 +	ru2_tx_note_high(u, seq);
 +	ru2_tx_trim(u);
 +}
@@ -676,7 +686,21 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		const BYTE el = vec[k];
 +		if (el & 0x80)
 +		{
-+			u->txRle++;
++			/* Log a few whole vectors with our queue, to pin the RLE format down from data. */
++			if (u->txRle++ < 8)
++			{
++				char hex[3 * 32 + 1] = { 0 };
++				char q[8 * 12 + 1] = { 0 };
++				for (size_t j = 0; (j < vlen) && (j < 32); j++)
++					(void)snprintf(hex + 3 * j, 4, "%02x ", vec[j]);
++				size_t qo = 0;
++				for (UINT32 i = u->txHead; (i != u->txTail) && (qo + 12 < sizeof(q)); i++)
++					if (u->tx[i % RU2_TXQ].used)
++						qo += (size_t)snprintf(q + qo, sizeof(q) - qo, "%u ",
++						                       (unsigned)u->tx[i % RU2_TXQ].dseq);
++				WLog_INFO(TAG, "SLIMEOS-UDP-NATIVE: ackvec with RLE: base=%u vec=[%s] ourNext=%u unacked=[%s]",
++				          (unsigned)base, hex, (unsigned)u->dseq, q);
++			}
 +			break;
 +		}
 +		for (int b = 0; b < 7; b++, pos++)
@@ -716,12 +740,15 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		const UINT16 behind = (UINT16)(u->txHighAck - e->dseq);
 +		const BOOL fast = u->haveHighAck && (behind >= 3) && (behind < 0x8000) &&
 +		                  (now - e->sentUs > u->srttUs / 2 + 2000);
-+		if ((now - e->sentUs > rto) || fast)
++		const BOOL timedOut = (now - e->sentUs > rto);
++		if (timedOut || fast)
 +		{
 +			e->dseq = u->dseq;
 +			e->sentUs = now;
 +			e->tries++;
 +			u->txRetx++;
++			if (!timedOut)
++				u->txRetxFast++;
 +			(void)ru2_send_raw(u, e->cseq, e->data, e->len);
 +		}
 +	}
@@ -860,7 +887,7 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +		if (o + 7 > n)
 +			return;
 +		if (u->tracking)
-+			ru2_tx_on_ack(u, ru2_get16le(b + o));
++			ru2_tx_on_ack(u, ru2_get16le(b + o), b[o + 6] & 0xF);
 +		o += 7 + (b[o + 6] & 0xF);
 +	}
 +	if (fl & RU2_F_OVH)
@@ -1356,13 +1383,14 @@ Index: freerdp3-3.15.0+dfsg/libfreerdp/core/slimeos_rdpudp2.c
 +			if (u->sendEnabled)
 +				WLog_INFO(TAG,
 +				          "SLIMEOS-UDP-NATIVE: tx sentPdus=%" PRIu32 " sentBytes=%" PRIu64
-+				          " pkts=%" PRIu32 " retx=%" PRIu32 " acked=%" PRIu32
-+				          " outstanding=%" PRIu32 " srttMs=%.1f rtoMs=%.1f rle=%" PRIu32
++				          " pkts=%" PRIu32 " retx=%" PRIu32 " (fast %" PRIu32 ") acked=%" PRIu32
++				          " outstanding=%" PRIu32 " srttMs=%.1f rtoMs=%.1f acks(nda0/1/2+)=%" PRIu32
++				          "/%" PRIu32 "/%" PRIu32 " cumAcks=%" PRIu32 " rle=%" PRIu32
 +				          " full=%" PRIu32 " rttReplies=%" PRIu32 " tunnelChannels=%zu",
-+				          u->sentPdus, u->sentBytes, u->txPkts, u->txRetx, u->txAcked,
-+				          u->txTail - u->txHead, (double)u->srttUs / 1000.0,
-+				          (double)u->rtoUs / 1000.0, u->txRle, u->txFull, u->rttReplies,
-+				          u->tunnelChN);
++				          u->sentPdus, u->sentBytes, u->txPkts, u->txRetx, u->txRetxFast,
++				          u->txAcked, u->txTail - u->txHead, (double)u->srttUs / 1000.0,
++				          (double)u->rtoUs / 1000.0, u->ackNda[0], u->ackNda[1], u->ackNda[2],
++				          u->txCumAcks, u->txRle, u->txFull, u->rttReplies, u->tunnelChN);
 +		}
 +		pthread_mutex_unlock(&u->lock);
 +		ru2_dispatch_tunnel(u);

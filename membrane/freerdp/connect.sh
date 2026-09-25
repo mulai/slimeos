@@ -720,7 +720,7 @@ do_connect() {
             fi
 
             # UDP transport (Settings > Display & Sound > Brain connection,
-            # RDP_UDP in display-prefs). Needs the +slimeos10 FreeRDP build,
+            # RDP_UDP in display-prefs). Needs the +slimeos11 FreeRDP build,
             # which only uses UDP when SLIMEOS_UDP_NATIVE=1 (graphics and
             # audio ride an RDP-UDP2 tunnel; if UDP goes quiet mid-session it
             # drops back to TCP by itself, see

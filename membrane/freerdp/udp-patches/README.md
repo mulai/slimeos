@@ -13,12 +13,11 @@ FreeRDP#8276).
 
 **Status (2026-09-25):** in daily use on the AMD box over Wi-Fi. Shipped
 as `+slimeos7` (v0.3.27), `+slimeos8` (v0.3.28, adds opt-in VAAPI),
-`+slimeos9` (v0.3.29, fixes a crash on disconnect), then `+slimeos10`
-(adds the send path below), together with the camera and keyboard
-patches. Users switch it on per device in Settings > Display & Sound >
-Brain connection > "Faster (beta)". It is off by default. The send path
-was validated with simulated loss on the build VM (0/5/15% upstream drop
-against the real Azure Brain) but not yet on real lossy Wi-Fi.
+`+slimeos9` (v0.3.29, fixes a crash on disconnect), then `+slimeos11`
+(v0.3.38, adds the send path below; `+slimeos10` was an unreleased trial
+build), together with the camera and keyboard patches. Users switch it
+on per device in Settings > Display & Sound > Brain connection >
+"Faster (beta)", on by default since v0.3.36.
 
 ## What it does
 
@@ -36,13 +35,16 @@ against the real Azure Brain) but not yet on real lossy Wi-Fi.
   acks, channel open/close) go back over it too, instead of TCP. Reliable:
   each packet is queued and retransmitted (RFC 6298-style RTO, min 30 ms;
   fast retransmit once 3 newer packets are ACKed) until Windows
-  acknowledges it specifically — a plain ACK credits only that exact
-  DataSeqNum, an ACK vector's bitmap credits each bit it sets, run-length
-  elements aren't decoded yet (so nothing is ever assumed received by
-  mistake). Gives up and falls back to TCP if one packet stays unACKed for
-  10 s. Keyboard/mouse input still goes over TCP either way — Windows'
-  UDP input channel (`Microsoft::Windows::RDS::CoreInput`) is
-  undocumented.
+  acknowledges it. A plain ACK is cumulative: it credits every packet up
+  to its DataSeqNum, the same way Windows treats our plain ACKs, and so
+  also covers Windows' delayed ACKs (most of its ACKs during video carry
+  1 or more). `+slimeos10` credited only the exact packet and resent more
+  packets than it sent. An ACK vector credits everything below its base
+  plus each bitmap bit; run-length elements aren't decoded yet (a few are
+  logged raw), so nothing is ever assumed received by mistake. Gives up
+  and falls back to TCP if one packet stays unACKed for 10 s.
+  Keyboard/mouse input still goes over TCP either way — Windows' UDP
+  input channel (`Microsoft::Windows::RDS::CoreInput`) is undocumented.
 - **Mid-session fallback.** After 1 s of silence the client sends keepalive
   dummy packets, which Windows ACKs. If nothing at all arrives for 3 s, it
   `shutdown()`s the session's TCP socket, and FreeRDP's auto-reconnect
@@ -74,7 +76,12 @@ Tuning (environment, all optional): `SLIMEOS_UDP_DEAD_MS` (3000),
 - Send path against the real Azure Brain (build VM, simulated upstream
   loss via `SLIMEOS_UDP_TX_DROP`): 0/5/15% loss all held a steady ~32 fps
   scrolling console with every packet eventually ACKed (43/92/240
-  retransmits, 0 stuck). Not yet tried on real lossy Wi-Fi.
+  retransmits, 0 stuck); 15% again with cumulative ACKs: 17% retransmits,
+  0 stuck, steady 32 fps.
+- Send path on the AMD box over real Wi-Fi, YouTube video: "as if I am in
+  a local PC" (Tommy). `+slimeos11`: 221 retransmits of 6,202 packets,
+  all within one ~40 s stretch, 0 on connect, flat during steady video.
+  `+slimeos10` had resent 16,775 for 13,705 sent.
 
 ## Known limits
 
@@ -113,7 +120,9 @@ and reproduces the shipped +slimeos9 debs bit for bit.
    `-DWITH_VAAPI=ON` (it ships OFF). Add `libva-dev` to Build-Depends.
    The runtime dependencies don't change, which matters because the OTA
    installs with plain `dpkg -i`.
-3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos10`...).
+3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos12`...).
+   Always bump, even for a build that only went to a test device: the OTA
+   sync skips a device whose installed version string already matches.
    Write it by hand; `dch` hangs when run non-interactively.
 4. `DEB_BUILD_OPTIONS="parallel=4 nocheck noddebs" dpkg-buildpackage -b -us -uc`
    (install the tree's own build deps first:
