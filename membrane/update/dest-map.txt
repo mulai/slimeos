@@ -23,6 +23,7 @@ firewall-setup.sh:firewall-setup.sh
 crash-reporting.sh:crash-reporting.sh
 slime-id.sh:slime-id.sh
 lock.sh:lock.sh
+recovery-pin-check:recovery-pin-check
 changelog.sh:changelog.sh
 hardware-test.sh:hardware-test.sh
 display-settings.sh:display-settings.sh

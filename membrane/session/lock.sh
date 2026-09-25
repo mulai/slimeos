@@ -15,9 +15,10 @@
 #
 # Two ways to unlock, PIN first (like the Windows/macOS lock screens):
 #   * Recovery PIN (the default view) -- the 8-digit PIN shown once at
-#     install, verified as slime-recovery's password by the system itself
-#     (su/PAM), never against a stored copy. Rate-limited, with the counter
-#     on disk so a reboot doesn't reset it. The PIN is never logged or stored.
+#     install, verified as slime-recovery's real password (recovery-pin-check,
+#     never against a stored copy -- see that binary's own header for why it
+#     doesn't go through su/PAM). Rate-limited, with the counter on disk so a
+#     reboot doesn't reset it. The PIN is never logged or stored.
 #   * QR, only after the user taps the QR icon -- /api/device/unlock-start
 #     creates a code only this device's own Slime ID can approve, polled via
 #     /api/device/poll until approved. Never mints a session (the device
@@ -115,10 +116,13 @@ lock_check_pin() {
         return 2
     fi
 
-    # Only digits reach su; anything else is just a wrong PIN.
+    # Only digits reach the helper; anything else is just a wrong PIN. It
+    # re-validates this same shape itself (github.com/mulai/slimeos#33: su
+    # went through PAM, which floors every attempt at 2s+ regardless of
+    # outcome -- meant for network logins, not a rate-limited local PIN).
     local ok=false
     if [[ "$pin" =~ ^[0-9]{4,16}$ ]] && \
-        printf '%s\n' "$pin" | timeout 15 su -s /bin/sh -c true slime-recovery >/dev/null 2>&1; then
+        printf '%s\n' "$pin" | timeout 15 sudo -n "$INSTALL_DIR/recovery-pin-check" >/dev/null 2>&1; then
         ok=true
     fi
 

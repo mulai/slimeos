@@ -7,6 +7,7 @@
 set -euo pipefail
 
 PROFILE_DIR="$(dirname "$(realpath "$0")")"
+INSTALL_DIR="$(dirname "$PROFILE_DIR")"
 APPLIED_MARKER="/etc/slimeos/hw-profile-applied"
 
 log() { echo "[slimeos/hw-detect] $*"; }
@@ -163,6 +164,35 @@ sync_freerdp() {
 }
 
 sync_freerdp || log "FreeRDP sync failed (non-fatal, retried on the next update)"
+
+# ── recovery-pin-check sudo grant ──────────────────────────────────────────────
+# Root hook for a device that already ran install.sh before this binary
+# existed: apply-update-helper.sh installs any new bundle file (including
+# this one, membrane/session/recovery-pin-check.c) at mode 0644 -- its mode
+# rule only recognizes *.sh and slimeos-bridge by name, and it can't be
+# taught a third case retroactively since it never updates itself (see its
+# own header). This gives the binary back its execute bit, and writes the
+# sudoers grant lock.sh's do_lock_screen() needs -- both idempotent, safe to
+# run on every update the same as sync_freerdp() above. install.sh calls
+# this same detect.sh at the end of a fresh install too, so there's no
+# separate install.sh-side copy of this logic to keep in sync.
+PIN_CHECK_BIN="$INSTALL_DIR/recovery-pin-check"
+PIN_CHECK_SUDOERS="/etc/sudoers.d/slimeos-recovery-pin-check"
+if [[ -f "$PIN_CHECK_BIN" ]]; then
+    chmod 0755 "$PIN_CHECK_BIN"
+    if ! grep -qxF "slime ALL=(root) NOPASSWD: $PIN_CHECK_BIN" "$PIN_CHECK_SUDOERS" 2>/dev/null; then
+        cat > "$PIN_CHECK_SUDOERS" <<SUDOERS
+slime ALL=(root) NOPASSWD: $PIN_CHECK_BIN
+SUDOERS
+        chmod 440 "$PIN_CHECK_SUDOERS"
+        if visudo -cf "$PIN_CHECK_SUDOERS"; then
+            log "recovery-pin-check sudo grant installed"
+        else
+            log "recovery-pin-check sudoers file failed validation, removing"
+            rm -f "$PIN_CHECK_SUDOERS"
+        fi
+    fi
+fi
 
 # ── Wi-Fi power saving off ────────────────────────────────────────────────────
 # Power saving lets the Wi-Fi chip doze between beacons, which adds delay

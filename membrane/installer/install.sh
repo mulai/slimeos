@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.38"
+SLIMEOS_VERSION="0.3.39"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -394,6 +394,17 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
 # an ordinary bundle file like slime-id.sh.
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/lock.sh" \
      -o "$INSTALL_DIR/lock.sh"
+# recovery-pin-check: lock.sh's PIN verification, compiled from
+# membrane/session/recovery-pin-check.c (see its own header). An ordinary
+# bundle file like lock.sh, but root-only and not a shell script, so it's
+# chmod'd here directly rather than swept into the batch chmod +x below;
+# hardware-profiles/detect.sh (called at the end of this script and on
+# every OTA update) re-asserts this same mode and writes the matching
+# sudoers grant idempotently, so an already-installed device picks both up
+# without a reinstall.
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/recovery-pin-check" \
+     -o "$INSTALL_DIR/recovery-pin-check"
+chmod 0755 "$INSTALL_DIR/recovery-pin-check"
 # changelog.sh is an ordinary bundle file (part of the auto-update manifest,
 # same as timezone.sh/support.sh) -- unlike update.sh/apply-update-helper.sh
 # just below, which are deliberately excluded from that manifest (see
