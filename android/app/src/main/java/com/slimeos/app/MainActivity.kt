@@ -1,6 +1,8 @@
 package com.slimeos.app
 
 import android.app.Activity
+import android.graphics.Point
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -9,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -131,13 +135,24 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             uiState.status = "Connecting..."
-            val bounds = windowManager.currentWindowMetrics.bounds
+            val size = screenSize()
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
                     this@MainActivity, host, port, username, password,
-                    widthPx = bounds.width(), heightPx = bounds.height()
+                    widthPx = size.x, heightPx = size.y
                 )
             )
+        }
+    }
+
+    private fun screenSize(): Point {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = windowManager.currentWindowMetrics.bounds
+            return Point(b.width(), b.height())
+        }
+        return Point().also {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(it)
         }
     }
 
@@ -182,7 +197,7 @@ private fun PairingScreen(
     var password by remember { mutableStateOf("") }
 
     Column(
-        modifier = Modifier.padding(24.dp).fillMaxSize(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Slime OS — M1 spike", style = MaterialTheme.typography.headlineSmall)
