@@ -63,7 +63,8 @@ remove_expired_peers() {
     local key rec pub ip expiry handshake now
     now=$(date +%s)
     exec 9>>/config/.provision.lock
-    flock -w 30 9 || { echo "cleanup skipped: provisioning lock busy" >&2; return 0; }
+    for _ in {1..30}; do flock -n 9 && break; sleep 1; done   # BusyBox flock: no -w
+    flock -n 9 || { echo "cleanup skipped: provisioning lock busy" >&2; return 0; }
     while IFS= read -r key; do
         [[ -n "$key" ]] || continue
         rec=$(redis GET "$key") || continue

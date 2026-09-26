@@ -38,7 +38,9 @@ SERVER_CONF="$WG_DIR/wg0.conf"
 # /config volume, so both containers see it.
 command -v flock >/dev/null || die "flock not found"
 exec 9>>/config/.provision.lock
-flock -w 30 9 || die "another peer is being provisioned; try again"
+# Polls with -n: the wireguard container's flock is BusyBox, which has no -w.
+for _ in {1..30}; do flock -n 9 && break; sleep 1; done
+flock -n 9 || die "another peer is being provisioned; try again"
 
 SERVER_PUBKEY=$(grep "^PrivateKey" "$SERVER_CONF" | awk '{print $3}' | wg pubkey)
 
