@@ -112,6 +112,68 @@ migrate_wireguard_root() {
     rm -f "$WG_POLKIT_RULE"
 }
 
+# Polkit rules install.sh added after some devices were installed (the UTM VM
+# predates 50/51/53, so Restart and Wi-Fi setup fail there with "Interactive
+# authentication required"). /etc isn't OTA-delivered, so this boot-time root
+# script writes any rule that's missing or differs. Keep these in step with
+# install.sh's section 3.
+polkit_rule() {
+    case "$1" in
+        50-slimeos-network-manager.rules) cat <<'POLKIT'
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
+        subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+        ;;
+        51-slimeos-power.rules) cat <<POLKIT
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions") &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+        ;;
+        53-slimeos-udisks2.rules) cat <<POLKIT
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.udisks2.") == 0 &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+        ;;
+        54-slimeos-timedate.rules) cat <<POLKIT
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.timedate1.set-timezone" ||
+         action.id == "org.freedesktop.timedate1.set-ntp") &&
+        subject.user == "${SESSION_USER}") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+        ;;
+    esac
+}
+migrate_polkit_rules() {
+    local dir=/etc/polkit-1/rules.d name tmp
+    [[ -d /etc/polkit-1 ]] || return 0
+    mkdir -p "$dir"
+    tmp=$(mktemp)
+    for name in 50-slimeos-network-manager.rules 51-slimeos-power.rules \
+                53-slimeos-udisks2.rules 54-slimeos-timedate.rules; do
+        polkit_rule "$name" > "$tmp"
+        cmp -s "$tmp" "$dir/$name" || install -m 0644 -o root -g root "$tmp" "$dir/$name"
+    done
+    rm -f "$tmp"
+}
+
 case "$1" in
     on)
         # Repair first: on a half-loaded ufw, `ufw allow` below only writes
@@ -161,6 +223,7 @@ case "$1" in
         # account and stopping ssh below matter more.
         migrate_firewall_unit || echo "firewall unit migration failed" >&2
         migrate_wireguard_root || echo "wireguard root migration failed" >&2
+        migrate_polkit_rules || echo "polkit rules migration failed" >&2
         if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
 
         rm -f "$ACTIVE_FLAG"
