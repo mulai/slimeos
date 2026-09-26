@@ -134,7 +134,18 @@ do_apply_update() {
     set -e
 
     case "$rc" in
-        0) ;;
+        0)
+            # The helper has asked for the reboot, but `systemctl reboot`
+            # returns before the system goes down and shutdown can take a
+            # minute. Don't go back to the event loop meanwhile: the next
+            # screen it draws covers the "Updating" overlay (seen on the UTM
+            # VM 2026-09-26: Changelog came back still offering the version
+            # that had just been installed).
+            log "Apply update: installed, waiting for the reboot"
+            sleep 180
+            log "Apply update: still running 3 min after the reboot request"
+            emit_update_failed "The update is installed. Restart the Membrane to finish."
+            ;;
         3)
             log "Apply update: helper couldn't download/verify -- current install untouched (will retry on the next check)"
             emit_update_failed "Couldn't verify the update. It will be offered again later."
