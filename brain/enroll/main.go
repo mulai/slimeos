@@ -104,7 +104,7 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := s.redisGetDel("pair:" + code)
+	config, err := s.redeem(code)
 	if err != nil {
 		log.Printf("redis error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, pairResponse{Error: "internal_error"})
@@ -161,16 +161,16 @@ func writeJSON(w http.ResponseWriter, status int, v pairResponse) {
 }
 
 // ── Fixed-window per-IP rate limiter ─────────────────────────────────────────
-// Deliberately simple (no cleanup goroutine, no LRU): this endpoint sees
-// enrollment-scale traffic (a handful of new devices at a time, not a public
-// API), so an unbounded-but-slow-growing map is an acceptable trade for
-// keeping this file small and dependency-free.
+// Deliberately simple (no LRU): this endpoint sees enrollment-scale traffic.
+// Expired buckets are swept on the way in, at most once per window, so the
+// map can't grow without bound from many source IPs (#42).
 
 type rateLimiter struct {
 	mu     sync.Mutex
 	limit  int
 	window time.Duration
 	counts map[string]*bucket
+	swept  time.Time
 }
 
 type bucket struct {
@@ -186,6 +186,14 @@ func (r *rateLimiter) allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	if now.Sub(r.swept) > r.window {
+		for k, b := range r.counts {
+			if now.After(b.windowEnd) {
+				delete(r.counts, k)
+			}
+		}
+		r.swept = now
+	}
 	b, ok := r.counts[key]
 	if !ok || now.After(b.windowEnd) {
 		b = &bucket{windowEnd: now.Add(r.window)}
@@ -195,12 +203,17 @@ func (r *rateLimiter) allow(key string) bool {
 	return b.count <= r.limit
 }
 
-// ── Minimal RESP client (AUTH + GETDEL only) ────────────────────────────────
+// ── Minimal RESP client (AUTH + GETDEL + DEL only) ──────────────────────────
 // A fresh connection per request, not a pool: traffic here is low-volume
 // enough that connection-reuse complexity isn't worth it, and it avoids any
 // risk of interleaving commands from concurrent requests on a shared socket.
 
-func (s *server) redisGetDel(key string) (string, error) {
+// redeem returns the config stored under pair:<code> (deleting it, so a
+// code works once) and, if there was one, deletes pairpending:<code> so
+// pair-peer.sh's cleanup knows this peer is in use (#44). A failed delete
+// is only logged: that cleanup also requires the peer to never have
+// connected, so the device keeps its peer either way.
+func (s *server) redeem(code string) (string, error) {
 	conn, err := net.DialTimeout("tcp", s.redisAddr, 3*time.Second)
 	if err != nil {
 		return "", err
@@ -221,13 +234,27 @@ func (s *server) redisGetDel(key string) (string, error) {
 		return "", fmt.Errorf("AUTH failed: %w", err)
 	}
 
-	if err := respWriteCommand(w, "GETDEL", key); err != nil {
+	if err := respWriteCommand(w, "GETDEL", "pair:"+code); err != nil {
 		return "", err
 	}
 	if err := w.Flush(); err != nil {
 		return "", err
 	}
-	return respReadReply(r)
+	config, err := respReadReply(r)
+	if err != nil || config == "" {
+		return config, err
+	}
+
+	if err := respWriteCommand(w, "DEL", "pairpending:"+code); err == nil {
+		err = w.Flush()
+	}
+	if err == nil {
+		_, err = respReadReply(r)
+	}
+	if err != nil {
+		log.Printf("redeemed a code but could not clear its pending record: %v", err)
+	}
+	return config, nil
 }
 
 func respWriteCommand(w *bufio.Writer, args ...string) error {
@@ -243,8 +270,9 @@ func respWriteCommand(w *bufio.Writer, args ...string) error {
 }
 
 // respReadReply reads exactly one RESP reply. Sufficient subset for this
-// file's needs: simple strings (+), errors (-), and bulk strings ($,
-// including the nil-bulk-string $-1 case GETDEL returns on a miss).
+// file's needs: simple strings (+), errors (-), integers (:, DEL's reply)
+// and bulk strings ($, including the nil-bulk-string $-1 case GETDEL
+// returns on a miss).
 func respReadReply(r *bufio.Reader) (string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -256,7 +284,7 @@ func respReadReply(r *bufio.Reader) (string, error) {
 	}
 
 	switch line[0] {
-	case '+':
+	case '+', ':':
 		return line[1:], nil
 	case '-':
 		return "", fmt.Errorf("redis error: %s", line[1:])

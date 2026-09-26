@@ -123,7 +123,8 @@ func (s *server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	// pair-peer.sh can wait up to 30 s for another provisioning's lock (#44).
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, s.scriptPath, req.DeviceName)

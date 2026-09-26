@@ -10,6 +10,8 @@ website/.vercel
 
 # env
 .env
+# live Authelia users (template: brain/authelia/users_database.example.yml)
+brain/authelia/users_database.yml
 .env*.local
 .env.production
 

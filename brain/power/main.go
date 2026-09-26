@@ -16,16 +16,18 @@
 //     found merely "stopped" (a guest-initiated shutdown from inside
 //     Windows leaves the VM allocated — and billing).
 //
-// Security model: there is no authentication in this file because the
-// network IS the authentication. docker-compose runs this container with
-// network_mode: service:wireguard and the listener binds 10.10.0.1:7677
-// explicitly — the WireGuard interface address inside that namespace — so
-// only WireGuard peers can ever reach it, exactly like RDP itself. It is
-// deliberately NOT behind Caddy: a publicly reachable unauthenticated
-// start endpoint is cost-griefing surface. Note there is no stop/
-// deallocate HTTP endpoint at all (the watchdog is the only thing that
-// powers anything off), so the worst a hostile peer could do is keep the
-// VM awake. The explicit bind matters: a wildcard :7677 would also listen
+// Security model: the network is the authentication. docker-compose runs
+// this container with network_mode: service:wireguard and the listener
+// binds 10.10.0.1:7677 explicitly — the WireGuard interface address inside
+// that namespace — so only WireGuard peers can reach it, and WireGuard only
+// accepts a packet from a peer if its source address is one of that peer's
+// AllowedIPs. So the caller's IP names the peer, and each managed VM lists
+// the Membrane IPs allowed to act on it (POWER_VMS, see parseVMs); every
+// other caller gets 403 (#40: /session-ended logs off the VM's disconnected
+// sessions, which a stranger must not be able to do). The hub itself
+// (the listen address) may always call, for debugging. It is deliberately
+// NOT behind Caddy: a publicly reachable start endpoint is cost-griefing
+// surface. The explicit bind matters: a wildcard :7677 would also listen
 // on the WireGuard container's docker-bridge addresses.
 //
 // Fail-safe posture throughout: conntrack unreadable, PowerState absent,
@@ -108,7 +110,9 @@ func main() {
 		}
 	}
 
+	hubIP, _, _ := net.SplitHostPort(*listen)
 	s := &server{
+		hubIP:         hubIP,
 		tenant:        tenant,
 		clientID:      clientID,
 		clientSecret:  clientSecret,
@@ -121,6 +125,9 @@ func main() {
 	}
 	for host, ref := range vms {
 		s.hosts[host] = &hostState{ref: ref}
+		if len(ref.clients) == 0 {
+			log.Printf("WARNING: %s has no allowed Membranes in POWER_VMS (host=sub/rg/vm@ip+ip); only the hub can wake it", host)
+		}
 	}
 
 	// An empty POWER_VMS is not an error: the service can ship in
@@ -164,14 +171,17 @@ func main() {
 
 type vmRef struct {
 	sub, rg, name string
+	clients       map[string]bool // Membrane wg IPs allowed to act on this VM
 }
 
 func vmBase(r vmRef) string {
 	return fmt.Sprintf("https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/virtualMachines/%s", r.sub, r.rg, r.name)
 }
 
-// POWER_VMS format: "10.10.0.3=<subscriptionId>/<resourceGroup>/<vmName>",
-// comma-separated for multiple VMs.
+// POWER_VMS format:
+// "10.10.0.3=<subscriptionId>/<resourceGroup>/<vmName>@10.10.0.13+10.10.0.17",
+// comma-separated for multiple VMs. After "@", the WireGuard IPs of the
+// Membranes allowed to wake the VM and end its sessions.
 func parseVMs(s string) (map[string]vmRef, error) {
 	out := make(map[string]vmRef)
 	if strings.TrimSpace(s) == "" {
@@ -183,11 +193,22 @@ func parseVMs(s string) (map[string]vmRef, error) {
 		if !ok {
 			return nil, fmt.Errorf("entry %q is not host=sub/rg/vm", entry)
 		}
+		ref, allowed, _ := strings.Cut(ref, "@")
 		parts := strings.Split(ref, "/")
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 			return nil, fmt.Errorf("entry %q: want <subscriptionId>/<resourceGroup>/<vmName>", entry)
 		}
-		out[strings.TrimSpace(host)] = vmRef{sub: parts[0], rg: parts[1], name: parts[2]}
+		clients := make(map[string]bool)
+		for _, ip := range strings.Split(allowed, "+") {
+			if ip = strings.TrimSpace(ip); ip == "" {
+				continue
+			}
+			if net.ParseIP(ip) == nil {
+				return nil, fmt.Errorf("entry %q: %q is not an IP address", entry, ip)
+			}
+			clients[ip] = true
+		}
+		out[strings.TrimSpace(host)] = vmRef{sub: parts[0], rg: parts[1], name: parts[2], clients: clients}
 	}
 	return out, nil
 }
@@ -239,6 +260,7 @@ type hostState struct {
 }
 
 type server struct {
+	hubIP                          string
 	tenant, clientID, clientSecret string
 	httpc                          *http.Client
 	hosts                          map[string]*hostState
@@ -268,7 +290,22 @@ func writeJSON(w http.ResponseWriter, status int, v powerResponse) {
 // ── HTTP handlers ────────────────────────────────────────────────────────────
 // No rate limiter, unlike enroll: enroll faces the open internet through
 // Caddy; this listener is reachable only by WireGuard peers, and its
-// callers poll at 1 req/5s. WireGuard membership is the admission control.
+// callers poll at 1 req/5s. Each managed VM only answers its own Membranes
+// (allowed); unmanaged hosts answer {managed:false} to anyone.
+
+// allowed reports whether the caller may act on hs. Logs refusals.
+func (s *server) allowed(hs *hostState, host string, r *http.Request) bool {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && (ip == s.hubIP || hs.ref.clients[ip]) {
+		return true
+	}
+	log.Printf("%s %s: refused caller %s (not in this VM's POWER_VMS list)", r.URL.Path, host, r.RemoteAddr)
+	return false
+}
+
+func forbidden(w http.ResponseWriter) {
+	writeJSON(w, http.StatusForbidden, powerResponse{Error: "forbidden"})
+}
 
 type wakeRequest struct {
 	Host string `json:"host"`
@@ -297,6 +334,10 @@ func (s *server) handleWake(w http.ResponseWriter, r *http.Request) {
 		// hub's own xrdp desktop, and any host the operator hasn't put in
 		// POWER_VMS. The Membrane proceeds straight to its RDP attempt.
 		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
+		return
+	}
+	if !s.allowed(hs, req.Host, r) {
+		forbidden(w)
 		return
 	}
 
@@ -371,8 +412,9 @@ func (s *server) handleWake(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStatus is a read-only debug endpoint (curl from the hub or a
-// peer); the Membrane deliberately does not use it — see handleWake.
+// handleStatus is read-only: coordinator.sh's Brain list uses it to show a
+// deallocated Brain as "Asleep" instead of "Offline"; never used to connect
+// (see handleWake). ARM error detail stays in this log.
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	host := r.URL.Query().Get("host")
 	hs, ok := s.hosts[host]
@@ -380,9 +422,14 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
 		return
 	}
+	if !s.allowed(hs, host, r) {
+		forbidden(w)
+		return
+	}
 	state, err := s.vmState(hs)
 	if err != nil {
-		writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "unknown", Error: err.Error()})
+		log.Printf("status %s: instanceView failed: %v", host, err)
+		writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "unknown"})
 		return
 	}
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: state})
@@ -428,9 +475,22 @@ func (s *server) handleSessionEnded(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
 		return
 	}
+	if !s.allowed(hs, req.Host, r) {
+		forbidden(w)
+		return
+	}
+	// One cleanup at a time per VM: repeated calls while one runs are
+	// answered but don't queue more logoffs.
 	s.mu.Lock()
-	hs.cleanupUntil = time.Now().Add(cleanupMaxWait)
+	running := time.Now().Before(hs.cleanupUntil)
+	if !running {
+		hs.cleanupUntil = time.Now().Add(cleanupMaxWait)
+	}
 	s.mu.Unlock()
+	if running {
+		writeJSON(w, http.StatusOK, powerResponse{Managed: true})
+		return
+	}
 	go s.resetStaleRDPSession(hs, req.Host)
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true})
 }

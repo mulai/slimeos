@@ -31,6 +31,15 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 SERVER_CONF="$WG_DIR/wg0.conf"
 [[ -f "$SERVER_CONF" ]] || die "Server config not found at $SERVER_CONF. Is WireGuard running?"
 
+# One provisioning at a time (#44): pairgen serves requests concurrently, and
+# two runs picking the next free IP from the same wg0.conf would hand two
+# peers the same /32 (WireGuard then routes it to whichever loaded last).
+# pair-peer.sh takes the same lock to remove expired peers. On the shared
+# /config volume, so both containers see it.
+command -v flock >/dev/null || die "flock not found"
+exec 9>>/config/.provision.lock
+flock -w 30 9 || die "another peer is being provisioned; try again"
+
 SERVER_PUBKEY=$(grep "^PrivateKey" "$SERVER_CONF" | awk '{print $3}' | wg pubkey)
 
 # SERVERURL/SERVERPORT are the same env vars docker-compose.yml passes into
@@ -48,6 +57,7 @@ NEXT_IP=2
 for ip in $USED_IPS; do
     [[ $ip -eq $NEXT_IP ]] && (( NEXT_IP++ ))
 done
+(( NEXT_IP <= 254 )) || die "no free address left in 10.10.0.0/24"
 CLIENT_IP="10.10.0.${NEXT_IP}/32"
 
 # Generate client keypair

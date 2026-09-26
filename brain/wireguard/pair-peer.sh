@@ -15,6 +15,16 @@
 #
 # The resulting code is meant to be relayed to the end user out-of-band
 # (voice/chat/etc) and typed into the Membrane's "Pair with a Brain" screen.
+#
+# Every run mints a new peer, so codes that are never used would pile up
+# peers until the /24 runs out (#44). Each code is also recorded as
+# pairpending:<code> = "<pubkey> <ip> <expiry>"; brain/enroll deletes that
+# record when the code is redeemed. Before minting, remove_expired_peers
+# drops any peer whose code expired unredeemed AND that has never completed
+# a handshake. Both conditions, so a device that did pair is never cut off.
+#
+# The Redis password goes in REDISCLI_AUTH and values over stdin (-x), not
+# on the command line where any process can read them (#47).
 
 set -euo pipefail
 
@@ -26,7 +36,55 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Run as root inside the WireGuard container"
 [[ -n "${REDIS_PASSWORD:-}" ]] || die "REDIS_PASSWORD env var not set — is this running inside the slimeos-wireguard container?"
-command -v redis-cli &>/dev/null || die "redis-cli not found — check the custom-init hook that installs it"
+command -v redis-cli &>/dev/null || die "redis-cli not found — see wireguard/Dockerfile and pairgen/Dockerfile"
+
+CODE_TTL=900
+SERVER_CONF="/config/wg_confs/wg0.conf"
+export REDISCLI_AUTH="$REDIS_PASSWORD"
+redis() { redis-cli -h redis --no-auth-warning "$@"; }
+
+# Removes one peer (by public key) from wg0.conf and the live interface.
+remove_peer() {
+    local pub="$1" ip="$2" tmp
+    tmp=$(mktemp "${SERVER_CONF}.XXXXXX")
+    awk -v key="$pub" '
+        function flush() { if (!drop) printf "%s", buf; buf = ""; drop = 0 }
+        /^# Peer: /  { flush(); buf = $0 "\n"; comment = 1; next }
+        /^\[Peer\]/  { if (!comment) flush(); comment = 0; buf = buf $0 "\n"; next }
+                     { comment = 0; if ($1 == "PublicKey" && $3 == key) drop = 1; buf = buf $0 "\n" }
+        END          { flush() }' "$SERVER_CONF" > "$tmp"
+    cat "$tmp" > "$SERVER_CONF"
+    rm -f "$tmp"
+    wg set wg0 peer "$pub" remove 2>/dev/null || true
+    ip route del "$ip/32" dev wg0 2>/dev/null || true
+}
+
+remove_expired_peers() {
+    local key rec pub ip expiry handshake now
+    now=$(date +%s)
+    exec 9>>/config/.provision.lock
+    flock -w 30 9 || { echo "cleanup skipped: provisioning lock busy" >&2; return 0; }
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        rec=$(redis GET "$key") || continue
+        read -r pub ip expiry <<<"$rec"
+        [[ "$pub" =~ ^[A-Za-z0-9+/]{43}=$ && "$ip" =~ ^10\.10\.0\.[0-9]{1,3}$ && "$expiry" =~ ^[0-9]+$ ]] || { redis DEL "$key" >/dev/null || true; continue; }
+        (( now > expiry + 60 )) || continue
+        handshake=$(wg show wg0 latest-handshakes | awk -v k="$pub" '$1 == k {print $2}') || continue
+        if [[ -z "$handshake" ]]; then
+            redis DEL "$key" >/dev/null || true   # peer already gone
+        elif [[ "$handshake" == 0 ]]; then
+            remove_peer "$pub" "$ip"
+            redis DEL "$key" >/dev/null || true
+            echo "removed unused peer $ip (code ${key#pairpending:} expired)" >&2
+        fi
+        # A handshake means the device paired even though the record is
+        # still there (e.g. enroll's delete failed): keep the peer.
+    done < <(redis --scan --pattern 'pairpending:*')
+    exec 9>&-
+}
+
+remove_expired_peers
 
 "$SCRIPT_DIR/provision-peer.sh" "$PEER_NAME" >&2
 
@@ -45,9 +103,13 @@ CODE_DISPLAY="${CODE:0:4}-${CODE:4:4}"
 
 # TTL 900s (15 min): long enough for an admin to relay the code and the user
 # to type it, short enough that a leaked/overheard code is worthless soon
-# after. SET ... EX is a single atomic write -- no separate EXPIRE call.
-redis-cli -h redis -a "$REDIS_PASSWORD" --no-auth-warning \
-    SET "pair:${CODE}" "$(cat "$CONFIG_FILE")" EX 900 >/dev/null
+# after. SETEX is a single atomic write -- no separate EXPIRE call. The
+# config goes over stdin (-x), not argv: it holds the peer's private key.
+redis -x SETEX "pair:${CODE}" "$CODE_TTL" < "$CONFIG_FILE" >/dev/null
+CLIENT_PUB=$(awk '$1 == "PrivateKey" {print $3}' "$CONFIG_FILE" | wg pubkey)
+CLIENT_IP=$(awk '$1 == "Address" {split($3, a, "/"); print a[1]}' "$CONFIG_FILE")
+printf '%s %s %s' "$CLIENT_PUB" "$CLIENT_IP" "$(( $(date +%s) + CODE_TTL ))" \
+    | redis -x SET "pairpending:${CODE}" >/dev/null
 
 echo ""
 echo "  ✓ Pairing code for '${PEER_NAME}': ${CODE_DISPLAY}"

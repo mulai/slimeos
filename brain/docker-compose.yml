@@ -25,8 +25,10 @@ name: slimeos-brain
 services:
 
   # ── Caddy — TLS + reverse proxy ─────────────────────────────────────────────
+  # Third-party images are pinned to a version and digest (#46): a pull
+  # never changes what runs. To update one, change both on purpose.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.4-alpine@sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2
     container_name: slimeos-caddy
     restart: unless-stopped
     ports:
@@ -43,7 +45,7 @@ services:
 
   # ── Authelia — MFA / identity gateway ────────────────────────────────────────
   authelia:
-    image: authelia/authelia:latest
+    image: authelia/authelia:4.39.20@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b
     container_name: slimeos-authelia
     restart: unless-stopped
     volumes:
@@ -71,7 +73,7 @@ services:
 
   # ── Redis — Authelia session store ────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: slimeos-redis
     restart: unless-stopped
     command: redis-server --requirepass "${REDIS_PASSWORD}" --save 60 1 --loglevel warning
@@ -87,7 +89,7 @@ services:
 
   # ── PostgreSQL — persistent store ─────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
     container_name: slimeos-postgres
     restart: unless-stopped
     environment:
@@ -107,7 +109,11 @@ services:
   # ── WireGuard — VPN gateway ────────────────────────────────────────────────────
   # Membrane clients connect here; once inside, they can reach the desktop service.
   wireguard:
-    image: lscr.io/linuxserver/wireguard:latest
+    # linuxserver/wireguard plus the tools the scripts below need, baked in
+    # rather than apk-added at every start (see wireguard/Dockerfile).
+    build:
+      context: ./wireguard
+    image: slimeos/wireguard:latest
     container_name: slimeos-wireguard
     restart: unless-stopped
     cap_add:
@@ -132,7 +138,6 @@ services:
       - /lib/modules:/lib/modules:ro
       - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
       - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
-      - ./wireguard/custom-init/10-redis-cli.sh:/custom-cont-init.d/10-redis-cli.sh:ro
       # Peer isolation (#41): run at every container start, and by
       # provision-peer.sh --brain after adding a Brain to /config/brain-peers.
       - ./wireguard/forward-rules.sh:/custom-cont-init.d/20-forward-rules.sh:ro
@@ -259,7 +264,7 @@ services:
     restart: unless-stopped
     environment:
       SLIME_USER: "${SLIME_DESKTOP_USER:-slimeuser}"
-      SLIME_PASS: "${SLIME_DESKTOP_PASS}"
+      SLIME_PASS: "${SLIME_DESKTOP_PASS:?set SLIME_DESKTOP_PASS in .env}"
       TZ: "${TZ:-UTC}"
     volumes:
       - desktop_home:/home

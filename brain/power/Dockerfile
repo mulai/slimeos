@@ -13,12 +13,12 @@
 # binary's own bind address (10.10.0.1:7677, on wg0 inside the WireGuard
 # container's netns) is the only exposure that exists.
 
-FROM golang:1.21-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod main.go ./
 RUN CGO_ENABLED=0 go build -o /slimeos-power .
 
-FROM alpine:3.20
+FROM alpine:3.23
 # wireguard-tools: the idle watchdog's second signal is `wg show wg0
 # transfer` (netlink — immune to the /proc/net/nf_conntrack iteration
 # race that once produced a false-idle deallocation under a live session).

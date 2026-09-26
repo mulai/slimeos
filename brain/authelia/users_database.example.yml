@@ -1,6 +1,7 @@
 ---
 # Slime OS — Authelia Users Database
-# This is the TEMPLATE. Replace with real credentials.
+# TEMPLATE: copy to users_database.yml (gitignored, mounted by
+# docker-compose.yml) and put the real users there.
 # Generate a password hash with:
 #   docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password 'your-password'
 #
@@ -11,14 +12,14 @@ users:
   admin:
     displayname: "Slime OS Admin"
     password: "$argon2id$v=19$m=65536,t=3,p=4$CHANGEME_RUN_HASH_COMMAND"
-    email: admin@slimeos.com
+    email: admin@example.com
     groups:
       - admins
 
-  # First test user — Tommy's H97 machine
-  tommy:
-    displayname: "Tommy"
+  # Example user
+  user1:
+    displayname: "Example User"
     password: "$argon2id$v=19$m=65536,t=3,p=4$CHANGEME_RUN_HASH_COMMAND"
-    email: dev@mulai.com
+    email: user1@example.com
     groups:
       - users

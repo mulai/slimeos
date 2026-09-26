@@ -6,12 +6,12 @@
 # binary's own bind address (:8090, reachable via Caddy as wireguard:8090)
 # is the only exposure that exists.
 
-FROM golang:1.21-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod main.go ./
 RUN CGO_ENABLED=0 go build -o /slimeos-pairgen .
 
-FROM alpine:3.20
+FROM alpine:3.23
 # provision-peer.sh/pair-peer.sh were only ever run before inside
 # lscr.io/linuxserver/wireguard (a feature-rich Alpine image with GNU
 # coreutils/grep already present) -- a bare alpine base needs these
@@ -25,8 +25,8 @@ FROM alpine:3.20
 #                were actually written and tested against
 #   wireguard-tools — `wg genkey`/`pubkey`/`genpsk`/`addconf`/`syncconf`
 #   redis      — provides redis-cli, which pair-peer.sh shells out to
-#                directly (same package brain/wireguard/custom-init/
-#                10-redis-cli.sh installs into the wireguard container)
-RUN apk add --no-cache ca-certificates bash grep coreutils wireguard-tools redis
+#                directly (same package brain/wireguard/Dockerfile adds)
+#   flock      — provision-peer.sh's lock around picking a free IP (#44)
+RUN apk add --no-cache ca-certificates bash grep coreutils wireguard-tools redis flock
 COPY --from=build /slimeos-pairgen /usr/local/bin/slimeos-pairgen
 ENTRYPOINT ["/usr/local/bin/slimeos-pairgen"]
