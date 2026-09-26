@@ -19,9 +19,9 @@
 # made with `ssh-keygen -Y sign` by membrane/update/sign-manifest.sh on the
 # maintainer's machine. The keys allowed to sign are pinned below in
 # RELEASE_SIGNERS, in this root-only file, so a new key can only arrive
-# through an update the current keys signed. REQUIRE_SIGNATURE=false is the
-# rollout step: a present signature must verify, a missing one (404) is
-# still accepted. The next release flips it to true.
+# through an update the current keys signed. An unsigned manifest is
+# refused. (0.3.49 only checked a signature if one was there, so the first
+# signed release could land through the old helper.)
 #
 # Exit codes read by update.sh: 3 = couldn't download/verify (retry later),
 # 4 = the manifest isn't newer than what's installed. A line starting with
@@ -87,7 +87,7 @@ LEGACY_STAGING_DIR="$CONFIG_DIR/update-staging"
 # allowed_signers format (ssh-keygen(1) ALLOWED SIGNERS). Primary key on the
 # maintainer's Mac, backup key offline. sign-manifest.sh reads these lines
 # back out of this file, so keep each on one line starting "release@slimeos".
-REQUIRE_SIGNATURE=false
+REQUIRE_SIGNATURE=true
 SIGNER_ID="release@slimeos"
 SIG_NAMESPACE="slimeos-update"
 RELEASE_SIGNERS=$(cat <<'SIGNERS'
