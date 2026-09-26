@@ -26,6 +26,56 @@
             </intent-filter>
         </activity>
 
+        <!-- Sessions start only from this app (#47): our subclass, which
+             takes the password as an extra (see SlimeSessionActivity.kt). -->
+        <activity
+            android:name=".SlimeSessionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Main.Session"
+            android:configChanges="orientation|keyboard|keyboardHidden|screenSize|smallestScreenSize|density|screenLayout|navigation"
+            android:windowSoftInputMode="adjustResize"
+            android:taskAffinity="com.freerdp.session"
+            android:documentLaunchMode="always"
+            android:autoRemoveFromRecents="true" />
+
+        <!-- freeRDPCore exports these, and SessionActivity takes any
+             freerdp:// link (BROWSABLE) and maps its query parameters to
+             FreeRDP flags, so another app or a web page could start a
+             session with drive redirection to a server of its choosing
+             (#47). Nothing outside this app may start them. -->
+        <activity
+            android:name="com.freerdp.freerdpcore.presentation.SessionActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported">
+            <intent-filter tools:node="removeAll" />
+        </activity>
+        <activity
+            android:name="com.freerdp.freerdpcore.presentation.ShortcutsActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+        <activity-alias
+            android:name="com.freerdp.freerdpcore.presentation.CreateShortcuts"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+        <activity
+            android:name="com.freerdp.freerdpcore.presentation.ApplicationSettingsActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+        <activity
+            android:name="com.freerdp.freerdpcore.presentation.AboutActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+        <activity
+            android:name="com.freerdp.freerdpcore.presentation.HelpActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+
     </application>
 
 </manifest>

@@ -8,8 +8,9 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 /**
- * M1 spike: builds a `freerdp://` URI for freeRDPCore's SessionActivity
- * (com.freerdp.freerdpcore.presentation.SessionActivity, exported, ACTION_VIEW).
+ * M1 spike: builds a `freerdp://` URI for freeRDPCore's SessionActivity, via
+ * our SlimeSessionActivity subclass (not exported, #47). The password goes as
+ * an extra, not in the URI; SlimeSessionActivity adds it in-process.
  *
  * freeRDPCore's LibFreeRDP.setConnectionInfo(Uri) maps each query param directly
  * onto an xfreerdp-style flag (key=value -> /key:value, key= -> /key), so this
@@ -34,7 +35,10 @@ object RdpLauncher {
         val authority = "${enc(username)}@$host:$port"
         val query = buildString {
             append("sec=").append(enc("rdp:off"))
-            append("&cert=ignore")
+            // Same rule as connect.sh's cert_flag: over the WireGuard tunnel
+            // the hub already proves which Brain answers; any other host
+            // gets freeRDPCore's own "verify certificate" dialog.
+            if (TUNNEL_HOST.matches(host)) append("&cert=ignore")
             append("&network=auto")
             append("&dynamic-resolution=")
             // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
@@ -43,19 +47,14 @@ object RdpLauncher {
             // filling the screen — pass the real window size explicitly instead.
             append("&w=").append(widthPx)
             append("&h=").append(heightPx)
-            append("&p=").append(enc(password))
         }
         val uri = Uri.parse("freerdp://$authority/connect?$query")
 
-        // SessionActivity lives in the freeRDPCore *library* module, so its manifest
-        // merges into our own app package (com.slimeos.app) at build time — the class
-        // name stays fully-qualified as com.freerdp.freerdpcore..., but the component's
-        // package must be our app's actual package, not freeRDPCore's namespace.
         val intent = Intent(Intent.ACTION_VIEW, uri)
-        intent.component = ComponentName(
-            context.packageName,
-            "com.freerdp.freerdpcore.presentation.SessionActivity"
-        )
+        intent.component = ComponentName(context, SlimeSessionActivity::class.java)
+        intent.putExtra(SlimeSessionActivity.EXTRA_PASSWORD, password)
         return intent
     }
+
+    private val TUNNEL_HOST = Regex("^10\\.1[01]\\.0\\.\\d{1,3}$")
 }
