@@ -133,6 +133,10 @@ services:
       - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
       - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
       - ./wireguard/custom-init/10-redis-cli.sh:/custom-cont-init.d/10-redis-cli.sh:ro
+      # Peer isolation (#41): run at every container start, and by
+      # provision-peer.sh --brain after adding a Brain to /config/brain-peers.
+      - ./wireguard/forward-rules.sh:/custom-cont-init.d/20-forward-rules.sh:ro
+      - ./wireguard/forward-rules.sh:/config/forward-rules.sh:ro
     ports:
       - "${WG_PORT:-51820}:51820/udp"
     sysctls:

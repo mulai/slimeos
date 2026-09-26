@@ -4,7 +4,12 @@
 #
 # Usage:
 #   docker exec slimeos-wireguard /bin/bash
-#   OR on the host: docker exec slimeos-wireguard /config/provision-peer.sh <device-name>
+#   OR on the host: docker exec slimeos-wireguard /config/provision-peer.sh <device-name> [--brain]
+#
+# --brain: this peer is a Brain (serves RDP). Its address is added to
+# /config/brain-peers so forward-rules.sh lets other peers reach its port
+# 3389; without it, Membranes can't connect to it (#41). Membranes (and
+# pairgen's codes) don't pass it.
 #
 # Or run directly on the Brain host after WireGuard is up:
 #   ./provision-peer.sh <device-name>
@@ -13,6 +18,8 @@
 set -euo pipefail
 
 PEER_NAME="${1:-membrane-$(date +%s)}"
+IS_BRAIN=false
+[[ "${2:-}" == "--brain" ]] && IS_BRAIN=true
 WG_DIR="/config/wg_confs"
 PEER_DIR="/config/peer_${PEER_NAME}"
 
@@ -135,6 +142,11 @@ if ! ip route add "${CLIENT_IP}" dev wg0 2>/dev/null; then
     # falsely reported every reused IP as unreachable (found 2026-09-23).
     routes=$(ip route show)
     grep -qF "${CLIENT_IP%/32} " <<<"$routes" || die "failed to add route for ${CLIENT_IP} -- peer is live but unreachable. Do not hand out this pairing code."
+fi
+
+if $IS_BRAIN; then
+    grep -qxF "${CLIENT_IP%/32}" /config/brain-peers 2>/dev/null || echo "${CLIENT_IP%/32}" >> /config/brain-peers
+    /config/forward-rules.sh || die "peer '${PEER_NAME}' is live but forward-rules.sh failed -- Membranes can't reach this Brain yet."
 fi
 
 echo ""
