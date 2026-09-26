@@ -61,9 +61,11 @@ if ! healthy; then
 fi
 
 if [[ "${1:-}" == "boot" ]]; then
+    # Hub only (10.10.0.1); 0.3.50 and earlier opened the whole subnet.
+    ufw delete allow from 10.10.0.0/24 to any port 22 proto tcp >/dev/null 2>&1 || true
     if [[ -f "$RESCUE_MARKER" ]]; then
-        ufw allow from 10.10.0.0/24 to any port 22 proto tcp comment 'slimeos rescue ssh' >/dev/null
+        ufw allow from 10.10.0.1 to any port 22 proto tcp comment 'slimeos rescue ssh' >/dev/null
     else
-        ufw delete allow from 10.10.0.0/24 to any port 22 proto tcp >/dev/null 2>&1 || true
+        ufw delete allow from 10.10.0.1 to any port 22 proto tcp >/dev/null 2>&1 || true
     fi
 fi

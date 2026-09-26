@@ -77,7 +77,35 @@ nm_connect() {
     nmcli connection delete "$ssid" &>/dev/null || true
 
     local output exit_code
-    if [[ -n "$password" ]]; then
+    if [[ -n "$password" && "$password" != [[:space:]]* && "$password" != *[[:space:]] \
+          && "$password" != *[[:cntrl:]]* ]]; then
+        # The password goes to nmcli's editor on stdin, not the command
+        # line, where any local process can read it while nmcli runs (#47).
+        # The editor keeps quotes, $ and backslashes as typed but trims
+        # leading/trailing spaces, so such a password (valid WPA, rare)
+        # takes the command-line path below. Autoconnect stays off until the
+        # password is saved, so NetworkManager doesn't try the profile
+        # without it (turned on with `modify`: in the editor it asks for a
+        # confirmation). The editor exits 0 even when a command fails, hence
+        # the read-back.
+        output=$(nmcli connection add type wifi con-name "$con_name" ifname "*" ssid "$ssid" \
+            connection.autoconnect no wifi-sec.key-mgmt wpa-psk 2>&1)
+        exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            echo "$output"
+            return $exit_code
+        fi
+        output=$(printf 'set wifi-sec.psk %s\nsave persistent\nquit\n' "$password" \
+            | nmcli connection edit id "$con_name" 2>&1)
+        if [[ -z "$(nmcli -s -g 802-11-wireless-security.psk connection show "$con_name" 2>/dev/null)" ]] \
+            || ! output=$(nmcli connection modify "$con_name" connection.autoconnect yes 2>&1); then
+            nmcli connection delete "$con_name" &>/dev/null || true
+            echo "$output"
+            return 1
+        fi
+        nmcli connection up "$con_name" 2>&1
+        return
+    elif [[ -n "$password" ]]; then
         output=$(nmcli connection add type wifi con-name "$con_name" ifname "*" ssid "$ssid" \
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" 2>&1)
     else

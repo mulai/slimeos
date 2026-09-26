@@ -535,7 +535,14 @@ add_brain() {
 }
 
 remove_brain() {
-    local id="$1" tmp
+    local id="$1" tmp hostport
+    # Forget the certificate FreeRDP pinned for this Brain (connect.sh's
+    # /cert:tofu), so adding it again trusts its current one. Same file
+    # name FreeRDP uses: <host>_<port>.pem, lowercased.
+    hostport=$(jq -r --arg id "$id" '.[] | select(.id == $id) | "\(.host)_\(.port // 3389)"' "$BRAINS_FILE" 2>/dev/null | head -1)
+    if [[ -n "$hostport" && "$hostport" != */* ]]; then
+        rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/freerdp/server/${hostport,,}.pem"
+    fi
     tmp=$(mktemp)
     jq --arg id "$id" 'map(select(.id != $id))' "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
     rm -f "$tmp" "$CRED_DIR/${id}.cred"
@@ -557,8 +564,8 @@ fetch_remote_brains() {
 
     set +e
     local response
-    response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg t "$token" '{session_token:$t}')" \
+    response=$(T="$token" jq -nc '{session_token:env.T}' \
+        | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
         "$SLIME_ID_API/device/brains-list" 2>/dev/null)
     set -e
 
@@ -687,9 +694,9 @@ save_remote_brain() {
     [[ -z "$token" ]] && return 0
 
     set +e
-    curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg t "$token" --arg n "$name" --arg h "$host" --arg p "$port" \
-            '{session_token:$t, name:$n, host:$h, port:$p}')" \
+    T="$token" jq -nc --arg n "$name" --arg h "$host" --arg p "$port" \
+        '{session_token:env.T, name:$n, host:$h, port:$p}' \
+        | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
         "$SLIME_ID_API/device/brains-save" >/dev/null 2>&1
     local rc=$?
     set -e

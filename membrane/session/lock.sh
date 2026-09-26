@@ -168,8 +168,8 @@ do_lock_screen() {
         fi
         set +e
         local response http
-        response=$(curl -sS -m 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -d "$(jq -nc --arg t "$token" --arg l "$(membrane_label)" '{session_token:$t, label:$l}')" \
+        response=$(T="$token" jq -nc --arg l "$(membrane_label)" '{session_token:env.T, label:$l}' \
+            | curl -sS -m 10 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @- \
             "$SLIME_ID_API/device/unlock-start" 2>/dev/null)
         set -e
         http=${response##*$'\n'}
@@ -268,8 +268,8 @@ do_lock_screen() {
                 (( tick % interval == 0 )) || continue
                 set +e
                 local poll_response
-                poll_response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-                    -d "$(jq -nc --arg dc "$device_code" '{device_code:$dc}')" \
+                poll_response=$(DC="$device_code" jq -nc '{device_code:env.DC}' \
+                    | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
                     "$SLIME_ID_API/device/poll" 2>/dev/null)
                 set -e
                 case "$(jq -r '.status // "pending"' <<<"$poll_response" 2>/dev/null)" in

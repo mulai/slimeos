@@ -359,8 +359,8 @@ fetch_brain_credential() {
 
     set +e
     local response
-    response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg t "$token" --arg id "$brain_id" '{session_token:$t, brainId:$id}')" \
+    response=$(T="$token" jq -nc --arg id "$brain_id" '{session_token:env.T, brainId:$id}' \
+        | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
         "$SLIME_ID_API/device/brain-credential" 2>/dev/null)
     set -e
 
@@ -524,8 +524,10 @@ do_connect() {
             #                  NLA, xrdp Brains only offer TLS (no
             #                  CredSSP/NLA support at all) — forcing either
             #                  one breaks the other.
-            #   /cert:ignore — was /cert:tofu (trust on first use, then pin)
-            #                  until 2026-08-03: a managed cloud Brain's
+            #   ${cert_flag} — /cert:ignore over WireGuard, /cert:tofu for
+            #                  any other Brain (#42, see cert_flag below).
+            #                  Was /cert:tofu for every Brain until
+            #                  2026-08-03: a managed cloud Brain's
             #                  self-signed cert can regenerate across an
             #                  idle-deallocate/wake-on-connect cycle (Azure
             #                  Windows confirmed doing this live), and TOFU
@@ -538,12 +540,12 @@ do_connect() {
             #                  screen still showing "Waking up your
             #                  Brain…" (no stage update exists between wake
             #                  and this xfreerdp3 call to say otherwise).
-            #                  TLS identity verification is redundant here
-            #                  anyway, not this project's trust boundary —
-            #                  see architecture.md's "zero-trust stack":
+            #                  Over WireGuard, TLS identity verification is
+            #                  redundant, not this project's trust boundary
+            #                  — see architecture.md's "zero-trust stack":
             #                  WireGuard already authenticates and encrypts
             #                  the whole path to a known peer IP before any
-            #                  of this runs.
+            #                  of this runs. A LAN Brain has no such tunnel.
             # No /tls:seclevel: FreeRDP 3.15's /tls sub-option parser
             # rejects even its own documented values (non-fatal ERROR,
             # option ignored) — the server side enforces the TLS floor.
@@ -796,13 +798,26 @@ do_connect() {
             # contract needs reading FreeRDP's source, not just --help,
             # before trying this again — see membrane/freerdp/
             # action-noop.sh's own header for the postmortem.
+            # Certificates (#42): over WireGuard the hub ties each tunnel
+            # address to one peer key, so the tunnel already proves which
+            # Brain answers (and a cloud Brain's self-signed certificate
+            # changes with every rebuild). Any other Brain, e.g. a PC on the
+            # LAN, gets trust on first use: FreeRDP remembers the first
+            # certificate and refuses a different one later. Its "trust
+            # this certificate?" prompt reads stdin, which is why stdin is
+            # explicitly </dev/null below: EOF means "no" and the connect
+            # fails at once (the 2026-08-03 hang was that prompt waiting).
+            # remove_brain forgets the certificate for a re-pin.
+            local cert_flag=/cert:ignore
+            [[ "$vm_host" =~ ^10\.1[01]\.0\.[0-9]{1,3}$ ]] || cert_flag=/cert:tofu
+
             set +e
             ${sound_alsa_env} ${udp_env} ${vaapi_env} xfreerdp3 \
                 /v:"${vm_host}:${vm_port}" \
                 /u:"${slime_username}" \
                 /p:"${rdp_pass}" \
                 /sec:rdp:off \
-                /cert:ignore \
+                ${cert_flag} \
                 /network:"${RDP_NETWORK:-auto}" \
                 ${RES_FLAGS} \
                 /dynamic-resolution \
@@ -811,7 +826,7 @@ do_connect() {
                 ${cam_flag} \
                 /drive:usb,"/media/$(id -un)" \
                 /log-level:WARN \
-                ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 &
+                ${SLIMEOS_FREERDP_EXTRA_FLAGS} >> "$FREERDP_LOG_FILE" 2>&1 </dev/null &
             local xpid=$! cancelled=false
 
             # The lockscreen page never hears anything else from us for
@@ -964,6 +979,13 @@ do_connect() {
             local err_hint message detail
             err_hint=$(tail -c +$((log_offset + 1)) "$FREERDP_LOG_FILE" \
                 | grep -o 'ERRCONNECT_[A-Z_]*' | tail -1 || true)
+            # A pinned certificate that no longer matches (/cert:tofu). Not
+            # FreeRDP 3.15's "@ WARNING" banners: those print "REMOTE HOST
+            # IDENTIFICATION HAS CHANGED" on FIRST use (checked 2026-09-26).
+            if tail -c +$((log_offset + 1)) "$FREERDP_LOG_FILE" \
+                | grep -q 'does not match the certificate used for previous connections'; then
+                err_hint=CERTIFICATE_CHANGED
+            fi
 
             local is_auth_failure=false
             case "$err_hint" in
@@ -1000,6 +1022,8 @@ do_connect() {
                     message="That password didn't work." ;;
                 ERRCONNECT_ACCOUNT_LOCKED_OUT)
                     message="This account is temporarily locked. Wait about 10 minutes." ;;
+                CERTIFICATE_CHANGED)
+                    message="This Brain isn't the same computer as last time. If it was reinstalled, remove it and add it again." ;;
                 *NEGO*|*SECURITY*)
                     message="Couldn't establish a secure connection." ;;
                 *TIMEOUT*|*TRANSPORT*|"")

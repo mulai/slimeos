@@ -35,10 +35,10 @@
 #     scripts read it, not this one, because this chroot can't run ufw or
 #     touch a live systemd (see above):
 #       - firewall-setup.sh (slimeos-firewall.service, every boot) adds a
-#         `ufw allow` for port 22 from the WireGuard subnet ONLY when the
+#         `ufw allow` for port 22 from the hub ONLY when the
 #         marker is present, instead of leaving that port closed. The LAN
 #         still sees nothing — ufw's default deny incoming stands; only
-#         Brain-hub-side WireGuard peers (10.10.0.0/24) can reach sshd.
+#         Brain hub's WireGuard address (10.10.0.1) can reach sshd.
 #       - remote-support-toggle.sh (`off`, every boot) keeps ssh.service
 #         and that rule up when the marker is present. It still locks
 #         'slime' either way.

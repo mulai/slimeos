@@ -22,13 +22,16 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +118,11 @@ func (b *bridge) writeToCoordinator(line string) {
 // ── WebSocket handshake + per-connection read loop ──────────────────────────
 
 func (b *bridge) handleWS(w http.ResponseWriter, r *http.Request) {
+	if !peerIsSelf(r.RemoteAddr, r.Context().Value(http.LocalAddrContextKey)) {
+		log.Printf("refused connection from %s: not this user's process", r.RemoteAddr)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		http.Error(w, "expected websocket upgrade", http.StatusUpgradeRequired)
 		return
@@ -196,6 +204,72 @@ func (b *bridge) attachClient(conn *safeConn, r *bufio.Reader) {
 			}
 		}
 	}
+}
+
+// ── Caller check ─────────────────────────────────────────────────────────────
+//
+// The listener is loopback-only, but any local process could connect and
+// drive the coordinator, including turning on Remote Support and reading
+// its password (#42). Only the bridge's own user (the kiosk's, which cog
+// runs as) may connect. Loopback TCP has no SO_PEERCRED, so the owner comes
+// from the kernel's socket table: the client's end of this connection is
+// the /proc/net/tcp entry whose local address is our remote address and
+// vice versa. A process of the same user gains nothing here it couldn't
+// already do (it can call the same sudo helpers the coordinator does).
+func peerIsSelf(remote string, local any) bool {
+	laddr, ok := local.(net.Addr)
+	if !ok {
+		return false
+	}
+	uid, err := socketOwner("/proc/net/tcp", remote, laddr.String())
+	if errors.Is(err, os.ErrNotExist) {
+		return true // not Linux (a dev machine): nothing to check against
+	}
+	if err != nil {
+		log.Printf("caller check for %s: %v", remote, err)
+		return false
+	}
+	return uid == os.Getuid()
+}
+
+// socketOwner returns the uid owning the IPv4 socket whose local end is
+// `local` and remote end is `remote` ("127.0.0.1:port" each).
+func socketOwner(table, local, remote string) (int, error) {
+	want := func(addr string) (string, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return "", err
+		}
+		ip := net.ParseIP(host).To4()
+		p, err := strconv.Atoi(port)
+		if ip == nil || err != nil {
+			return "", fmt.Errorf("not an IPv4 address: %s", addr)
+		}
+		// /proc/net/tcp prints the address as one host-order (little
+		// endian here) 32-bit word, then the port in hex.
+		return fmt.Sprintf("%02X%02X%02X%02X:%04X", ip[3], ip[2], ip[1], ip[0], p), nil
+	}
+	l, err := want(local)
+	if err != nil {
+		return 0, err
+	}
+	rm, err := want(remote)
+	if err != nil {
+		return 0, err
+	}
+	f, err := os.Open(table)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) > 7 && fields[1] == l && fields[2] == rm {
+			return strconv.Atoi(fields[7])
+		}
+	}
+	return 0, fmt.Errorf("no socket %s -> %s in %s", local, remote, table)
 }
 
 // ── Coordinator subprocess supervision ───────────────────────────────────────
@@ -468,15 +542,49 @@ func (hs *hotkeyState) update(code uint16, down bool, b *bridge) {
 
 // ── Minimal RFC 6455 framing (text frames only; enough for JSON-line IPC) ──
 
+// Limits on what one client message may claim (#42): without them a frame
+// header could make readFrame allocate up to 2^63 bytes, or a stream of
+// continuation frames recurse without end. The lock screen's messages are
+// small JSON lines.
+const (
+	maxMessageBytes = 1 << 20
+	maxFragments    = 64
+)
+
+var errFrameTooLarge = errors.New("websocket message too large")
+
+// readFrame returns one whole message: continuation frames are folded into
+// the first frame's opcode and payload.
 func readFrame(r *bufio.Reader) (opcode byte, payload []byte, err error) {
+	for n := 0; ; n++ {
+		if n >= maxFragments {
+			return 0, nil, errFrameTooLarge
+		}
+		op, fin, data, ferr := readOneFrame(r, maxMessageBytes-len(payload))
+		if ferr != nil {
+			return 0, nil, ferr
+		}
+		if n == 0 {
+			// Continuation frames carry opcode 0x0; the message's opcode
+			// is whatever the first frame declared.
+			opcode = op
+		}
+		payload = append(payload, data...)
+		if fin {
+			return opcode, payload, nil
+		}
+	}
+}
+
+func readOneFrame(r *bufio.Reader, limit int) (opcode byte, fin bool, data []byte, err error) {
 	var header [2]byte
 	if _, err = io.ReadFull(r, header[:]); err != nil {
 		return
 	}
-	fin := header[0]&0x80 != 0
+	fin = header[0]&0x80 != 0
 	opcode = header[0] & 0x0f
 	masked := header[1]&0x80 != 0
-	length := int64(header[1] & 0x7f)
+	length := uint64(header[1] & 0x7f)
 
 	switch length {
 	case 126:
@@ -484,13 +592,17 @@ func readFrame(r *bufio.Reader) (opcode byte, payload []byte, err error) {
 		if _, err = io.ReadFull(r, ext[:]); err != nil {
 			return
 		}
-		length = int64(binary.BigEndian.Uint16(ext[:]))
+		length = uint64(binary.BigEndian.Uint16(ext[:]))
 	case 127:
 		var ext [8]byte
 		if _, err = io.ReadFull(r, ext[:]); err != nil {
 			return
 		}
-		length = int64(binary.BigEndian.Uint64(ext[:]))
+		length = binary.BigEndian.Uint64(ext[:])
+	}
+	if length > uint64(limit) {
+		err = errFrameTooLarge
+		return
 	}
 
 	var maskKey [4]byte
@@ -500,7 +612,7 @@ func readFrame(r *bufio.Reader) (opcode byte, payload []byte, err error) {
 		}
 	}
 
-	data := make([]byte, length)
+	data = make([]byte, length)
 	if _, err = io.ReadFull(r, data); err != nil {
 		return
 	}
@@ -509,19 +621,7 @@ func readFrame(r *bufio.Reader) (opcode byte, payload []byte, err error) {
 			data[i] ^= maskKey[i%4]
 		}
 	}
-
-	if !fin {
-		// Continuation frames carry opcode 0x0; the overall message's
-		// opcode is whatever the first frame declared, so keep `opcode`
-		// from this call and only fold in the continuation's payload.
-		_, rest, ferr := readFrame(r)
-		if ferr != nil {
-			return opcode, nil, ferr
-		}
-		data = append(data, rest...)
-	}
-
-	return opcode, data, nil
+	return opcode, fin, data, nil
 }
 
 func encodeFrame(opcode byte, payload []byte) []byte {

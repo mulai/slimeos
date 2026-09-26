@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.50"
+SLIMEOS_VERSION="0.3.51"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -492,12 +492,18 @@ NMCONF
 # the session may never register as an "active" logind session, which is
 # what polkit's default NetworkManager authorization normally keys off.
 # Without this rule, nmcli as $SESSION_USER can silently fail with an
-# "Insufficient privileges" denial.
+# "Insufficient privileges" denial. Only what network-setup.sh uses (scan,
+# add/delete profiles, bring one up), not every NetworkManager action (#43).
 mkdir -p /etc/polkit-1/rules.d
 cat > /etc/polkit-1/rules.d/50-slimeos-network-manager.rules <<'POLKIT'
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
-        subject.isInGroup("netdev")) {
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.settings.modify.own"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.isInGroup("netdev")) {
         return polkit.Result.YES;
     }
 });
@@ -548,11 +554,22 @@ ok "WireGuard pairing enabled for the kiosk UI"
 # /drive:usb,/media/<user> flag has something to redirect. Without this,
 # udisks2's default policy falls back to requiring an interactive
 # authentication agent, which doesn't exist in this headless kiosk, and
-# every plug-in would silently fail to mount.
+# every plug-in would silently fail to mount. Only mount/unmount/eject/
+# power-off of non-system drives (#43): no formatting, internal disks, loop
+# devices or system configuration. The kiosk session has no seat, so udisks2
+# asks for the -other-seat variants.
 cat > /etc/polkit-1/rules.d/53-slimeos-udisks2.rules <<POLKIT
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.udisks2.") == 0 &&
-        subject.user == "${SESSION_USER}") {
+    var allowed = [
+        "org.freedesktop.udisks2.filesystem-mount",
+        "org.freedesktop.udisks2.filesystem-mount-other-seat",
+        "org.freedesktop.udisks2.filesystem-unmount-others",
+        "org.freedesktop.udisks2.eject-media",
+        "org.freedesktop.udisks2.eject-media-other-seat",
+        "org.freedesktop.udisks2.power-off-drive",
+        "org.freedesktop.udisks2.power-off-drive-other-seat"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.user == "${SESSION_USER}") {
         return polkit.Result.YES;
     }
 });
@@ -945,7 +962,7 @@ ok "Firewall service installed (applies on first real boot)"
 # runs unconditionally on every boot (not just the first), independent of
 # whatever state the machine was in when it last shut down (crash mid-toggle,
 # a user leaving it on, etc). Doesn't need network-pre.target the way the
-# firewall unit does -- it only touches ssh.service, the WireGuard-subnet ufw
+# firewall unit does -- it only touches ssh.service, the hub-only ufw
 # rule, and the local password/lock state, all of which are meaningful before
 # networking comes up.
 cat > "$SYSTEMD_DIR/slimeos-remote-support-reset.service" <<SERVICE
@@ -1021,7 +1038,7 @@ echo "${RECOVERY_USER}:${RECOVERY_PIN}" | chpasswd
 # SSH-only deny -- local tty getty/login doesn't consult sshd_config at all,
 # so this has zero effect on console access, only on remote reachability.
 # Without this, whenever Remote Support happens to be toggled on (sshd
-# running, WireGuard-subnet firewall rule open) for ANY reason, the
+# running, hub-only firewall rule open) for ANY reason, the
 # permanent master-key PIN would also work over SSH -- this keeps the
 # master key strictly physical-console-only, matching what was actually
 # asked for.

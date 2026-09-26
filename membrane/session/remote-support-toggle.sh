@@ -9,7 +9,7 @@
 # last shut down. /etc/sudoers.d/slimeos-remote-support scopes the NOPASSWD
 # grant to exactly this one script, nothing broader.
 #
-# Same WireGuard-subnet-only port-22 rule as the manual Rescue-mode setup in
+# Same hub-only port-22 rule as the manual Rescue-mode setup in
 # membrane/tools/rescue-enable-ssh.sh, but a different account ($SESSION_USER
 # here, RESCUE_USER there). The difference is this path is
 # live-toggleable from the kiosk itself and nothing it does is durable:
@@ -40,7 +40,13 @@
 set -euo pipefail
 
 SESSION_USER="slime"
-WG_SUBNET="10.10.0.0/24"
+# SSH is accepted only from the hub's WireGuard address: support reaches a
+# device through the hub, and other peers have no business on port 22. The
+# hub also drops peer-to-peer traffic (#41); this holds even if it didn't.
+# LEGACY_SSH_FROM is the whole-subnet rule of 0.3.50 and earlier, removed on
+# sight.
+SSH_FROM="10.10.0.1"
+LEGACY_SSH_FROM="10.10.0.0/24"
 SSH_PORT="22"
 
 INSTALL_DIR="/opt/slimeos"
@@ -115,14 +121,20 @@ migrate_wireguard_root() {
 # Polkit rules install.sh added after some devices were installed (the UTM VM
 # predates 50/51/53, so Restart and Wi-Fi setup fail there with "Interactive
 # authentication required"). /etc isn't OTA-delivered, so this boot-time root
-# script writes any rule that's missing or differs. Keep these in step with
-# install.sh's section 3.
+# script writes any rule that's missing or differs, which is also how the
+# narrowed 50/53 rules of #43 (0.3.51) reach existing devices. Keep these in
+# step with install.sh's section 3.
 polkit_rule() {
     case "$1" in
         50-slimeos-network-manager.rules) cat <<'POLKIT'
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
-        subject.isInGroup("netdev")) {
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.settings.modify.own"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.isInGroup("netdev")) {
         return polkit.Result.YES;
     }
 });
@@ -142,8 +154,16 @@ POLKIT
         ;;
         53-slimeos-udisks2.rules) cat <<POLKIT
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.udisks2.") == 0 &&
-        subject.user == "${SESSION_USER}") {
+    var allowed = [
+        "org.freedesktop.udisks2.filesystem-mount",
+        "org.freedesktop.udisks2.filesystem-mount-other-seat",
+        "org.freedesktop.udisks2.filesystem-unmount-others",
+        "org.freedesktop.udisks2.eject-media",
+        "org.freedesktop.udisks2.eject-media-other-seat",
+        "org.freedesktop.udisks2.power-off-drive",
+        "org.freedesktop.udisks2.power-off-drive-other-seat"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.user == "${SESSION_USER}") {
         return polkit.Result.YES;
     }
 });
@@ -201,12 +221,13 @@ case "$1" in
 
         # Idempotent: harmless if a previous `on` already added it (e.g. a
         # coordinator restart between toggles never got the matching `off`).
-        ufw allow from "$WG_SUBNET" to any port "$SSH_PORT" proto tcp comment 'slimeos remote support' >/dev/null
+        ufw delete allow from "$LEGACY_SSH_FROM" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
+        ufw allow from "$SSH_FROM" to any port "$SSH_PORT" proto tcp comment 'slimeos remote support' >/dev/null
 
         # `ufw status` reads user.rules, not the live firewall, so check the
         # live chain. Without this the kiosk shows working connection details
         # for an SSH port nobody can reach.
-        if ! iptables -S ufw-user-input 2>/dev/null | grep -q -- "-s $WG_SUBNET .*--dport $SSH_PORT "; then
+        if ! iptables -S ufw-user-input 2>/dev/null | grep -q -- "-s $SSH_FROM/32 .*--dport $SSH_PORT "; then
             echo "ufw rule for port $SSH_PORT is not in the live firewall" >&2
             usermod -L "$SESSION_USER" 2>/dev/null || true
             systemctl stop ssh.service 2>/dev/null || true
@@ -239,7 +260,8 @@ case "$1" in
         # `ufw delete` exits non-zero (and logs "Could not delete
         # non-existent rule") if this is called twice in a row or at boot
         # before `on` was ever run once -- expected, not an error here.
-        ufw delete allow from "$WG_SUBNET" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
+        ufw delete allow from "$SSH_FROM" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
+        ufw delete allow from "$LEGACY_SSH_FROM" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
         echo '{}'
         ;;
 esac

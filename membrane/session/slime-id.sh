@@ -107,8 +107,8 @@ do_slime_id_login() {
 
                 set +e
                 local poll_response poll_rc
-                poll_response=$(curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-                    -d "$(jq -nc --arg dc "$device_code" '{device_code:$dc}')" \
+                poll_response=$(DC="$device_code" jq -nc '{device_code:env.DC}' \
+                    | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
                     "$SLIME_ID_API/device/poll" 2>/dev/null)
                 poll_rc=$?
                 set -e
@@ -175,8 +175,8 @@ slime_id_logout() {
 
     if [[ -n "$token" ]]; then
         set +e
-        curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
-            -d "$(jq -nc --arg t "$token" '{session_token:$t}')" \
+        T="$token" jq -nc '{session_token:env.T}' \
+            | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- \
             "$SLIME_ID_API/device/logout" >/dev/null 2>&1
         set -e
     fi
