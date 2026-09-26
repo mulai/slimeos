@@ -14,8 +14,14 @@
 # files and have them installed as root. Nothing the session user can write
 # is read here any more: the manifest URL is hardcoded, and every file
 # (dest-map.txt included) must match the manifest's sha256 before use.
-# Remaining trust root: the manifest on GitHub `main` (signing it is the
-# follow-up, see #39).
+#
+# The manifest itself is signed (#39 step 2): manifest.json.sig next to it,
+# made with `ssh-keygen -Y sign` by membrane/update/sign-manifest.sh on the
+# maintainer's machine. The keys allowed to sign are pinned below in
+# RELEASE_SIGNERS, in this root-only file, so a new key can only arrive
+# through an update the current keys signed. REQUIRE_SIGNATURE=false is the
+# rollout step: a present signature must verify, a missing one (404) is
+# still accepted. The next release flips it to true.
 #
 # Exit codes read by update.sh: 3 = couldn't download/verify (retry later),
 # 4 = the manifest isn't newer than what's installed. A line starting with
@@ -78,6 +84,18 @@ PREVIOUS_DIR="$CONFIG_DIR/update-previous"
 # Session-user-owned staging dir from before 0.3.45. Never read; removed.
 LEGACY_STAGING_DIR="$CONFIG_DIR/update-staging"
 
+# allowed_signers format (ssh-keygen(1) ALLOWED SIGNERS). Primary key on the
+# maintainer's Mac, backup key offline. sign-manifest.sh reads these lines
+# back out of this file, so keep each on one line starting "release@slimeos".
+REQUIRE_SIGNATURE=false
+SIGNER_ID="release@slimeos"
+SIG_NAMESPACE="slimeos-update"
+RELEASE_SIGNERS=$(cat <<'SIGNERS'
+release@slimeos namespaces="slimeos-update" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII2jAGOaJjWF2XwvZ1xZGhmNI0OSe7PHxH+eboqZIVZp slimeos-release-primary
+release@slimeos namespaces="slimeos-update" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB6PpDXPJ++m9NoOM32Ow/Oahc+HabEFwKNy0pLscx0Y slimeos-release-backup
+SIGNERS
+)
+
 fail() { echo "[apply-update] $*" >&2; exit 3; }
 
 # Same X.Y.Z compare as update.sh's. Returns 0 if $1 > $2.
@@ -101,7 +119,24 @@ rm -rf "${LEGACY_STAGING_DIR:?}" 2>/dev/null || true
 STAGING_DIR=$(mktemp -d /var/lib/slimeos-update.XXXXXX)
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
-manifest=$(curl -fsS -m 15 "$MANIFEST_URL") || fail "manifest fetch failed"
+# Saved to a file, not a variable: the signature covers the exact bytes.
+curl -fsS -m 15 "$MANIFEST_URL" -o "$STAGING_DIR/manifest.json" || fail "manifest fetch failed"
+sig_status=$(curl -sS -m 15 -o "$STAGING_DIR/manifest.json.sig" -w '%{http_code}' "$MANIFEST_URL.sig") || fail "signature fetch failed"
+case "$sig_status" in
+    200)
+        printf '%s\n' "$RELEASE_SIGNERS" > "$STAGING_DIR/allowed_signers"
+        ssh-keygen -Y verify -f "$STAGING_DIR/allowed_signers" -I "$SIGNER_ID" -n "$SIG_NAMESPACE" \
+            -s "$STAGING_DIR/manifest.json.sig" < "$STAGING_DIR/manifest.json" >/dev/null 2>&1 \
+            || fail "manifest signature is not valid"
+        echo "[apply-update] manifest signature ok"
+        ;;
+    404)
+        $REQUIRE_SIGNATURE && fail "manifest is not signed"
+        echo "[apply-update] WARNING: manifest is not signed (accepted until signatures are required)" >&2
+        ;;
+    *) fail "signature fetch failed (HTTP $sig_status)" ;;
+esac
+manifest=$(<"$STAGING_DIR/manifest.json")
 remote_version=$(jq -r '.version // empty' <<<"$manifest" 2>/dev/null) || remote_version=""
 [[ "$remote_version" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$ ]] || fail "manifest has no valid version"
 local_version=$(cat "$CONFIG_DIR/version" 2>/dev/null || echo "0.0.0")

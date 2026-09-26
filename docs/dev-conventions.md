@@ -13,6 +13,11 @@ Membranes update themselves from `membrane/update/manifest.json` on `main`.
 - Any change to a file listed in the manifest ships in the same commit as:
   `SLIMEOS_VERSION` in `membrane/installer/install.sh`, and in the manifest
   the `version`, a new `changelog` entry on top, and fresh `sha256` values.
+- Last step before committing a release: `membrane/update/sign-manifest.sh`
+  (maintainer's Mac, release key), then commit `manifest.json.sig` with the
+  manifest. Any later edit to the manifest means signing again. Devices
+  check it against the keys pinned in `apply-update-helper.sh`; a new key
+  ships there, in a release signed by a current key.
 - A new file on devices needs a manifest entry and a line in
   `membrane/update/dest-map.txt` (destinations are under `/opt/slimeos`).
 - Files in `/etc` are not OTA-delivered. Change them from an OTA-delivered
