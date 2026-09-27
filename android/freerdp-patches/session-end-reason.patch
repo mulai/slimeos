@@ -22,10 +22,10 @@ index 2e1f1c0..9bd6c54 100644
  Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_1get_1last_1error_1string(JNIEnv* env,
                                                                                     jclass cls,
 diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
-index 31b0099..7dcea55 100644
+index 31b0099..453f273 100644
 --- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
 +++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
-@@ -63,6 +63,10 @@ public class SessionActivity extends AppCompatActivity
+@@ -63,6 +63,11 @@ public class SessionActivity extends AppCompatActivity
  {
  	public static final String PARAM_CONNECTION_REFERENCE = "conRef";
  	public static final String PARAM_INSTANCE = "instance";
@@ -33,21 +33,40 @@ index 31b0099..7dcea55 100644
 +	// user asked for (or the server's own logoff) from a network drop.
 +	public static final String RESULT_ENDED_BY_USER = "endedByUser";
 +	public static final String RESULT_ERROR_INFO = "errorInfo";
++	public static final String RESULT_WAS_CONNECTED = "wasConnected";
  	private static final String TAG = "FreeRDP.SessionActivity";
  	static volatile SessionActivity activeSession;
  	private Bitmap bitmap;
-@@ -661,7 +665,11 @@ public class SessionActivity extends AppCompatActivity
+@@ -132,6 +137,7 @@ public class SessionActivity extends AppCompatActivity
+ 
+ 	private BookmarkBase pendingConnectBookmark = null;
+ 	private boolean connectCancelledByUser = false;
++	private boolean sessionWasConnected = false;
+ 	private boolean sessionRunning = false;
+ 	private long backPressedTime = 0;
+ 
+@@ -661,7 +667,12 @@ public class SessionActivity extends AppCompatActivity
  	private void closeSessionActivity(int resultCode)
  	{
  		// Go back to home activity (and send intent data back to home)
 -		setResult(resultCode, getIntent());
 +		Intent result = getIntent();
 +		result.putExtra(RESULT_ENDED_BY_USER, connectCancelledByUser);
++		result.putExtra(RESULT_WAS_CONNECTED, sessionWasConnected);
 +		if (session != null)
 +			result.putExtra(RESULT_ERROR_INFO, LibFreeRDP.getErrorInfo(session.getInstance()));
 +		setResult(resultCode, result);
  		finish();
  	}
+ 
+@@ -974,6 +985,8 @@ public class SessionActivity extends AppCompatActivity
+ 			return;
+ 		}
+ 
++		sessionWasConnected = true;
++
+ 		// bind session
+ 		bindSession();
  
 diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java
 index c8de7e1..ff204a9 100644

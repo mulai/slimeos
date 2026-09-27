@@ -47,10 +47,13 @@ import kotlinx.coroutines.withContext
 
 private const val TUNNEL_NAME = "slimeos0"
 
-// Same rules as membrane/freerdp/connect.sh: a session that lasted this long and
-// then died with no reason from the server was a network drop (or a TermService
-// crash). Windows keeps the session waiting, so reconnect into it.
+// A session that got connected (so the password worked) and then died with no
+// reason from the server was a network drop or a TermService crash. Windows keeps
+// the session waiting, so reconnect into it. Sessions shorter than MIN_SESSION_MS
+// get MAX_QUICK_RECONNECTS tries in a row, so a Brain that fails on every connect
+// doesn't loop forever.
 private const val MIN_SESSION_MS = 60_000L
+private const val MAX_QUICK_RECONNECTS = 3
 private const val RECONNECT_DELAY_MS = 5_000L
 
 // The server's ERRINFO_* codes for a session ended on purpose (FreeRDP error.h):
@@ -92,6 +95,7 @@ class MainActivity : ComponentActivity() {
     private var lastConnect: SavedPairing.Brain? = null
     private var sessionStartedAt = 0L
     private var reconnecting = false
+    private var quickReconnects = 0
 
     private val rdpSessionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -208,8 +212,14 @@ class MainActivity : ComponentActivity() {
         val host = uiState.rdpHost.ifEmpty { target?.host ?: "" }
         val endedByUser = data?.getBooleanExtra(SessionActivity.RESULT_ENDED_BY_USER, false) ?: false
         val errorInfo = data?.getIntExtra(SessionActivity.RESULT_ERROR_INFO, 0) ?: 0
+        val wasConnected = data?.getBooleanExtra(SessionActivity.RESULT_WAS_CONNECTED, false) ?: false
         val lasted = SystemClock.elapsedRealtime() - sessionStartedAt
-        Log.i("MainActivity", "Session ended after ${lasted / 1000}s: endedByUser=$endedByUser errorInfo=$errorInfo")
+        Log.i(
+            "MainActivity",
+            "Session ended after ${lasted / 1000}s: endedByUser=$endedByUser " +
+                "errorInfo=$errorInfo wasConnected=$wasConnected"
+        )
+        if (lasted >= MIN_SESSION_MS) quickReconnects = 0
 
         // RESULT_OK: the session was up. Cancelling a connect sets endedByUser too, and
         // must not log off the session a drop left waiting.
@@ -218,22 +228,31 @@ class MainActivity : ComponentActivity() {
             // does brain/power log off the disconnected session (#17). After a drop
             // that would throw away the user's open windows.
             reconnecting = false
+            quickReconnects = 0
             uiState.status = "Disconnected."
             lifecycleScope.launch { withContext(Dispatchers.IO) { BrainPower.notifySessionEnded(host) } }
             return
         }
         if (endedByUser) {
             reconnecting = false
+            quickReconnects = 0
             uiState.status = "Cancelled."
             return
         }
         if (errorInfo == ERRINFO_DISCONNECTED_BY_OTHERCONNECTION) {
             // Reconnecting would take it straight back from the other device.
             reconnecting = false
+            quickReconnects = 0
             uiState.status = "Your session moved to another device."
             return
         }
-        if (errorInfo == 0 && lasted >= MIN_SESSION_MS && target != null) {
+        val quick = lasted < MIN_SESSION_MS
+        // While reconnecting, the same password just worked, so a failed connect
+        // (TermService still restarting) may use the remaining tries too.
+        if (errorInfo == 0 && (wasConnected || reconnecting || !quick) && target != null &&
+            (!quick || quickReconnects < MAX_QUICK_RECONNECTS)
+        ) {
+            if (quick) quickReconnects++
             reconnecting = true
             uiState.status = "Connection dropped. Reconnecting..."
             lifecycleScope.launch {
@@ -243,9 +262,14 @@ class MainActivity : ComponentActivity() {
             return
         }
         // A fast failure: no blind retries, repeated failed logons can lock the account.
+        val gaveUp = reconnecting
         reconnecting = false
+        quickReconnects = 0
         uiState.status = if (errorInfo != 0) {
             "The Brain ended the session (code $errorInfo)."
+        } else if (gaveUp) {
+            "The connection keeps dropping. Your session is kept on the Brain; " +
+                "try again in a minute."
         } else {
             "Couldn't connect to the Brain. Try again in a moment."
         }
@@ -265,6 +289,7 @@ class MainActivity : ComponentActivity() {
             val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host, port) }
             if (awake == Awake.No) {
                 reconnecting = false
+                quickReconnects = 0
                 uiState.status = "Brain didn't wake in time. Try again."
                 return@launch
             }
