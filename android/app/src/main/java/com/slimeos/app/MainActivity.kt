@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
                 uiState.status = "Brain didn't wake in time — try again."
                 return@launch
             }
-            uiState.status = "Connecting..."
+            if (uiState.status == "Waking Brain...") uiState.status = "Connecting..."
             val size = screenSize()
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
@@ -233,6 +233,15 @@ class MainActivity : ComponentActivity() {
             attempt++
             when (BrainPower.wake(host)) {
                 BrainPower.WakeState.Ready -> return true
+                // The Brain may well be awake; only waking is refused, so try anyway
+                // and say why if the connection then fails.
+                BrainPower.WakeState.NotAllowed -> {
+                    withContext(Dispatchers.Main) {
+                        uiState.status = "This device isn't allowed to wake the Brain. " +
+                            "Connecting anyway; if the Brain is asleep, wake it from another device."
+                    }
+                    return true
+                }
                 BrainPower.WakeState.Failed -> return false
                 BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
                     withContext(Dispatchers.Main) { uiState.status = "Waking Brain... (attempt $attempt)" }
@@ -265,7 +274,7 @@ private fun PairingScreen(
     var enrollmentHost by remember { mutableStateOf("enroll.slimeos.com") }
     var code by remember { mutableStateOf("") }
     val brain = state.savedBrain
-    var rdpHost by remember(brain) { mutableStateOf(brain?.host ?: "10.11.0.10") }
+    var rdpHost by remember(brain) { mutableStateOf(brain?.host ?: "") }
     var rdpPort by remember(brain) { mutableStateOf((brain?.port ?: 3389).toString()) }
     var username by remember(brain) { mutableStateOf(brain?.username ?: "") }
     var password by remember(brain) { mutableStateOf(brain?.password ?: "") }
@@ -274,7 +283,7 @@ private fun PairingScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Slime OS — M1 spike", style = MaterialTheme.typography.headlineSmall)
+        Text("Slime OS", style = MaterialTheme.typography.headlineSmall)
 
         if (!state.tunnelUp) {
             OutlinedTextField(

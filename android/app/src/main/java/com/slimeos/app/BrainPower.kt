@@ -25,6 +25,8 @@ object BrainPower {
         object Ready : WakeState()
         object Starting : WakeState()
         object Failed : WakeState()
+        /** The hub refused: this device isn't on the Brain's POWER_VMS list. */
+        object NotAllowed : WakeState()
         data class Error(val message: String) : WakeState()
     }
 
@@ -44,6 +46,9 @@ object BrainPower {
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
             conn.disconnect()
             Log.i("BrainPower", "wake($host) -> HTTP $code: $text")
+            // A 403 carries no "managed" field, which must not read as "unmanaged,
+            // go ahead": a managed Brain that's asleep would then just time out.
+            if (code == HttpURLConnection.HTTP_FORBIDDEN) return WakeState.NotAllowed
             val json = JSONObject(text)
             if (!json.optBoolean("managed", false)) return WakeState.Ready
             when (json.optString("state")) {
