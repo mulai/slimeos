@@ -19,6 +19,10 @@ build), together with the camera and keyboard patches. Users switch it
 on per device in Settings > Display & Sound > Brain connection >
 "Faster (beta)", on by default since v0.3.36.
 
+**Android:** `android/freerdp-patches/udp-transport.patch` is this patch
+ported to FreeRDP 3.31.1 (identical code, minus the research fps counter in
+rdpgfx_main.c). Change both together.
+
 ## What it does
 
 - When `SLIMEOS_UDP_NATIVE=1` (set by `connect.sh` from `RDP_UDP="on"` in

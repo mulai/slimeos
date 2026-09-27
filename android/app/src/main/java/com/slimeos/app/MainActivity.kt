@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var pendingConfig: Config? = null
+    private var tunnelStarting = false
     private val uiState = UiState()
 
     private val vpnPermissionLauncher =
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
             if (result.resultCode == Activity.RESULT_OK) {
                 pendingConfig?.let { bringTunnelUp(it) }
             } else {
+                tunnelStarting = false
                 uiState.status = "VPN permission denied — tunnel cannot start."
             }
         }
@@ -104,8 +106,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
 
-        // Paired before: bring the saved tunnel back up instead of asking for a new code.
+    override fun onResume() {
+        super.onResume()
+        // Paired before: bring the saved tunnel back up instead of asking for a new
+        // code. Here rather than in onCreate: Android refuses to start the VPN
+        // service while the app is in the background (e.g. launched with the screen
+        // off), and onResume is also a retry after such a failure.
+        if (uiState.tunnelUp || tunnelStarting) return
         saved.wgConfig?.let { text ->
             try {
                 startTunnel(Config.parse(text.byteInputStream()))
@@ -133,6 +142,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startTunnel(config: Config) {
+        tunnelStarting = true
         pendingConfig = config
         uiState.status = "Requesting VPN permission..."
         val intent = GoBackend.VpnService.prepare(this)
@@ -170,6 +180,8 @@ class MainActivity : ComponentActivity() {
                 uiState.status = "Tunnel up."
             } catch (e: Exception) {
                 uiState.status = "Tunnel failed: ${e.message}"
+            } finally {
+                tunnelStarting = false
             }
         }
     }

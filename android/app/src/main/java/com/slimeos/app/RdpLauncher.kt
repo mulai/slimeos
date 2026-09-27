@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.system.Os
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -40,8 +41,16 @@ object RdpLauncher {
             // gets freeRDPCore's own "verify certificate" dialog.
             if (TUNNEL_HOST.matches(host)) append("&cert=ignore")
             append("&network=auto")
+            // Tell Windows not to wait for frame acknowledgements. Otherwise it sends
+            // the next frame only once earlier ones are acked, so the frame rate is
+            // capped by round trip + decode time (~70 ms here: ~20 fps, audio
+            // following). The tablet decodes a frame in ~25 ms, well under 30 fps.
+            append("&gfx=").append(enc("frame-ack:off"))
             // Play the Brain's audio here (OpenSL ES) instead of FreeRDP's fake backend.
             append("&sound=")
+            // Video optimised remoting (MS-RDPEVOR), as connect.sh's +video: Windows sends
+            // playing video as its own stream, presented on its own timeline.
+            append("&video=")
             append("&dynamic-resolution=")
             // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
             // own "match resolution to device" logic entirely, so without explicit w/h
@@ -51,6 +60,12 @@ object RdpLauncher {
             append("&h=").append(heightPx)
         }
         val uri = Uri.parse("freerdp://$authority/connect?$query")
+
+        // Slime OS UDP transport (freerdp-patches/udp-transport.patch), the same
+        // switches connect.sh sets for "Faster (beta)": graphics, cursor, video and
+        // audio ride RDP-UDP2, and FreeRDP falls back to TCP if UDP goes quiet.
+        Os.setenv("SLIMEOS_UDP_NATIVE", "1", true)
+        Os.setenv("SLIMEOS_UDP_SEND", "1", true)
 
         val intent = Intent(Intent.ACTION_VIEW, uri)
         intent.component = ComponentName(context, SlimeSessionActivity::class.java)

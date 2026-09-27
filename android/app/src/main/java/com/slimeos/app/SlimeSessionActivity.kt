@@ -1,6 +1,7 @@
 package com.slimeos.app
 
 import android.os.Bundle
+import android.view.WindowManager
 import com.freerdp.freerdpcore.presentation.SessionActivity
 
 /**
@@ -21,6 +22,10 @@ class SlimeSessionActivity : SessionActivity() {
             intent.removeExtra(EXTRA_PASSWORD)
         }
         super.onCreate(savedInstanceState)
+        // A remote desktop gets no touches while video plays; don't let Android
+        // dim and lock the tablet under it. Only for this window, so it ends
+        // with the session.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     companion object {

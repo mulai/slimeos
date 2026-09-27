@@ -1,0 +1,40 @@
+diff --git a/channels/rdpsnd/client/opensles/opensl_io.c b/channels/rdpsnd/client/opensles/opensl_io.c
+index a5a79cb..c5d2628 100644
+--- a/channels/rdpsnd/client/opensles/opensl_io.c
++++ b/channels/rdpsnd/client/opensles/opensl_io.c
+@@ -329,6 +329,9 @@ static void bqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void* context)
+ 	free(data);
+ }
+ 
++/* Silence queued ahead of audio that starts from an empty queue, see android_AudioOut. */
++#define PREROLL_MS 100
++
+ // puts a buffer of size samples to the device
+ int android_AudioOut(OPENSL_STREAM* p, const short* buffer, int size)
+ {
+@@ -336,6 +339,25 @@ int android_AudioOut(OPENSL_STREAM* p, const short* buffer, int size)
+ 	WINPR_ASSERT(buffer);
+ 	WINPR_ASSERT(size > 0);
+ 
++	/*
++	 * Starting from an empty queue (session start, or after an underrun):
++	 * Windows sends ~186 ms blocks in real time, so each one arrives just as
++	 * the previous one ends and any network jitter becomes a gap (AudioTrack
++	 * underrun, stop, restart: choppy, late sound). Queue a little silence
++	 * first so there is slack for that jitter. A steady stream never empties
++	 * the queue, so this adds no delay once audio is flowing.
++	 */
++	if (Queue_Count(p->queue) == 0)
++	{
++		const size_t prerollSamples = (size_t)p->sr * p->outchannels * PREROLL_MS / 1000;
++		void* silence = calloc(prerollSamples, sizeof(short));
++		if (silence && Queue_Enqueue(p->queue, silence))
++			(*p->bqPlayerBufferQueue)
++			    ->Enqueue(p->bqPlayerBufferQueue, silence, sizeof(short) * prerollSamples);
++		else
++			free(silence);
++	}
++
+ 	HANDLE ev = Queue_Event(p->queue);
+ 	/* Assure, that the queue is not full. */
+ 	if (p->queuesize <= Queue_Count(p->queue) && WaitForSingleObject(ev, INFINITE) == WAIT_FAILED)
