@@ -16,7 +16,7 @@ import java.nio.charset.StandardCharsets
  * onto an xfreerdp-style flag (key=value -> /key:value, key= -> /key), so this
  * mirrors the exact flags membrane/freerdp/connect.sh passes to xfreerdp3 for the
  * desktop Membrane (see connect.sh:731-745), skipping only what M1 explicitly
- * defers (sound/mic/cam redirection, drive redirection, scale flags).
+ * defers (mic/cam redirection, drive redirection, scale flags).
  */
 object RdpLauncher {
 
@@ -40,6 +40,8 @@ object RdpLauncher {
             // gets freeRDPCore's own "verify certificate" dialog.
             if (TUNNEL_HOST.matches(host)) append("&cert=ignore")
             append("&network=auto")
+            // Play the Brain's audio here (OpenSL ES) instead of FreeRDP's fake backend.
+            append("&sound=")
             append("&dynamic-resolution=")
             // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
             // own "match resolution to device" logic entirely, so without explicit w/h

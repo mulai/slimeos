@@ -1,0 +1,94 @@
+diff --git a/libfreerdp/primitives/prim_copy.c b/libfreerdp/primitives/prim_copy.c
+index 27a9dd9..90ed910 100644
+--- a/libfreerdp/primitives/prim_copy.c
++++ b/libfreerdp/primitives/prim_copy.c
+@@ -21,6 +21,10 @@
+ #include <freerdp/log.h>
+ 
+ #include "prim_internal.h"
++
++#if defined(__ARM_NEON) || defined(__ARM_NEON__)
++#include <arm_neon.h>
++#endif
+ #include "prim_copy.h"
+ #include "../codec/color.h"
+ 
+@@ -351,6 +355,66 @@ static inline pstatus_t generic_image_copy_no_overlap_dst_alpha(
+ 	    nXSrc, nYSrc, palette, srcVMultiplier, srcVOffset, dstVMultiplier, dstVOffset);
+ }
+ 
++static BOOL is_bgr32(DWORD format)
++{
++	return (format == PIXEL_FORMAT_BGRX32) || (format == PIXEL_FORMAT_BGRA32);
++}
++
++static BOOL is_rgb32(DWORD format)
++{
++	return (format == PIXEL_FORMAT_RGBX32) || (format == PIXEL_FORMAT_RGBA32);
++}
++
++/*
++ * 32bpp copy between formats that differ only in red/blue order (e.g. the
++ * BGRA gfx surfaces into an RGBX primary buffer, as the Android client uses).
++ * The generic path splits and rebuilds every pixel, which made this copy the
++ * most expensive step of the whole pipeline on ARM.
++ */
++static pstatus_t generic_image_copy_swap_rb32(BYTE* WINPR_RESTRICT pDstData, DWORD DstFormat,
++                                              UINT32 nDstStep, UINT32 nXDst, UINT32 nYDst,
++                                              UINT32 nWidth, UINT32 nHeight,
++                                              const BYTE* WINPR_RESTRICT pSrcData, DWORD SrcFormat,
++                                              UINT32 nSrcStep, UINT32 nXSrc, UINT32 nYSrc,
++                                              int64_t srcVMultiplier, int64_t srcVOffset,
++                                              int64_t dstVMultiplier, int64_t dstVOffset)
++{
++	/* Only carry alpha over when both sides have it; otherwise the pixel is opaque. */
++	const BYTE alphaOr =
++	    (FreeRDPColorHasAlpha(SrcFormat) && FreeRDPColorHasAlpha(DstFormat)) ? 0x00 : 0xFF;
++
++	for (int64_t y = 0; y < nHeight; y++)
++	{
++		const BYTE* WINPR_RESTRICT src =
++		    &pSrcData[srcVMultiplier * (y + nYSrc) * nSrcStep + srcVOffset + 4ll * nXSrc];
++		BYTE* WINPR_RESTRICT dst =
++		    &pDstData[dstVMultiplier * (y + nYDst) * nDstStep + dstVOffset + 4ll * nXDst];
++
++		UINT32 x = 0;
++#if defined(__ARM_NEON) || defined(__ARM_NEON__)
++		const uint8x16_t alpha = vdupq_n_u8(alphaOr);
++		for (; x + 16 <= nWidth; x += 16)
++		{
++			uint8x16x4_t px = vld4q_u8(&src[4 * x]);
++			const uint8x16_t first = px.val[0];
++			px.val[0] = px.val[2];
++			px.val[2] = first;
++			px.val[3] = vorrq_u8(px.val[3], alpha);
++			vst4q_u8(&dst[4 * x], px);
++		}
++#endif
++		for (; x < nWidth; x++)
++		{
++			dst[4 * x + 0] = src[4 * x + 2];
++			dst[4 * x + 1] = src[4 * x + 1];
++			dst[4 * x + 2] = src[4 * x + 0];
++			dst[4 * x + 3] = src[4 * x + 3] | alphaOr;
++		}
++	}
++
++	return PRIMITIVES_SUCCESS;
++}
++
+ static inline pstatus_t generic_image_copy_no_overlap_no_alpha(
+     BYTE* WINPR_RESTRICT pDstData, DWORD DstFormat, UINT32 nDstStep, UINT32 nXDst, UINT32 nYDst,
+     UINT32 nWidth, UINT32 nHeight, const BYTE* WINPR_RESTRICT pSrcData, DWORD SrcFormat,
+@@ -363,6 +427,11 @@ static inline pstatus_t generic_image_copy_no_overlap_no_alpha(
+ 		                                            nWidth, nHeight, pSrcData, SrcFormat, nSrcStep,
+ 		                                            nXSrc, nYSrc, palette, srcVMultiplier,
+ 		                                            srcVOffset, dstVMultiplier, dstVOffset, flags);
++	else if ((is_bgr32(SrcFormat) && is_rgb32(DstFormat)) ||
++	         (is_rgb32(SrcFormat) && is_bgr32(DstFormat)))
++		return generic_image_copy_swap_rb32(pDstData, DstFormat, nDstStep, nXDst, nYDst, nWidth,
++		                                    nHeight, pSrcData, SrcFormat, nSrcStep, nXSrc, nYSrc,
++		                                    srcVMultiplier, srcVOffset, dstVMultiplier, dstVOffset);
+ 	else
+ 		return generic_image_copy_no_overlap_convert(pDstData, DstFormat, nDstStep, nXDst, nYDst,
+ 		                                             nWidth, nHeight, pSrcData, SrcFormat, nSrcStep,

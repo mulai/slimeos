@@ -9,21 +9,26 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -80,6 +85,7 @@ class MainActivity : ComponentActivity() {
         backend = GoBackend(applicationContext)
         saved = SavedPairing(applicationContext)
         uiState.savedBrain = saved.brain
+        uiState.h264Enabled = OpenH264.isEnabled(applicationContext)
 
         setContent {
             MaterialTheme {
@@ -88,7 +94,12 @@ class MainActivity : ComponentActivity() {
                         state = uiState,
                         onPair = { host, code -> doPair(host, code) },
                         onConnect = { host, port, user, pass -> doConnect(host, port, user, pass) },
-                        onForget = { forgetPairing() }
+                        onForget = { forgetPairing() },
+                        onH264Changed = { enabled ->
+                            OpenH264.setEnabled(applicationContext, enabled)
+                            uiState.h264Enabled = enabled
+                        },
+                        licenseText = { OpenH264.licenseText(applicationContext) }
                     )
                 }
             }
@@ -167,6 +178,11 @@ class MainActivity : ComponentActivity() {
         uiState.rdpHost = host
         saved.brain = SavedPairing.Brain(host, port, username, password)
         lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                OpenH264.prepareSession(applicationContext) {
+                    runOnUiThread { uiState.status = "Downloading the video codec from Cisco..." }
+                }
+            }
             uiState.status = "Waking Brain..."
             val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host) }
             if (!awake) {
@@ -221,6 +237,7 @@ private class UiState {
     var tunnelUp by mutableStateOf(false)
     var rdpHost by mutableStateOf("")
     var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
+    var h264Enabled by mutableStateOf(false)
 }
 
 @Composable
@@ -228,8 +245,11 @@ private fun PairingScreen(
     state: UiState,
     onPair: (host: String, code: String) -> Unit,
     onConnect: (host: String, port: Int, user: String, pass: String) -> Unit,
-    onForget: () -> Unit
+    onForget: () -> Unit,
+    onH264Changed: (Boolean) -> Unit,
+    licenseText: () -> String
 ) {
+    var showLicense by remember { mutableStateOf(false) }
     var enrollmentHost by remember { mutableStateOf("enroll.slimeos.com") }
     var code by remember { mutableStateOf("") }
     val brain = state.savedBrain
@@ -284,6 +304,34 @@ private fun PairingScreen(
                 onConnect(rdpHost, rdpPort.toIntOrNull() ?: 3389, username, password)
             }) { Text("Connect") }
             OutlinedButton(onClick = onForget) { Text("Forget pairing") }
+
+            // Cisco's OpenH264 license: the user controls its use, and this
+            // control must show the notice and the license text.
+            if (OpenH264.isSupported) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = state.h264Enabled, onCheckedChange = onH264Changed)
+                    Column(modifier = Modifier.padding(start = 12.dp)) {
+                        Text("Smooth video (H.264, downloaded on first use)")
+                        Text(OpenH264.NOTICE, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = { showLicense = true }) { Text("Licence") }
+                }
+            }
+        }
+
+        if (showLicense) {
+            AlertDialog(
+                onDismissRequest = { showLicense = false },
+                confirmButton = { TextButton(onClick = { showLicense = false }) { Text("Close") } },
+                title = { Text("OpenH264 licence") },
+                text = {
+                    Text(
+                        licenseText(),
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            )
         }
 
         Text(state.status)

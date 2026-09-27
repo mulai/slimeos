@@ -1,0 +1,83 @@
+diff --git a/channels/rdpgfx/client/rdpgfx_main.c b/channels/rdpgfx/client/rdpgfx_main.c
+index 3dba687..cbc2926 100644
+--- a/channels/rdpgfx/client/rdpgfx_main.c
++++ b/channels/rdpgfx/client/rdpgfx_main.c
+@@ -38,6 +38,7 @@
+ 
+ #include <freerdp/addin.h>
+ #include <freerdp/channels/log.h>
++#include <freerdp/codec/h264.h>
+ 
+ #include "rdpgfx_common.h"
+ #include "rdpgfx_codec.h"
+@@ -330,6 +331,31 @@ static UINT rdpgfx_send_supported_caps(GENERIC_CHANNEL_CALLBACK* callback)
+ 
+ 	RDPGFX_CAPS_ADVERTISE_PDU pdu = { .capsSetCount = 0, .capsSets = capsSets };
+ 
++#ifdef WITH_GFX_H264
++	/*
++	 * Only offer AVC if a decoder can actually be created. With a runtime-loaded
++	 * decoder (OpenH264 not downloaded, or turned off by the user) the server
++	 * would otherwise send H.264 that nothing can decode: a black screen.
++	 */
++	rdpSettings* settings = gfx->rdpcontext->settings;
++	if (freerdp_settings_get_bool(settings, FreeRDP_GfxH264) ||
++	    freerdp_settings_get_bool(settings, FreeRDP_GfxAVC444))
++	{
++		H264_CONTEXT* probe = h264_context_new(FALSE);
++		if (probe)
++			h264_context_free(probe);
++		else
++		{
++			WLog_Print(gfx->base.log, WLOG_WARN,
++			           "No H.264 decoder available, not offering AVC to the server");
++			if (!freerdp_settings_set_bool(settings, FreeRDP_GfxH264, FALSE) ||
++			    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, FALSE) ||
++			    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, FALSE))
++				return ERROR_INTERNAL_ERROR;
++		}
++	}
++#endif
++
+ 	if (!rdpgfx_is_capability_filtered(gfx, RDPGFX_CAPVERSION_8))
+ 	{
+ 		RDPGFX_CAPSET* capsSet = nextCapset(&pdu, ARRAYSIZE(capsSets));
+diff --git a/client/Android/cmake/ExternalFreeRDP.cmake b/client/Android/cmake/ExternalFreeRDP.cmake
+index 69a258e..0dcbcbb 100644
+--- a/client/Android/cmake/ExternalFreeRDP.cmake
++++ b/client/Android/cmake/ExternalFreeRDP.cmake
+@@ -29,6 +29,7 @@ set(FREERDP_EXTRA_CMAKE_ARGS
+     -DWITH_FFMPEG:BOOL=${WITH_FFMPEG}
+     -DWITH_SWSCALE:BOOL=${WITH_FFMPEG}
+     -DWITH_OPENH264:BOOL=${WITH_OPENH264}
++    -DWITH_OPENH264_LOADING:BOOL=${WITH_OPENH264_LOADING}
+     -DWITH_VAAPI_H264_ENCODING:BOOL=OFF
+     # Image formats
+     -DWINPR_UTILS_IMAGE_PNG:BOOL=${WITH_PNG}
+diff --git a/libfreerdp/codec/h264_openh264.c b/libfreerdp/codec/h264_openh264.c
+index 43feebf..8ccb928 100644
+--- a/libfreerdp/codec/h264_openh264.c
++++ b/libfreerdp/codec/h264_openh264.c
+@@ -544,13 +544,18 @@ static BOOL openh264_init(H264_CONTEXT* h264)
+ 	h264->pSystemData = (void*)sysContexts;
+ #if defined(WITH_OPENH264_LOADING)
+ 
+-	for (size_t i = 0; i < ARRAYSIZE(openh264_library_names); i++)
++	/*
++	 * A full path to the library, for platforms where it isn't on the loader's
++	 * search path: the Android client downloads Cisco's binary into app storage.
++	 */
++	const char* explicitLibrary = getenv("FREERDP_OPENH264_LIBRARY");
++	if (explicitLibrary && (explicitLibrary[0] != '\0'))
++		success = openh264_load_functionpointers(h264, explicitLibrary);
++
++	for (size_t i = 0; !success && (i < ARRAYSIZE(openh264_library_names)); i++)
+ 	{
+ 		const char* current = openh264_library_names[i];
+ 		success = openh264_load_functionpointers(h264, current);
+-
+-		if (success)
+-			break;
+ 	}
+ 
+ 	if (!success)

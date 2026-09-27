@@ -25,6 +25,14 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
+    // FreeRDP's build compiles OpenH264 for its headers, but the library itself
+    // must come from Cisco's download on the device (see OpenH264.kt).
+    packaging {
+        jniLibs {
+            excludes += ['**/libopenh264.so']
+        }
+    }
 }
 
 dependencies {
@@ -45,4 +53,7 @@ dependencies {
     implementation 'com.wireguard.android:tunnel:1.0.20230706'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+
+    // Unpacks Cisco's OpenH264 download (.bz2).
+    implementation 'org.apache.commons:commons-compress:1.27.1'
 }
