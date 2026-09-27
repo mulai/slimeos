@@ -67,6 +67,17 @@ object RdpLauncher {
         Os.setenv("SLIMEOS_UDP_NATIVE", "1", true)
         Os.setenv("SLIMEOS_UDP_SEND", "1", true)
 
+        // freeRDPCore's own immersive mode: Android's status and navigation bars
+        // hide during the session (swipe from an edge to bring them back), so the
+        // view is the whole screen, the size the session is requested at above.
+        // Otherwise the desktop is 42 px taller than the view and the Windows
+        // taskbar at the bottom sits off screen until you scroll.
+        context.getSharedPreferences(context.packageName + "_preferences", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("ui.hide_status_bar", true)
+            .putBoolean("ui.hide_navigation_bar", true)
+            .apply()
+
         val intent = Intent(Intent.ACTION_VIEW, uri)
         intent.component = ComponentName(context, SlimeSessionActivity::class.java)
         intent.putExtra(SlimeSessionActivity.EXTRA_PASSWORD, password)
