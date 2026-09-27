@@ -56,10 +56,12 @@ private const val MIN_SESSION_MS = 60_000L
 private const val MAX_QUICK_RECONNECTS = 3
 private const val RECONNECT_DELAY_MS = 5_000L
 
-// The server's ERRINFO_* codes for a session ended on purpose (FreeRDP error.h):
-// disconnect or logoff, from Windows' own menu or by an admin. Only these (or a
-// disconnect from this app) let the hub log the session off.
-private val CLEAN_END_ERRINFO = setOf(1, 2, 11, 12)
+// The server's ERRINFO_* codes for a session the user ended on purpose (FreeRDP
+// error.h): logoff, or disconnect/logoff from Windows' own menu. Only these (or a
+// disconnect from this app) let the hub log the session off. Not 1
+// (RPC_INITIATED_DISCONNECT): Windows sends it for a shutdown but also when
+// TermService restarts, and logging off then would throw the session away.
+private val CLEAN_END_ERRINFO = setOf(2, 11, 12)
 private const val ERRINFO_DISCONNECTED_BY_OTHERCONNECTION = 5
 
 /**
@@ -265,7 +267,9 @@ class MainActivity : ComponentActivity() {
         val gaveUp = reconnecting
         reconnecting = false
         quickReconnects = 0
-        uiState.status = if (errorInfo != 0) {
+        uiState.status = if (errorInfo == 1) {
+            "The Brain closed the connection. Your session is kept; connect again when ready."
+        } else if (errorInfo != 0) {
             "The Brain ended the session (code $errorInfo)."
         } else if (gaveUp) {
             "The connection keeps dropping. Your session is kept on the Brain; " +
