@@ -321,17 +321,21 @@ class MainActivity : ComponentActivity() {
 
     // Mirrors connect.sh's wake_brain(): some Brains (e.g. Azure) auto-deallocate when
     // idle, so /wake must be called and polled until running before RDP can connect —
-    // otherwise the TCP attempt just times out against a powered-off VM. Then waits
-    // for the RDP port itself: Azure says "running" before Windows listens.
+    // otherwise the TCP attempt just times out against a powered-off VM. "Running" is
+    // not enough: Azure says so before Windows listens, and while Windows shuts down.
+    // So keep asking the hub while waiting for the RDP port; a Brain that stops on the
+    // way gets started again by the next /wake.
     private suspend fun waitForBrainAwake(host: String, port: Int): Awake {
-        val deadlineMs = System.currentTimeMillis() + 3 * 60_000L
+        val deadlineMs = System.currentTimeMillis() + 5 * 60_000L
         var attempt = 0
+        var sawRunning = false
         while (System.currentTimeMillis() < deadlineMs) {
-            attempt++
             when (BrainPower.wake(host)) {
                 BrainPower.WakeState.Ready -> {
-                    waitForRdp(host, port)
-                    return Awake.Yes
+                    if (BrainPower.rdpListening(host, port)) return Awake.Yes
+                    sawRunning = true
+                    withContext(Dispatchers.Main) { uiState.status = "Brain is up. Starting the desktop..." }
+                    delay(3_000)
                 }
                 // The Brain may well be awake; only waking is refused, so try anyway
                 // and say why if the connection then fails.
@@ -348,22 +352,14 @@ class MainActivity : ComponentActivity() {
                     delay(5_000)
                 }
                 BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
+                    attempt++
                     withContext(Dispatchers.Main) { uiState.status = "Waking Brain... (attempt $attempt)" }
                     delay(5_000)
                 }
             }
         }
-        return Awake.No
-    }
-
-    // Up to a minute; if the port never opens, connect anyway and let FreeRDP say why.
-    private suspend fun waitForRdp(host: String, port: Int) {
-        val deadlineMs = System.currentTimeMillis() + 60_000L
-        while (!BrainPower.rdpListening(host, port)) {
-            if (System.currentTimeMillis() >= deadlineMs) return
-            withContext(Dispatchers.Main) { uiState.status = "Brain is up. Starting the desktop..." }
-            delay(3_000)
-        }
+        // Running all along but never listening: connect anyway and let FreeRDP say why.
+        return if (sawRunning) Awake.Yes else Awake.No
     }
 }
 

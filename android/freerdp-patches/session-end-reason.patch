@@ -1,8 +1,16 @@
 diff --git a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
-index 2e1f1c0..9bd6c54 100644
+index 2e1f1c0..e46e695 100644
 --- a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
 +++ b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
-@@ -856,6 +856,18 @@ JNIEXPORT void JNICALL Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_
+@@ -679,6 +679,7 @@ static DWORD WINAPI android_thread_func(LPVOID param)
+ 	else
+ 	{
+ 		status = android_freerdp_run(instance);
++		((androidContext*)instance->context)->endErrorInfo = freerdp_error_info(instance);
+ 		WLog_DBG(TAG, "Disconnect...");
+ 
+ 		if (!freerdp_disconnect(instance))
+@@ -856,6 +857,19 @@ JNIEXPORT void JNICALL Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_
  #endif
  }
  
@@ -15,12 +23,26 @@ index 2e1f1c0..9bd6c54 100644
 +	if (!inst || !inst->context)
 +		return 0;
 +
-+	return (jint)freerdp_error_info(inst);
++	const UINT32 live = freerdp_error_info(inst);
++	return (jint)(live ? live : ((androidContext*)inst->context)->endErrorInfo);
 +}
 +
  JNIEXPORT jstring JNICALL
  Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_1get_1last_1error_1string(JNIEnv* env,
                                                                                     jclass cls,
+diff --git a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.h b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.h
+index a72a705..77a6c22 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.h
++++ b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.h
+@@ -31,6 +31,8 @@ typedef struct
+ 	HANDLE thread;
+ 
+ 	BOOL is_connected;
++	/* Slime OS: the server's ERRINFO_* at session end; freerdp_disconnect() zeroes it. */
++	UINT32 endErrorInfo;
+ 
+ 	BOOL clipboardSync;
+ 	wClipboard* clipboard;
 diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
 index 31b0099..a05efac 100644
 --- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
