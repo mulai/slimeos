@@ -1,0 +1,15 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java
+index aff0889..1180e11 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java
+@@ -41,7 +41,9 @@ import java.util.Stack;
+ public class SessionView extends View
+ {
+ 	public static final float MAX_SCALE_FACTOR = 3.0f;
+-	public static final float MIN_SCALE_FACTOR = 0.75f;
++	// Not below 1.0: the Slime OS app sizes the session to the window, so 1.0
++	// already shows the whole remote screen; less only adds empty borders.
++	public static final float MIN_SCALE_FACTOR = 1.0f;
+ 	private static final String TAG = "SessionView";
+ 	private static final float SCALE_FACTOR_DELTA = 0.0001f;
+ 	private static final float TOUCH_SCROLL_DELTA = 10.0f;
