@@ -28,6 +28,8 @@ object BrainPower {
         object Starting : WakeState()
         /** The hub is still logging off the previous session (#17); usually ~10 s. */
         object Cleaning : WakeState()
+        /** The hub is restarting the Brain after a frozen session (see restart()). */
+        object Restarting : WakeState()
         object Failed : WakeState()
         /** The hub refused: this device isn't on the Brain's POWER_VMS list. */
         object NotAllowed : WakeState()
@@ -59,6 +61,7 @@ object BrainPower {
                 "running" -> WakeState.Ready
                 "failed" -> WakeState.Failed
                 "cleaning" -> WakeState.Cleaning
+                "restarting" -> WakeState.Restarting
                 else -> WakeState.Starting // starting/deallocated/stopped/stopping/deallocating/unknown
             }
         } catch (e: Exception) {
@@ -77,6 +80,34 @@ object BrainPower {
             Socket().use { it.connect(InetSocketAddress(host, port), 2_000) }
             true
         } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Asks the hub to restart a Brain whose session froze (brain/power's /restart:
+     * the Brain switches to software encoding, then restarts). True when the hub
+     * took it on; false for an unmanaged Brain, a refusal or no answer.
+     */
+    fun restart(host: String): Boolean {
+        return try {
+            val conn = URL("$POWER_URL/restart").openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 10_000
+            conn.setRequestProperty("Content-Type", "application/json")
+            OutputStreamWriter(conn.outputStream, StandardCharsets.UTF_8).use {
+                it.write(JSONObject().put("host", host).toString())
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            conn.disconnect()
+            Log.i("BrainPower", "restart($host) -> HTTP $code: $text")
+            code == HttpURLConnection.HTTP_OK && JSONObject(text).optString("state") == "restarting"
+        } catch (e: Exception) {
+            Log.e("BrainPower", "restart($host) failed", e)
             false
         }
     }

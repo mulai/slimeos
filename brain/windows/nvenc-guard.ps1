@@ -8,6 +8,8 @@
 #
 #   -Trigger Crash  (task: Remote Desktop service crashed) hardware encoding on ->
 #                   turn it off, one strike for this driver
+#   -Trigger Hang   (hub, just before it restarts a Brain whose session froze) same
+#                   as Crash, and the start-up that follows keeps software encoding
 #   -Trigger Check  (task: at startup and daily) guard turned it off and the driver
 #                   hasn't used up its strikes -> turn it back on
 #   no -Trigger     install: copy to C:\ProgramData\SlimeOS, register both tasks and
@@ -22,7 +24,7 @@
 # (count for the current driver), OffByGuard. Log: C:\ProgramData\SlimeOS\
 # nvenc-guard.log and the Application event log (source SlimeOS-NvencGuard).
 
-param([ValidateSet('Install', 'Crash', 'Check')][string]$Trigger = 'Install')
+param([ValidateSet('Install', 'Crash', 'Hang', 'Check')][string]$Trigger = 'Install')
 
 $ErrorActionPreference = 'Stop'
 $Dir = 'C:\ProgramData\SlimeOS'
@@ -60,6 +62,7 @@ function Get-State {
         OffByGuard = [bool]$p.OffByGuard
         StrikeDriver = $p.StrikeDriver
         Strikes    = [int]$p.Strikes
+        SkipNextCheck = [bool]$p.SkipNextCheck
     }
 }
 
@@ -134,12 +137,17 @@ switch ($Trigger) {
             $drv, @('off', 'on')[(Get-HwEncode)], $state.Mode, ($state.BadDrivers -join ', '))
     }
 
-    'Crash' {
+    { $_ -in 'Crash', 'Hang' } {
         $state = Get-State
         $drv = Get-DriverVersion
         $hw = Get-HwEncode
-        if ($state.Mode -ne 'Auto') { Log "Remote Desktop service crashed; mode is $($state.Mode), leaving hardware encoding as is." 2 Warning; break }
-        if ($hw -ne 1) { Log "Remote Desktop service crashed with hardware encoding already off (driver $drv): not the NVENC bug." 3 Warning; break }
+        $what = @{ Crash = 'Remote Desktop service crashed'; Hang = 'Session froze (Brain restart requested)' }[$Trigger]
+        if ($Trigger -eq 'Hang') {
+            # The restart is to clear the hung session, not to retry hardware encoding.
+            Set-ItemProperty $StateKey -Name SkipNextCheck -Value 1 -Type DWord
+        }
+        if ($state.Mode -ne 'Auto') { Log "$what; mode is $($state.Mode), leaving hardware encoding as is." 2 Warning; break }
+        if ($hw -ne 1) { Log "$what with hardware encoding already off (driver $drv): not the NVENC bug." 3 Warning; break }
         Set-HwEncode 0
         Set-ItemProperty $StateKey -Name OffByGuard -Value 1 -Type DWord
         $strikes = if ($state.StrikeDriver -eq $drv) { $state.Strikes + 1 } else { 1 }
@@ -150,8 +158,13 @@ switch ($Trigger) {
             Set-ItemProperty $StateKey -Name BadDrivers -Value ([string[]]($state.BadDrivers + $drv | Select-Object -Unique)) -Type MultiString
             $until = 'Azure installs a different driver'
         }
+        if ($Trigger -eq 'Hang') {
+            Log ("$what with hardware encoding on (driver {0}, strike {1} of {2}): software until {3}, after the restart." -f `
+                $drv, $strikes, $MaxStrikes, $until) 12 Warning
+            break
+        }
         Start-Sleep -Seconds 5   # let the service's own 1 s restart finish first
-        Log ("Remote Desktop service crashed with hardware encoding on (driver {0}, strike {1} of {2}): software until {3}; {4}." -f `
+        Log ("$what with hardware encoding on (driver {0}, strike {1} of {2}): software until {3}; {4}." -f `
             $drv, $strikes, $MaxStrikes, $until, (Restart-RdpIfIdle)) 10 Warning
     }
 
@@ -159,6 +172,11 @@ switch ($Trigger) {
         $state = Get-State
         $drv = Get-DriverVersion
         $hw = Get-HwEncode
+        if ($state.SkipNextCheck) {
+            Set-ItemProperty $StateKey -Name SkipNextCheck -Value 0 -Type DWord
+            Log "Start-up after a frozen-session restart: keeping hardware encoding $(@('off', 'on')[$hw]) until the next check."
+            break
+        }
         switch ($state.Mode) {
             'On' { if ($hw -ne 1) { Set-HwEncode 1; Log "Mode On: hardware encoding on; $(Restart-RdpIfIdle)." 20 } }
             'Off' { if ($hw -ne 0) { Set-HwEncode 0; Log "Mode Off: hardware encoding off; $(Restart-RdpIfIdle)." 21 } }

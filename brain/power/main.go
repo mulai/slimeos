@@ -147,6 +147,7 @@ func main() {
 	mux.HandleFunc("/wake", s.handleWake)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/session-ended", s.handleSessionEnded)
+	mux.HandleFunc("/restart", s.handleRestart)
 
 	// Bind-retry loop: this process starts as soon as the wireguard
 	// container's namespace exists, which is seconds before its init has
@@ -257,6 +258,10 @@ type hostState struct {
 	// Stale-session cleanup (see resetStaleRDPSession) still running: /wake
 	// answers "cleaning" until it finishes or this deadline passes.
 	cleanupUntil time.Time
+	// A frozen-session restart (see handleRestart) is under way: /wake answers
+	// "restarting" until this deadline, so a client can't reconnect into the
+	// old, hung Windows before it has gone down.
+	restartUntil time.Time
 }
 
 type server struct {
@@ -338,6 +343,14 @@ func (s *server) handleWake(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.allowed(hs, req.Host, r) {
 		forbidden(w)
+		return
+	}
+
+	s.mu.Lock()
+	restarting := time.Now().Before(hs.restartUntil)
+	s.mu.Unlock()
+	if restarting {
+		writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "restarting"})
 		return
 	}
 
@@ -493,6 +506,85 @@ func (s *server) handleSessionEnded(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.resetStaleRDPSession(hs, req.Host)
 	writeJSON(w, http.StatusOK, powerResponse{Managed: true})
+}
+
+// handleRestart: a client reports that the session froze (no picture for over a
+// minute while the user kept tapping) and the user chose to restart the Brain.
+// Tonight's case (2026-09-28): NVIDIA's encoder hung a session that neither a
+// Remote Desktop service restart nor a logoff could clear; only a VM restart did.
+// Same auth as /wake. Answers at once; the work runs in restartFrozenBrain.
+func (s *server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req wakeRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, powerResponse{Error: "bad_request"})
+		return
+	}
+	hs, ok := s.hosts[req.Host]
+	if !ok {
+		writeJSON(w, http.StatusOK, powerResponse{Managed: false})
+		return
+	}
+	if !s.allowed(hs, req.Host, r) {
+		forbidden(w)
+		return
+	}
+	s.mu.Lock()
+	busy := time.Now().Before(hs.restartUntil)
+	if !busy {
+		hs.restartUntil = time.Now().Add(restartMaxHold)
+		hs.lastWake = time.Now() // no idle-deallocation in the middle of it
+	}
+	s.mu.Unlock()
+	if !busy {
+		go s.restartFrozenBrain(hs, req.Host)
+	}
+	writeJSON(w, http.StatusOK, powerResponse{Managed: true, State: "restarting"})
+}
+
+// restartMaxHold caps the whole restart (guard script, then ARM restart);
+// restartSettle is how long /wake keeps saying "restarting" after ARM accepted
+// the restart, so the old Windows is down before clients probe its RDP port.
+const (
+	restartMaxHold = 4 * time.Minute
+	restartSettle  = 60 * time.Second
+)
+
+// restartFrozenBrain tells the Brain's NVENC guard (brain/windows/nvenc-guard.ps1)
+// about the hang first, so it switches to software encoding and doesn't undo that
+// at the coming start-up, then restarts the VM. A Brain without the guard just
+// restarts.
+func (s *server) restartFrozenBrain(hs *hostState, host string) {
+	log.Printf("restart %s: frozen session reported, restarting %s", host, hs.ref.name)
+	const guard = `$g = 'C:\ProgramData\SlimeOS\nvenc-guard.ps1'
+if (Test-Path $g) { & $g -Trigger Hang }`
+	for attempt := 1; attempt <= 3; attempt++ {
+		opURL, err := s.runScript(hs, guard)
+		if err == nil {
+			log.Printf("restart %s: NVENC guard %s", host, s.waitForAsyncOperation(opURL, 90*time.Second))
+			break
+		}
+		// 409: another runCommand (e.g. a session-ended cleanup) is still running.
+		log.Printf("restart %s: NVENC guard, attempt %d: %v", host, attempt, err)
+		time.Sleep(15 * time.Second)
+	}
+	err := s.powerOp(hs, "restart")
+	s.mu.Lock()
+	if err != nil {
+		hs.restartUntil = time.Time{}
+	} else {
+		hs.restartUntil = time.Now().Add(restartSettle)
+	}
+	hs.stateAt = time.Time{}
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("restart %s: ARM restart failed: %v", host, err)
+		return
+	}
+	log.Printf("restart %s: restart issued (%s)", host, hs.ref.name)
 }
 
 // ── Key Vault bootstrap (raw REST, stdlib only) ──────────────────────────────
@@ -723,25 +815,34 @@ foreach ($line in $sessions) {
     if ([int]$sid -eq 0) { continue }
     logoff $sid 2>$null
 }`
+	opURL, err := s.runScript(hs, script)
+	if err != nil {
+		log.Printf("session-ended %s: %v", host, err)
+		return
+	}
+	log.Printf("session-ended %s: stale RDP session cleanup issued", host)
+	st := s.waitForAsyncOperation(opURL, cleanupMaxWait)
+	log.Printf("session-ended %s: stale RDP session cleanup %s", host, st)
+}
+
+// runScript starts a PowerShell script on the Brain through ARM's runCommand
+// action and returns the Azure-AsyncOperation URL to poll ("" if ARM gave none).
+func (s *server) runScript(hs *hostState, script string) (string, error) {
 	body, err := json.Marshal(struct {
 		CommandID string   `json:"commandId"`
 		Script    []string `json:"script"`
 	}{CommandID: "RunPowerShellScript", Script: strings.Split(script, "\n")})
 	if err != nil {
-		log.Printf("session-ended %s: marshal runCommand body: %v", host, err)
-		return
+		return "", fmt.Errorf("marshal runCommand body: %v", err)
 	}
 	status, respBody, hdr, err := s.armRequestWithBody("POST", vmBase(hs.ref)+"/runCommand?api-version="+armAPIVersion, body)
 	if err != nil {
-		log.Printf("session-ended %s: runCommand request failed: %v", host, err)
-		return
+		return "", fmt.Errorf("runCommand request failed: %v", err)
 	}
 	if status != http.StatusOK && status != http.StatusAccepted {
-		log.Printf("session-ended %s: runCommand HTTP %d: %s", host, status, snippet(respBody))
-		return
+		return "", fmt.Errorf("runCommand HTTP %d: %s", status, snippet(respBody))
 	}
-	log.Printf("session-ended %s: stale RDP session cleanup issued", host)
-	s.waitForAsyncOperation(hdr.Get("Azure-AsyncOperation"), host)
+	return hdr.Get("Azure-AsyncOperation"), nil
 }
 
 // cleanupMaxWait caps how long /wake holds a reconnecting Membrane while the
@@ -749,13 +850,13 @@ foreach ($line in $sessions) {
 const cleanupMaxWait = 45 * time.Second
 
 // waitForAsyncOperation polls an ARM async operation (the Azure-AsyncOperation
-// URL from runCommand's 202) until it leaves InProgress, or the cleanup
-// deadline passes. Only used to know when /wake may say "running" again.
-func (s *server) waitForAsyncOperation(opURL, host string) {
+// URL from runCommand's 202) until it leaves InProgress or maxWait passes, and
+// returns its final status ("still running" on timeout, "unknown" without a URL).
+func (s *server) waitForAsyncOperation(opURL string, maxWait time.Duration) string {
 	if opURL == "" {
-		return
+		return "unknown"
 	}
-	deadline := time.Now().Add(cleanupMaxWait)
+	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		time.Sleep(2 * time.Second)
 		status, body, err := s.armRequest("GET", opURL)
@@ -769,11 +870,10 @@ func (s *server) waitForAsyncOperation(opURL, host string) {
 			continue
 		}
 		if op.Status != "InProgress" && op.Status != "" {
-			log.Printf("session-ended %s: stale RDP session cleanup %s", host, op.Status)
-			return
+			return op.Status
 		}
 	}
-	log.Printf("session-ended %s: stale RDP session cleanup still running after %s; releasing /wake", host, cleanupMaxWait)
+	return "still running after " + maxWait.String()
 }
 
 // vmState returns the VM's PowerState suffix: running, starting, stopping,

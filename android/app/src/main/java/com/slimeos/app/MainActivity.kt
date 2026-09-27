@@ -216,6 +216,16 @@ class MainActivity : ComponentActivity() {
         val errorInfo = data?.getIntExtra(SessionActivity.RESULT_ERROR_INFO, 0) ?: 0
         val wasConnected = data?.getBooleanExtra(SessionActivity.RESULT_WAS_CONNECTED, false) ?: false
         val lasted = SystemClock.elapsedRealtime() - sessionStartedAt
+        if (data?.getBooleanExtra(SlimeSessionActivity.RESULT_RESTARTING, false) == true && target != null) {
+            // The user chose to restart a frozen Brain; the hub is on it. /wake says
+            // "restarting" until the old Windows is down, so just connect again.
+            Log.i("MainActivity", "Brain restart requested after a frozen session")
+            reconnecting = true
+            quickReconnects = 0
+            uiState.status = "Restarting your Brain... (about 2 minutes)"
+            doConnect(target.host, target.port, target.username, target.password)
+            return
+        }
         Log.i(
             "MainActivity",
             "Session ended after ${lasted / 1000}s: endedByUser=$endedByUser " +
@@ -330,7 +340,8 @@ class MainActivity : ComponentActivity() {
     // So keep asking the hub while waiting for the RDP port; a Brain that stops on the
     // way gets started again by the next /wake.
     private suspend fun waitForBrainAwake(host: String, port: Int): Awake {
-        val deadlineMs = System.currentTimeMillis() + 5 * 60_000L
+        // Covers a wake from deallocated and a frozen-Brain restart (up to ~5 min).
+        val deadlineMs = System.currentTimeMillis() + 8 * 60_000L
         var attempt = 0
         var sawRunning = false
         while (System.currentTimeMillis() < deadlineMs) {
@@ -351,6 +362,10 @@ class MainActivity : ComponentActivity() {
                     return Awake.Unknown
                 }
                 BrainPower.WakeState.Failed -> return Awake.No
+                BrainPower.WakeState.Restarting -> {
+                    withContext(Dispatchers.Main) { uiState.status = "Restarting your Brain... (about 2 minutes)" }
+                    delay(5_000)
+                }
                 BrainPower.WakeState.Cleaning -> {
                     withContext(Dispatchers.Main) { uiState.status = "Finishing your last session..." }
                     delay(5_000)
