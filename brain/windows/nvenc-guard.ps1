@@ -2,13 +2,14 @@
 #
 # NVIDIA's H.264 encoder (nvEncMFTH264x.dll, driver 574.24 on Azure NVadsA10_v5)
 # crashes the Remote Desktop service (use-after-free, ntdll+0xfa7d) and can hang a
-# session. This keeps RDP hardware encoding off while the installed driver is one
-# that crashed, and tries it again once Azure installs a different driver.
+# session. Hardware encoding stays the default: a crash switches to software, the
+# next start-up (or 4 am check) tries hardware again; after MaxStrikes crashes on one driver it
+# stays on software until Azure installs a different driver.
 #
 #   -Trigger Crash  (task: Remote Desktop service crashed) hardware encoding on ->
-#                   turn it off and remember this driver as bad
+#                   turn it off, one strike for this driver
 #   -Trigger Check  (task: at startup and daily) guard turned it off and the driver
-#                   changed since -> turn it back on for a trial
+#                   hasn't used up its strikes -> turn it back on
 #   no -Trigger     install: copy to C:\ProgramData\SlimeOS, register both tasks and
 #                   apply the GPU Brain baseline (idempotent; rerun after a rebuild)
 #
@@ -17,7 +18,8 @@
 #     --scripts @brain/windows/nvenc-guard.ps1
 #
 # Override (HKLM\SOFTWARE\SlimeOS\NvencGuard, Mode): Auto (default), On or Off.
-# State lives next to it: BadDrivers, OffByGuard. Log: C:\ProgramData\SlimeOS\
+# State lives next to it: BadDrivers (strikes used up), StrikeDriver and Strikes
+# (count for the current driver), OffByGuard. Log: C:\ProgramData\SlimeOS\
 # nvenc-guard.log and the Application event log (source SlimeOS-NvencGuard).
 
 param([ValidateSet('Install', 'Crash', 'Check')][string]$Trigger = 'Install')
@@ -29,6 +31,7 @@ $LogFile = Join-Path $Dir 'nvenc-guard.log'
 $StateKey = 'HKLM:\SOFTWARE\SlimeOS\NvencGuard'
 $TsKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 $Source = 'SlimeOS-NvencGuard'
+$MaxStrikes = 3
 
 function Log([string]$msg, [int]$id = 1, [string]$type = 'Information') {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
@@ -55,6 +58,8 @@ function Get-State {
         Mode       = if ($p.Mode) { $p.Mode } else { 'Auto' }
         BadDrivers = @($p.BadDrivers | Where-Object { $_ })
         OffByGuard = [bool]$p.OffByGuard
+        StrikeDriver = $p.StrikeDriver
+        Strikes    = [int]$p.Strikes
     }
 }
 
@@ -103,6 +108,8 @@ switch ($Trigger) {
         if ((Get-HwEncode) -eq 0 -and $drv -and -not $state.OffByGuard) {
             Set-ItemProperty $StateKey -Name BadDrivers -Value ([string[]]($state.BadDrivers + $drv | Select-Object -Unique)) -Type MultiString
             Set-ItemProperty $StateKey -Name OffByGuard -Value 1 -Type DWord
+            Set-ItemProperty $StateKey -Name StrikeDriver -Value "$drv"
+            Set-ItemProperty $StateKey -Name Strikes -Value $MaxStrikes -Type DWord
         }
 
         $run = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Trigger ' -f $Self
@@ -134,10 +141,18 @@ switch ($Trigger) {
         if ($state.Mode -ne 'Auto') { Log "Remote Desktop service crashed; mode is $($state.Mode), leaving hardware encoding as is." 2 Warning; break }
         if ($hw -ne 1) { Log "Remote Desktop service crashed with hardware encoding already off (driver $drv): not the NVENC bug." 3 Warning; break }
         Set-HwEncode 0
-        Set-ItemProperty $StateKey -Name BadDrivers -Value ([string[]]($state.BadDrivers + $drv | Select-Object -Unique)) -Type MultiString
         Set-ItemProperty $StateKey -Name OffByGuard -Value 1 -Type DWord
+        $strikes = if ($state.StrikeDriver -eq $drv) { $state.Strikes + 1 } else { 1 }
+        Set-ItemProperty $StateKey -Name StrikeDriver -Value "$drv"
+        Set-ItemProperty $StateKey -Name Strikes -Value $strikes -Type DWord
+        $until = 'the next start-up or 4 am check'
+        if ($strikes -ge $MaxStrikes) {
+            Set-ItemProperty $StateKey -Name BadDrivers -Value ([string[]]($state.BadDrivers + $drv | Select-Object -Unique)) -Type MultiString
+            $until = 'Azure installs a different driver'
+        }
         Start-Sleep -Seconds 5   # let the service's own 1 s restart finish first
-        Log ("Remote Desktop service crashed with hardware encoding on: turned it off for driver {0}; {1}." -f $drv, (Restart-RdpIfIdle)) 10 Warning
+        Log ("Remote Desktop service crashed with hardware encoding on (driver {0}, strike {1} of {2}): software until {3}; {4}." -f `
+            $drv, $strikes, $MaxStrikes, $until, (Restart-RdpIfIdle)) 10 Warning
     }
 
     'Check' {
@@ -151,8 +166,9 @@ switch ($Trigger) {
                 if ($hw -eq 0 -and $state.OffByGuard -and $drv -and ($state.BadDrivers -notcontains $drv)) {
                     Set-HwEncode 1
                     Set-ItemProperty $StateKey -Name OffByGuard -Value 0 -Type DWord
-                    Log ("New NVIDIA driver {0} (crashed before: {1}): hardware encoding back on for a trial; {2}." -f `
-                        $drv, ($state.BadDrivers -join ', '), (Restart-RdpIfIdle)) 11
+                    $strikes = if ($state.StrikeDriver -eq $drv) { $state.Strikes } else { 0 }
+                    Log ("Driver {0} ({1} of {2} strikes used): hardware encoding back on; {3}." -f `
+                        $drv, $strikes, $MaxStrikes, (Restart-RdpIfIdle)) 11
                 }
             }
         }
