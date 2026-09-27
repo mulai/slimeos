@@ -21,6 +21,8 @@ import java.nio.charset.StandardCharsets
  */
 object RdpLauncher {
 
+    private const val AUTO_RECONNECT_TRIES = 6
+
     private fun enc(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name())
 
@@ -52,6 +54,12 @@ object RdpLauncher {
             // playing video as its own stream, presented on its own timeline.
             append("&video=")
             append("&dynamic-resolution=")
+            // Reconnect inside the session on a drop (e.g. the Brain's TermService
+            // crashing and restarting): the desktop stays on screen and Windows hands
+            // back the same session. First try at once, then every 5 s; FreeRDP never
+            // retries on a credentials error. If all fail, MainActivity takes over.
+            append("&auto-reconnect=+")
+            append("&auto-reconnect-max-retries=").append(AUTO_RECONNECT_TRIES)
             // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
             // own "match resolution to device" logic entirely, so without explicit w/h
             // it falls back to a small built-in default and letterboxes instead of
