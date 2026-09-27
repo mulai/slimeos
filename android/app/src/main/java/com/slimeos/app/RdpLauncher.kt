@@ -58,7 +58,9 @@ object RdpLauncher {
             // crashing and restarting): the desktop stays on screen and Windows hands
             // back the same session. First try at once, then every 5 s; FreeRDP never
             // retries on a credentials error. If all fail, MainActivity takes over.
-            append("&auto-reconnect=+")
+            // "+" must be encoded: a raw one decodes to a space, and one bad flag
+            // fails the whole argument list ("Missing hostname").
+            append("&auto-reconnect=").append(enc("+"))
             append("&auto-reconnect-max-retries=").append(AUTO_RECONNECT_TRIES)
             // The connect(Uri) path (unlike connect(BookmarkBase)) skips freeRDPCore's
             // own "match resolution to device" logic entirely, so without explicit w/h

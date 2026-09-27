@@ -22,7 +22,7 @@ index 2e1f1c0..9bd6c54 100644
  Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_1get_1last_1error_1string(JNIEnv* env,
                                                                                     jclass cls,
 diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
-index 31b0099..453f273 100644
+index 31b0099..a05efac 100644
 --- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
 +++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
 @@ -63,6 +63,11 @@ public class SessionActivity extends AppCompatActivity
@@ -59,7 +59,17 @@ index 31b0099..453f273 100644
  		finish();
  	}
  
-@@ -974,6 +985,8 @@ public class SessionActivity extends AppCompatActivity
+@@ -932,7 +943,8 @@ public class SessionActivity extends AppCompatActivity
+ 	// ClipboardManagerProxy.OnClipboardChangedListener
+ 	@Override public void onClipboardChanged(String data)
+ 	{
+-		Log.v(TAG, "onClipboardChanged: " + data);
++		// Not the text itself: the clipboard often holds passwords.
++		Log.v(TAG, "onClipboardChanged: " + (data == null ? 0 : data.length()) + " chars");
+ 		if (session != null)
+ 			LibFreeRDP.sendClipboardData(session.getInstance(), data);
+ 	}
+@@ -974,6 +986,8 @@ public class SessionActivity extends AppCompatActivity
  			return;
  		}
  
