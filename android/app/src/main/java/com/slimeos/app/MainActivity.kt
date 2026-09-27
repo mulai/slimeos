@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.wireguard.android.backend.GoBackend
@@ -44,6 +46,7 @@ private const val TUNNEL_NAME = "slimeos0"
 class MainActivity : ComponentActivity() {
 
     private lateinit var backend: GoBackend
+    private lateinit var saved: SavedPairing
     private val tunnel = object : Tunnel {
         override fun getName() = TUNNEL_NAME
         override fun onStateChange(newState: Tunnel.State) {
@@ -75,6 +78,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         backend = GoBackend(applicationContext)
+        saved = SavedPairing(applicationContext)
+        uiState.savedBrain = saved.brain
 
         setContent {
             MaterialTheme {
@@ -82,9 +87,20 @@ class MainActivity : ComponentActivity() {
                     PairingScreen(
                         state = uiState,
                         onPair = { host, code -> doPair(host, code) },
-                        onConnect = { host, port, user, pass -> doConnect(host, port, user, pass) }
+                        onConnect = { host, port, user, pass -> doConnect(host, port, user, pass) },
+                        onForget = { forgetPairing() }
                     )
                 }
+            }
+        }
+
+        // Paired before: bring the saved tunnel back up instead of asking for a new code.
+        saved.wgConfig?.let { text ->
+            try {
+                startTunnel(Config.parse(text.byteInputStream()))
+            } catch (e: Exception) {
+                saved.wgConfig = null
+                uiState.status = "Saved pairing unreadable — pair again."
             }
         }
     }
@@ -96,17 +112,39 @@ class MainActivity : ComponentActivity() {
                 val config = withContext(Dispatchers.IO) {
                     PairingApi.fetchWireGuardConfig(enrollmentHost, code)
                 }
-                pendingConfig = config
-                uiState.status = "Requesting VPN permission..."
-                val intent = GoBackend.VpnService.prepare(this@MainActivity)
-                if (intent != null) {
-                    vpnPermissionLauncher.launch(intent)
-                } else {
-                    bringTunnelUp(config)
-                }
+                // The code is single-use, so keep the config before anything else can fail.
+                saved.wgConfig = config.toWgQuickString()
+                startTunnel(config)
             } catch (e: Exception) {
                 uiState.status = "Pairing failed: ${e.message}"
             }
+        }
+    }
+
+    private fun startTunnel(config: Config) {
+        pendingConfig = config
+        uiState.status = "Requesting VPN permission..."
+        val intent = GoBackend.VpnService.prepare(this)
+        if (intent != null) {
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            bringTunnelUp(config)
+        }
+    }
+
+    private fun forgetPairing() {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    backend.setState(tunnel, Tunnel.State.DOWN, null)
+                } catch (e: Exception) {
+                    // Already down.
+                }
+            }
+            saved.clear()
+            uiState.savedBrain = null
+            uiState.tunnelUp = false
+            uiState.status = "Pairing forgotten."
         }
     }
 
@@ -127,6 +165,7 @@ class MainActivity : ComponentActivity() {
 
     private fun doConnect(host: String, port: Int, username: String, password: String) {
         uiState.rdpHost = host
+        saved.brain = SavedPairing.Brain(host, port, username, password)
         lifecycleScope.launch {
             uiState.status = "Waking Brain..."
             val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host) }
@@ -181,20 +220,23 @@ private class UiState {
     var status by mutableStateOf("")
     var tunnelUp by mutableStateOf(false)
     var rdpHost by mutableStateOf("")
+    var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
 }
 
 @Composable
 private fun PairingScreen(
     state: UiState,
     onPair: (host: String, code: String) -> Unit,
-    onConnect: (host: String, port: Int, user: String, pass: String) -> Unit
+    onConnect: (host: String, port: Int, user: String, pass: String) -> Unit,
+    onForget: () -> Unit
 ) {
     var enrollmentHost by remember { mutableStateOf("enroll.slimeos.com") }
     var code by remember { mutableStateOf("") }
-    var rdpHost by remember { mutableStateOf("10.11.0.10") }
-    var rdpPort by remember { mutableStateOf("3389") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    val brain = state.savedBrain
+    var rdpHost by remember(brain) { mutableStateOf(brain?.host ?: "10.11.0.10") }
+    var rdpPort by remember(brain) { mutableStateOf((brain?.port ?: 3389).toString()) }
+    var username by remember(brain) { mutableStateOf(brain?.username ?: "") }
+    var password by remember(brain) { mutableStateOf(brain?.password ?: "") }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -234,11 +276,14 @@ private fun PairingScreen(
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Password") }
+                label = { Text("Password") },
+                // Now that it's saved and pre-filled, don't show it on every launch.
+                visualTransformation = PasswordVisualTransformation()
             )
             Button(onClick = {
                 onConnect(rdpHost, rdpPort.toIntOrNull() ?: 3389, username, password)
             }) { Text("Connect") }
+            OutlinedButton(onClick = onForget) { Text("Forget pairing") }
         }
 
         Text(state.status)
