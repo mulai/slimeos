@@ -4,6 +4,8 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
@@ -24,6 +26,8 @@ object BrainPower {
     sealed class WakeState {
         object Ready : WakeState()
         object Starting : WakeState()
+        /** The hub is still logging off the previous session (#17); usually ~10 s. */
+        object Cleaning : WakeState()
         object Failed : WakeState()
         /** The hub refused: this device isn't on the Brain's POWER_VMS list. */
         object NotAllowed : WakeState()
@@ -54,11 +58,26 @@ object BrainPower {
             when (json.optString("state")) {
                 "running" -> WakeState.Ready
                 "failed" -> WakeState.Failed
+                "cleaning" -> WakeState.Cleaning
                 else -> WakeState.Starting // starting/deallocated/stopped/stopping/deallocating/unknown
             }
         } catch (e: Exception) {
             Log.e("BrainPower", "wake($host) failed", e)
             WakeState.Error(e.message ?: "wake request failed")
+        }
+    }
+
+    /**
+     * Azure reports a VM "running" well before Windows listens for RDP, and after a
+     * TermService crash the port is closed until the service restarts. Mirrors
+     * connect.sh's port probe after a wake.
+     */
+    fun rdpListening(host: String, port: Int): Boolean {
+        return try {
+            Socket().use { it.connect(InetSocketAddress(host, port), 2_000) }
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 

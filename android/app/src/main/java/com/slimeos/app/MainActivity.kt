@@ -1,9 +1,12 @@
 package com.slimeos.app
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Point
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.freerdp.freerdpcore.presentation.SessionActivity
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
@@ -42,6 +46,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TUNNEL_NAME = "slimeos0"
+
+// Same rules as membrane/freerdp/connect.sh: a session that lasted this long and
+// then died with no reason from the server was a network drop (or a TermService
+// crash). Windows keeps the session waiting, so reconnect into it.
+private const val MIN_SESSION_MS = 60_000L
+private const val RECONNECT_DELAY_MS = 5_000L
+
+// The server's ERRINFO_* codes for a session ended on purpose (FreeRDP error.h):
+// disconnect or logoff, from Windows' own menu or by an admin. Only these (or a
+// disconnect from this app) let the hub log the session off.
+private val CLEAN_END_ERRINFO = setOf(1, 2, 11, 12)
+private const val ERRINFO_DISCONNECTED_BY_OTHERCONNECTION = 5
 
 /**
  * M1 proof-of-concept: pairing code -> WireGuard tunnel -> bare RDP connect.
@@ -73,13 +89,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private var lastConnect: SavedPairing.Brain? = null
+    private var sessionStartedAt = 0L
+    private var reconnecting = false
+
     private val rdpSessionLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            // Best-effort parity with connect.sh's notify_session_ended(): tell
-            // brain/power to force-logoff the stale disconnected session so this
-            // client doesn't reintroduce the stuck-quarter-frame bug fixed in #17.
-            val host = uiState.rdpHost
-            lifecycleScope.launch { withContext(Dispatchers.IO) { BrainPower.notifySessionEnded(host) } }
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            onSessionEnded(result.resultCode, result.data)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -186,22 +202,75 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun onSessionEnded(resultCode: Int, data: Intent?) {
+        // This activity may have been recreated while the session ran.
+        val target = lastConnect ?: saved.brain
+        val host = uiState.rdpHost.ifEmpty { target?.host ?: "" }
+        val endedByUser = data?.getBooleanExtra(SessionActivity.RESULT_ENDED_BY_USER, false) ?: false
+        val errorInfo = data?.getIntExtra(SessionActivity.RESULT_ERROR_INFO, 0) ?: 0
+        val lasted = SystemClock.elapsedRealtime() - sessionStartedAt
+        Log.i("MainActivity", "Session ended after ${lasted / 1000}s: endedByUser=$endedByUser errorInfo=$errorInfo")
+
+        // RESULT_OK: the session was up. Cancelling a connect sets endedByUser too, and
+        // must not log off the session a drop left waiting.
+        if ((endedByUser && resultCode == Activity.RESULT_OK) || errorInfo in CLEAN_END_ERRINFO) {
+            // Parity with connect.sh's notify_session_ended(): only after a clean end
+            // does brain/power log off the disconnected session (#17). After a drop
+            // that would throw away the user's open windows.
+            reconnecting = false
+            uiState.status = "Disconnected."
+            lifecycleScope.launch { withContext(Dispatchers.IO) { BrainPower.notifySessionEnded(host) } }
+            return
+        }
+        if (endedByUser) {
+            reconnecting = false
+            uiState.status = "Cancelled."
+            return
+        }
+        if (errorInfo == ERRINFO_DISCONNECTED_BY_OTHERCONNECTION) {
+            // Reconnecting would take it straight back from the other device.
+            reconnecting = false
+            uiState.status = "Your session moved to another device."
+            return
+        }
+        if (errorInfo == 0 && lasted >= MIN_SESSION_MS && target != null) {
+            reconnecting = true
+            uiState.status = "Connection dropped. Reconnecting..."
+            lifecycleScope.launch {
+                delay(RECONNECT_DELAY_MS)
+                doConnect(target.host, target.port, target.username, target.password)
+            }
+            return
+        }
+        // A fast failure: no blind retries, repeated failed logons can lock the account.
+        reconnecting = false
+        uiState.status = if (errorInfo != 0) {
+            "The Brain ended the session (code $errorInfo)."
+        } else {
+            "Couldn't connect to the Brain. Try again in a moment."
+        }
+    }
+
     private fun doConnect(host: String, port: Int, username: String, password: String) {
         uiState.rdpHost = host
         saved.brain = SavedPairing.Brain(host, port, username, password)
+        lastConnect = saved.brain
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 OpenH264.prepareSession(applicationContext) {
                     runOnUiThread { uiState.status = "Downloading the video codec from Cisco..." }
                 }
             }
-            uiState.status = "Waking Brain..."
-            val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host) }
-            if (!awake) {
-                uiState.status = "Brain didn't wake in time — try again."
+            if (!reconnecting) uiState.status = "Waking Brain..."
+            val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host, port) }
+            if (awake == Awake.No) {
+                reconnecting = false
+                uiState.status = "Brain didn't wake in time. Try again."
                 return@launch
             }
-            if (uiState.status == "Waking Brain...") uiState.status = "Connecting..."
+            // Keep the "not allowed to wake" note visible while connecting.
+            if (awake == Awake.Yes) uiState.status = "Connecting..."
+            sessionStartedAt = SystemClock.elapsedRealtime()
             val size = screenSize()
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
@@ -223,16 +292,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private enum class Awake { Yes, No, Unknown }
+
     // Mirrors connect.sh's wake_brain(): some Brains (e.g. Azure) auto-deallocate when
     // idle, so /wake must be called and polled until running before RDP can connect —
-    // otherwise the TCP attempt just times out against a powered-off VM.
-    private suspend fun waitForBrainAwake(host: String): Boolean {
+    // otherwise the TCP attempt just times out against a powered-off VM. Then waits
+    // for the RDP port itself: Azure says "running" before Windows listens.
+    private suspend fun waitForBrainAwake(host: String, port: Int): Awake {
         val deadlineMs = System.currentTimeMillis() + 3 * 60_000L
         var attempt = 0
         while (System.currentTimeMillis() < deadlineMs) {
             attempt++
             when (BrainPower.wake(host)) {
-                BrainPower.WakeState.Ready -> return true
+                BrainPower.WakeState.Ready -> {
+                    waitForRdp(host, port)
+                    return Awake.Yes
+                }
                 // The Brain may well be awake; only waking is refused, so try anyway
                 // and say why if the connection then fails.
                 BrainPower.WakeState.NotAllowed -> {
@@ -240,16 +315,30 @@ class MainActivity : ComponentActivity() {
                         uiState.status = "This device isn't allowed to wake the Brain. " +
                             "Connecting anyway; if the Brain is asleep, wake it from another device."
                     }
-                    return true
+                    return Awake.Unknown
                 }
-                BrainPower.WakeState.Failed -> return false
+                BrainPower.WakeState.Failed -> return Awake.No
+                BrainPower.WakeState.Cleaning -> {
+                    withContext(Dispatchers.Main) { uiState.status = "Finishing your last session..." }
+                    delay(5_000)
+                }
                 BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
                     withContext(Dispatchers.Main) { uiState.status = "Waking Brain... (attempt $attempt)" }
                     delay(5_000)
                 }
             }
         }
-        return false
+        return Awake.No
+    }
+
+    // Up to a minute; if the port never opens, connect anyway and let FreeRDP say why.
+    private suspend fun waitForRdp(host: String, port: Int) {
+        val deadlineMs = System.currentTimeMillis() + 60_000L
+        while (!BrainPower.rdpListening(host, port)) {
+            if (System.currentTimeMillis() >= deadlineMs) return
+            withContext(Dispatchers.Main) { uiState.status = "Brain is up. Starting the desktop..." }
+            delay(3_000)
+        }
     }
 }
 

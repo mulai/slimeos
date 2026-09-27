@@ -1,0 +1,78 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
+index 2e1f1c0..9bd6c54 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
++++ b/client/Android/Studio/freeRDPCore/src/main/cpp/android_freerdp.c
+@@ -856,6 +856,18 @@ JNIEXPORT void JNICALL Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_
+ #endif
+ }
+ 
++JNIEXPORT jint JNICALL
++Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_1get_1error_1info(JNIEnv* env, jclass cls,
++                                                                         jlong instance)
++{
++	freerdp* inst = (freerdp*)instance;
++
++	if (!inst || !inst->context)
++		return 0;
++
++	return (jint)freerdp_error_info(inst);
++}
++
+ JNIEXPORT jstring JNICALL
+ Java_com_freerdp_freerdpcore_services_LibFreeRDP_freerdp_1get_1last_1error_1string(JNIEnv* env,
+                                                                                    jclass cls,
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+index 31b0099..7dcea55 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+@@ -63,6 +63,10 @@ public class SessionActivity extends AppCompatActivity
+ {
+ 	public static final String PARAM_CONNECTION_REFERENCE = "conRef";
+ 	public static final String PARAM_INSTANCE = "instance";
++	// Result extras: how the session ended, so the caller can tell a disconnect the
++	// user asked for (or the server's own logoff) from a network drop.
++	public static final String RESULT_ENDED_BY_USER = "endedByUser";
++	public static final String RESULT_ERROR_INFO = "errorInfo";
+ 	private static final String TAG = "FreeRDP.SessionActivity";
+ 	static volatile SessionActivity activeSession;
+ 	private Bitmap bitmap;
+@@ -661,7 +665,11 @@ public class SessionActivity extends AppCompatActivity
+ 	private void closeSessionActivity(int resultCode)
+ 	{
+ 		// Go back to home activity (and send intent data back to home)
+-		setResult(resultCode, getIntent());
++		Intent result = getIntent();
++		result.putExtra(RESULT_ENDED_BY_USER, connectCancelledByUser);
++		if (session != null)
++			result.putExtra(RESULT_ERROR_INFO, LibFreeRDP.getErrorInfo(session.getInstance()));
++		setResult(resultCode, result);
+ 		finish();
+ 	}
+ 
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java
+index c8de7e1..ff204a9 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/services/LibFreeRDP.java
+@@ -176,6 +176,8 @@ public class LibFreeRDP
+ 
+ 	private static native String freerdp_get_last_error_string(long inst);
+ 
++	private static native int freerdp_get_error_info(long inst);
++
+ 	public static void setEventListener(EventListener l)
+ 	{
+ 		listener = l;
+@@ -221,6 +223,13 @@ public class LibFreeRDP
+ 		return freerdp_connect(inst);
+ 	}
+ 
++	// The server's ERRINFO_* code for why the session ended (0 = none sent, e.g. a
++	// network drop or a disconnect from this side).
++	public static int getErrorInfo(long inst)
++	{
++		return freerdp_get_error_info(inst);
++	}
++
+ 	public static boolean disconnect(long inst)
+ 	{
+ 		synchronized (mInstanceState)
