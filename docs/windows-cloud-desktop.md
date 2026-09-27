@@ -58,14 +58,12 @@ For hardware-accelerated RDP video (NVIDIA H.264 encode instead of software), us
      --name NvidiaGpuDriverWindows --publisher Microsoft.HpcCompute --version 1.6
    az vm restart --resource-group <rg> --name <vm>
    ```
-2. **Two registry keys** (no domain/GPO infrastructure needed — run via `az vm run-command invoke --command-id RunPowerShellScript`):
-   ```powershell
-   $path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
-   New-ItemProperty -Path $path -Name "AVCHardwareEncodePreferred" -Value 1 -PropertyType DWord -Force
-   New-ItemProperty -Path $path -Name "AVC444ModePreferred" -Value 1 -PropertyType DWord -Force
-   New-ItemProperty -Path $path -Name "bEnumerateHWBeforeSW" -Value 1 -PropertyType DWord -Force
-   Restart-Service -Name TermService -Force
+2. **Hardware-encode keys and the NVENC guard**, in one step (rerun after every rebuild; it's idempotent):
+   ```bash
+   az vm run-command invoke --resource-group <rg> --name <vm> --command-id RunPowerShellScript \
+     --scripts @brain/windows/nvenc-guard.ps1
    ```
+   It sets the three RDP hardware-encode registry keys, restarts the Remote Desktop service 1 s after a crash (instead of 60 s, then never), keeps crash dumps small (a full dump froze sessions for up to 36 s), and installs two scheduled tasks. NVIDIA's encoder in driver 574.24 crashes the Remote Desktop service and can hang sessions, so the guard turns hardware encoding off when the service crashes with it on, and back on for a trial once Azure installs a different driver. Pin it with `HKLM\SOFTWARE\SlimeOS\NvencGuard` → `Mode` = `On`/`Off` (default `Auto`); what it did is in `C:\ProgramData\SlimeOS\nvenc-guard.log`.
 3. **Verify it's actually working** — don't trust `nvidia-smi`'s encoder/decoder utilization counters (they read 0% on this GRID vGPU profile even under real sustained RDP traffic, a telemetry gap not a real signal). Instead check the Windows event log during a live session:
    ```powershell
    Get-WinEvent -LogName Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational -MaxEvents 30 |
