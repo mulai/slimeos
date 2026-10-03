@@ -177,9 +177,16 @@ switch ($Trigger) {
             Log "Start-up after a frozen-session restart: keeping hardware encoding $(@('off', 'on')[$hw]) until the next check."
             break
         }
+        # Off counts as the guard's own switch-off, so going back to Auto turns hardware on again.
         switch ($state.Mode) {
-            'On' { if ($hw -ne 1) { Set-HwEncode 1; Log "Mode On: hardware encoding on; $(Restart-RdpIfIdle)." 20 } }
-            'Off' { if ($hw -ne 0) { Set-HwEncode 0; Log "Mode Off: hardware encoding off; $(Restart-RdpIfIdle)." 21 } }
+            'On' {
+                Set-ItemProperty $StateKey -Name OffByGuard -Value 0 -Type DWord
+                if ($hw -ne 1) { Set-HwEncode 1; Log "Mode On: hardware encoding on; $(Restart-RdpIfIdle)." 20 }
+            }
+            'Off' {
+                Set-ItemProperty $StateKey -Name OffByGuard -Value 1 -Type DWord
+                if ($hw -ne 0) { Set-HwEncode 0; Log "Mode Off: hardware encoding off; $(Restart-RdpIfIdle)." 21 }
+            }
             default {
                 if ($hw -eq 0 -and $state.OffByGuard -and $drv -and ($state.BadDrivers -notcontains $drv)) {
                     Set-HwEncode 1
