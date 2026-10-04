@@ -49,6 +49,10 @@ object RdpLauncher {
             // H.264 frames can't be skipped, so the rest queued in the app (+0.6 MB/s)
             // and video and sound fell further behind the longer they played. With
             // acks: 19-25 frames/s from the Brain, memory flat, no growing lag.
+            // No gfx codec option: FreeRDP's default offers AVC444, and it is the faster
+            // one here. Forcing AVC420 (2026-10-04, Smooth, full-screen YouTube) dropped
+            // the MatePad from 27-31 to 19-23 frames/s with the decoding thread at 77 %:
+            // AVC444's colour conversion runs on 8 worker threads, AVC420's mostly doesn't.
             // Play the Brain's audio here (OpenSL ES) instead of FreeRDP's fake backend.
             append("&sound=")
             // Video optimised remoting (MS-RDPEVOR), as connect.sh's +video: Windows sends

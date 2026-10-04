@@ -1,0 +1,84 @@
+drdynvc: a PDU that arrives whole (FIRST|LAST) gets a stream of its own instead of the
+shared drdynvc->data_in. The Slime OS UDP transport (udp-transport.patch) delivers whole
+PDUs from its receive thread while the main thread delivers TCP data; both used data_in
+with no lock, which corrupted the DVC stream pool (SIGSEGV in StreamPool_Take on the
+MatePad SE 11, 2026-10-04) and could drop a TCP PDU mid-reassembly.
+
+--- a/channels/drdynvc/client/drdynvc_main.c
++++ b/channels/drdynvc/client/drdynvc_main.c
+@@ -1696,26 +1696,49 @@
+ 		return CHANNEL_RC_OK;
+ 	}
+ 
+-	if (dataFlags & CHANNEL_FLAG_FIRST)
++	/*
++	 * Slime OS: a PDU that arrives whole gets a stream of its own and never touches
++	 * drdynvc->data_in. The UDP transport delivers whole PDUs from its own thread while
++	 * the main thread delivers TCP data, and both sharing data_in unlocked corrupted the
++	 * stream pool (SIGSEGV in StreamPool_Take, MatePad SE 11, 2026-10-04). It also keeps
++	 * a UDP PDU from throwing away a TCP PDU still being reassembled. Only fragmented PDUs,
++	 * which only the main thread delivers, use data_in.
++	 */
++	const BOOL whole = (dataFlags & CHANNEL_FLAG_FIRST) && (dataFlags & CHANNEL_FLAG_LAST);
++	if (whole)
+ 	{
+ 		DVCMAN* mgr = (DVCMAN*)drdynvc->channel_mgr;
+-		if (drdynvc->data_in)
+-			Stream_Release(drdynvc->data_in);
+-
+-		drdynvc->data_in = StreamPool_Take(mgr->pool, totalLength);
++		data_in = StreamPool_Take(mgr->pool, totalLength);
++		if (!data_in)
++		{
++			WLog_Print(drdynvc->log, WLOG_ERROR, "StreamPool_Take failed!");
++			return CHANNEL_RC_NO_MEMORY;
++		}
+ 	}
+-
+-	if (!(data_in = drdynvc->data_in))
++	else
+ 	{
+-		WLog_Print(drdynvc->log, WLOG_ERROR, "StreamPool_Take failed!");
+-		return CHANNEL_RC_NO_MEMORY;
++		if (dataFlags & CHANNEL_FLAG_FIRST)
++		{
++			DVCMAN* mgr = (DVCMAN*)drdynvc->channel_mgr;
++			if (drdynvc->data_in)
++				Stream_Release(drdynvc->data_in);
++
++			drdynvc->data_in = StreamPool_Take(mgr->pool, totalLength);
++		}
++
++		if (!(data_in = drdynvc->data_in))
++		{
++			WLog_Print(drdynvc->log, WLOG_ERROR, "StreamPool_Take failed!");
++			return CHANNEL_RC_NO_MEMORY;
++		}
+ 	}
+ 
+ 	if (!Stream_EnsureRemainingCapacity(data_in, dataLength))
+ 	{
+ 		WLog_Print(drdynvc->log, WLOG_ERROR, "Stream_EnsureRemainingCapacity failed!");
+-		Stream_Release(drdynvc->data_in);
+-		drdynvc->data_in = nullptr;
++		Stream_Release(data_in);
++		if (!whole)
++			drdynvc->data_in = nullptr;
+ 		return ERROR_INTERNAL_ERROR;
+ 	}
+ 
+@@ -1728,10 +1751,13 @@
+ 		if (cap < pos)
+ 		{
+ 			WLog_Print(drdynvc->log, WLOG_ERROR, "drdynvc_plugin_process_received: read error");
++			if (whole)
++				Stream_Release(data_in);
+ 			return ERROR_INVALID_DATA;
+ 		}
+ 
+-		drdynvc->data_in = nullptr;
++		if (!whole)
++			drdynvc->data_in = nullptr;
+ 		Stream_SealLength(data_in);
+ 		Stream_ResetPosition(data_in);
+ 
