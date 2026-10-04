@@ -8,39 +8,76 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
+import androidx.compose.ui.unit.sp
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.freerdp.freerdpcore.presentation.SessionActivity
+import com.slimeos.app.ui.AddBrainScreen
+import com.slimeos.app.ui.ConnectingScreen
+import com.slimeos.app.ui.CredentialsScreen
+import com.slimeos.app.ui.DangerButton
+import com.slimeos.app.ui.ErrorScreen
+import com.slimeos.app.ui.ModalTitle
+import com.slimeos.app.ui.Muted
+import com.slimeos.app.ui.PairScreen
+import com.slimeos.app.ui.PickerScreen
+import com.slimeos.app.ui.PinSetupScreen
+import com.slimeos.app.ui.PinUnlockScreen
+import com.slimeos.app.ui.ReconnectingScreen
+import com.slimeos.app.ui.SecondaryButton
+import com.slimeos.app.ui.SettingsActions
+import com.slimeos.app.ui.SettingsInfo
+import com.slimeos.app.ui.SettingsPanel
+import com.slimeos.app.ui.SettingsTab
+import com.slimeos.app.ui.Slime
+import com.slimeos.app.ui.SlimeBackground
+import com.slimeos.app.ui.SlimeModal
+import com.slimeos.app.ui.SlimeTheme
+import com.slimeos.app.ui.StatusStrip
+import com.slimeos.app.ui.TunnelUi
+import com.slimeos.app.ui.WelcomeScreen
+import com.slimeos.app.ui.WorkingScreen
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,25 +101,37 @@ private const val RECONNECT_DELAY_MS = 5_000L
 private val CLEAN_END_ERRINFO = setOf(2, 11, 12)
 private const val ERRINFO_DISCONNECTED_BY_OTHERCONNECTION = 5
 
+// Back in the app after this long elsewhere asks for the PIN again. Time in our
+// own RDP session doesn't count: Windows has its own lock.
+private const val LOCK_AFTER_BACKGROUND_MS = 5 * 60_000L
+private const val STATE_LOCKED = "locked"
+
 /**
- * M1 proof-of-concept: pairing code -> WireGuard tunnel -> bare RDP connect.
- * No settings, no Brain picker, no Slime ID, no credential auto-delivery —
- * see .claude/plans/fizzy-wobbling-cosmos.md for what's deliberately deferred.
+ * Pairing code -> WireGuard tunnel -> RDP session, with the Membrane kiosk's
+ * screens (membrane/lockscreen/index.html): welcome, pair, add a Brain, who
+ * signs in, choose a Brain, connecting, error, reconnecting, and Settings.
+ * One Brain per tablet for now; no Slime ID yet.
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var backend: GoBackend
     private lateinit var saved: SavedPairing
+    private lateinit var appLock: AppLock
     private val tunnel = object : Tunnel {
         override fun getName() = TUNNEL_NAME
         override fun onStateChange(newState: Tunnel.State) {
-            uiState.status = "Tunnel state: $newState"
+            runOnUiThread {
+                ui.tunnel = if (newState == Tunnel.State.UP) TunnelUi.Up else TunnelUi.Down
+            }
         }
     }
 
     private var pendingConfig: Config? = null
     private var tunnelStarting = false
-    private val uiState = UiState()
+    // Why the tunnel is coming up: a new pairing, or a tap on a Brain.
+    private var tunnelForPairing = false
+    private var connectAfterTunnel = false
+    private val ui = UiState()
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -90,7 +139,11 @@ class MainActivity : ComponentActivity() {
                 pendingConfig?.let { bringTunnelUp(it) }
             } else {
                 tunnelStarting = false
-                uiState.status = "VPN permission denied — tunnel cannot start."
+                tunnelFailed(
+                    "Slime OS needs the VPN permission.",
+                    "It opens a private tunnel to your Brain only; nothing else goes through it.",
+                    "VPN permission denied"
+                )
             }
         }
 
@@ -98,6 +151,10 @@ class MainActivity : ComponentActivity() {
     private var sessionStartedAt = 0L
     private var reconnecting = false
     private var quickReconnects = 0
+    private var connectJob: Job? = null
+    private var statusJob: Job? = null
+    private var sessionRunning = false
+    private var backgroundedAt = 0L
 
     private val rdpSessionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -105,29 +162,58 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         backend = GoBackend(applicationContext)
         saved = SavedPairing(applicationContext)
-        uiState.savedBrain = saved.brain
-        uiState.h264Enabled = OpenH264.isEnabled(applicationContext)
+        appLock = AppLock(applicationContext)
+        ui.savedBrain = saved.brain
+        ui.h264Enabled = OpenH264.isEnabled(applicationContext)
+        ui.pinSet = appLock.isSet
+        ui.locked = ui.pinSet && (savedInstanceState?.getBoolean(STATE_LOCKED, true) ?: true)
+        ui.pinRetryAt = appLock.retryAtMs
+        ui.screen = homeScreen()
 
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    PairingScreen(
-                        state = uiState,
-                        onPair = { host, code -> doPair(host, code) },
-                        onConnect = { host, port, user, pass -> doConnect(host, port, user, pass) },
-                        onForget = { forgetPairing() },
-                        onH264Changed = { enabled ->
-                            OpenH264.setEnabled(applicationContext, enabled)
-                            uiState.h264Enabled = enabled
-                        },
-                        licenseText = { OpenH264.licenseText(applicationContext) }
-                    )
+        // The status strip's signal bars, while the app is on screen.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    ui.pingMs = if (ui.tunnel == TunnelUi.Up) {
+                        withContext(Dispatchers.IO) { BrainPower.pingHubMs() }
+                    } else {
+                        null
+                    }
+                    delay(5_000)
                 }
             }
         }
+
+        setContent { SlimeTheme { App() } }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_LOCKED, ui.locked)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (backgroundedAt != 0L && ui.pinSet &&
+            SystemClock.elapsedRealtime() - backgroundedAt >= LOCK_AFTER_BACKGROUND_MS
+        ) {
+            lock()
+        }
+        backgroundedAt = 0L
+        if (ui.screen == Screen.Picker) refreshBrainStatus()
+    }
+
+    override fun onStop() {
+        if (!sessionRunning) backgroundedAt = SystemClock.elapsedRealtime()
+        super.onStop()
     }
 
     override fun onResume() {
@@ -136,20 +222,344 @@ class MainActivity : ComponentActivity() {
         // code. Here rather than in onCreate: Android refuses to start the VPN
         // service while the app is in the background (e.g. launched with the screen
         // off), and onResume is also a retry after such a failure.
-        if (uiState.tunnelUp || tunnelStarting) return
+        if (ui.tunnel == TunnelUi.Up || tunnelStarting) return
         saved.wgConfig?.let { text ->
             try {
                 startTunnel(Config.parse(text.byteInputStream()))
             } catch (e: Exception) {
                 saved.wgConfig = null
-                uiState.status = "Saved pairing unreadable — pair again."
+                ui.screen = Screen.Pair(hint = "The saved pairing couldn’t be read. Pair this tablet again.")
             }
         }
     }
 
-    private fun doPair(enrollmentHost: String, code: String) {
+    // ------------------------------------------------------------------ UI
+
+    @Composable
+    private fun App() {
+        SlimeBackground {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val compact = maxWidth < 600.dp
+                val fullHeight = maxHeight
+                Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                    val settingsAllowed = !ui.locked && ui.pinSet && !ui.changingPin &&
+                        ui.screen !is Screen.Working
+                    StatusStrip(
+                        ui.tunnel, ui.pingMs,
+                        onSettings = if (settingsAllowed) ({ ui.settingsTab = SettingsTab.Pairing }) else null
+                    )
+                    BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).imePadding()) {
+                        val viewport = maxHeight
+                        Column(
+                            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).heightIn(min = viewport),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Content()
+                        }
+                    }
+                }
+                ui.settingsTab?.let { tab ->
+                    Box(
+                        Modifier.fillMaxSize().background(Color(0x99040608)).systemBarsPadding()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() }, indication = null
+                            ) { ui.settingsTab = null },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SettingsPanel(tab, settingsInfo(), settingsActions(), compact, min(600.dp, fullHeight * 0.88f))
+                    }
+                }
+                Modal()
+            }
+        }
+    }
+
+    @Composable
+    private fun Content() {
+        if (!ui.pinSet || ui.changingPin) {
+            PinSetupScreen(
+                working = ui.pinWorking,
+                onChosen = { pin -> choosePin(pin) },
+                onCancel = if (ui.changingPin) ({ ui.changingPin = false }) else null
+            )
+            return
+        }
+        if (ui.locked) {
+            PinUnlockScreen(
+                working = ui.pinWorking,
+                error = ui.pinError,
+                retryAtMs = ui.pinRetryAt,
+                onSubmit = { pin -> unlock(pin) },
+                onForgot = { ui.modal = Modal.ResetApp },
+                resetKey = ui.pinResetKey
+            )
+            return
+        }
+        val brain = ui.savedBrain
+        when (val s = ui.screen) {
+            Screen.Welcome -> WelcomeScreen(onAddBrain = {
+                ui.screen = if (saved.wgConfig == null) Screen.Pair() else Screen.AddBrain()
+            })
+            is Screen.Pair -> PairScreen(
+                hint = s.hint,
+                onPair = { host, code -> doPair(host, code) },
+                onBack = { showHome() }
+            )
+            is Screen.Working -> WorkingScreen(s.title, ui.stage)
+            is Screen.PairError -> ErrorScreen(
+                title = s.title, body = null, detail = s.detail,
+                onTryAgain = { ui.screen = Screen.Pair() }, onReenterPassword = null,
+                backLabel = "Back", onBack = { showHome() }
+            )
+            is Screen.AddBrain -> AddBrainScreen(
+                initialName = s.name, initialHost = s.host, initialPort = s.port,
+                onContinue = { name, host, port -> ui.screen = Screen.Credentials(name, host, port, "") },
+                onCancel = { showHome() }
+            )
+            is Screen.Credentials -> CredentialsScreen(
+                brainName = s.name,
+                initialUsername = s.username,
+                onConnect = { user, pass ->
+                    connectTo(SavedPairing.Brain(s.host, s.port, user, pass, s.name))
+                },
+                onBack = { ui.screen = Screen.AddBrain(s.name, s.host, s.port) }
+            )
+            Screen.Picker -> if (brain == null) {
+                WelcomeScreen(onAddBrain = { ui.screen = Screen.AddBrain() })
+            } else {
+                PickerScreen(
+                    name = brain.name, host = brain.host, status = ui.brainStatus, notice = ui.notice,
+                    onConnect = { connectTo(brain) },
+                    onRemove = { ui.modal = Modal.RemoveBrain }
+                )
+            }
+            Screen.Connecting -> ConnectingScreen(
+                brainName = (lastConnect ?: brain)?.name ?: "your Brain",
+                stage = ui.stage,
+                onCancel = { cancelConnect() }
+            )
+            Screen.Reconnecting -> ReconnectingScreen(
+                attempt = ui.reconnectAttempt, stage = ui.stage.takeIf { it.isNotEmpty() },
+                onBack = { cancelConnect() }
+            )
+            is Screen.Error -> ErrorScreen(
+                title = s.title, body = s.body, detail = s.detail,
+                onTryAgain = if (s.retry) ({ (lastConnect ?: saved.brain)?.let { connectTo(it) } }) else null,
+                onReenterPassword = if (s.reenter) ({
+                    (lastConnect ?: saved.brain)?.let {
+                        ui.screen = Screen.Credentials(it.name, it.host, it.port, it.username)
+                    }
+                }) else null,
+                backLabel = if (saved.brain != null) "Back to Brain list" else "Back",
+                onBack = { showHome() }
+            )
+        }
+    }
+
+    @Composable
+    private fun Modal() {
+        when (ui.modal) {
+            null -> {}
+            Modal.RemoveBrain -> SlimeModal(onDismiss = { ui.modal = null }) {
+                ModalTitle("Remove ${ui.savedBrain?.name ?: "this Brain"}?")
+                Muted(
+                    "Its saved password will be deleted too. You’ll need to sign in again next time. " +
+                        "This tablet stays paired.",
+                    size = 13.sp
+                )
+                ModalButtons("Remove", onCancel = { ui.modal = null }) {
+                    ui.modal = null
+                    saved.brain = null
+                    ui.savedBrain = null
+                    ui.brainStatus = null
+                    showHome()
+                }
+            }
+            Modal.ForgetPairing -> SlimeModal(onDismiss = { ui.modal = null }) {
+                ModalTitle("Forget this pairing?")
+                Muted(
+                    "This tablet disconnects from your hub, and its saved Brain password is deleted. " +
+                        "You’ll need a new pairing code to connect again.",
+                    size = 13.sp
+                )
+                ModalButtons("Forget", onCancel = { ui.modal = null }) {
+                    ui.modal = null
+                    ui.settingsTab = null
+                    forgetPairing()
+                }
+            }
+            Modal.ResetApp -> SlimeModal(onDismiss = { ui.modal = null }) {
+                ModalTitle("Reset Slime OS on this tablet?")
+                Muted(
+                    "This removes the PIN, the pairing and the saved Brain password from this tablet. " +
+                        "Your Brain and everything on it stay as they are. You’ll need a new pairing " +
+                        "code to connect again.",
+                    size = 13.sp
+                )
+                ModalButtons("Reset", onCancel = { ui.modal = null }) {
+                    ui.modal = null
+                    resetApp()
+                }
+            }
+            Modal.Licence -> SlimeModal(onDismiss = { ui.modal = null }) {
+                ModalTitle("OpenH264 licence")
+                val text = remember { OpenH264.licenseText(applicationContext) }
+                Text(
+                    text, color = Slime.TextMuted,
+                    modifier = Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState()),
+                    style = TextStyle(fontFamily = Slime.Mono, fontSize = 11.sp, lineHeight = 16.sp)
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+                    SecondaryButton("Close", { ui.modal = null }, Modifier.weight(1f))
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ModalButtons(confirm: String, onCancel: () -> Unit, onConfirm: () -> Unit) {
+        Row(Modifier.fillMaxWidth().padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SecondaryButton("Cancel", onCancel, Modifier.weight(1f))
+            DangerButton(confirm, onConfirm, Modifier.weight(1f))
+        }
+    }
+
+    private fun settingsInfo() = SettingsInfo(
+        paired = saved.wgConfig != null,
+        tunnel = ui.tunnel,
+        brainName = ui.savedBrain?.name,
+        brainHost = ui.savedBrain?.host,
+        h264Supported = OpenH264.isSupported,
+        h264Enabled = ui.h264Enabled,
+        h264Notice = OpenH264.NOTICE,
+        pinSet = ui.pinSet,
+        version = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (e: Exception) {
+            "?"
+        }
+    )
+
+    private fun settingsActions() = SettingsActions(
+        onClose = { ui.settingsTab = null },
+        onTab = { ui.settingsTab = it },
+        onPair = {
+            ui.settingsTab = null
+            ui.screen = Screen.Pair()
+        },
+        onForgetPairing = { ui.modal = Modal.ForgetPairing },
+        onH264 = { enabled ->
+            OpenH264.setEnabled(applicationContext, enabled)
+            ui.h264Enabled = enabled
+        },
+        onShowLicence = { ui.modal = Modal.Licence },
+        onChangePin = {
+            ui.settingsTab = null
+            ui.changingPin = true
+        },
+        onLockNow = {
+            ui.settingsTab = null
+            lock()
+        }
+    )
+
+    // ------------------------------------------------------------------ PIN
+
+    private fun lock() {
+        ui.locked = true
+        ui.settingsTab = null
+        ui.modal = null
+        ui.pinError = null
+        ui.pinRetryAt = appLock.retryAtMs
+        ui.pinResetKey++
+    }
+
+    private fun choosePin(pin: String) {
+        ui.pinWorking = true
         lifecycleScope.launch {
-            uiState.status = "Pairing..."
+            withContext(Dispatchers.Default) { appLock.set(pin) }
+            ui.pinWorking = false
+            ui.pinSet = true
+            ui.changingPin = false
+            ui.locked = false
+        }
+    }
+
+    private fun unlock(pin: String) {
+        ui.pinWorking = true
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.Default) { appLock.check(pin) }
+            ui.pinWorking = false
+            ui.pinResetKey++
+            when (result) {
+                AppLock.Check.Ok -> {
+                    ui.locked = false
+                    ui.pinError = null
+                    ui.pinRetryAt = 0
+                }
+                is AppLock.Check.Wrong -> ui.pinError = if (result.triesBeforeWait <= 2) {
+                    "Wrong PIN. ${result.triesBeforeWait} more " +
+                        (if (result.triesBeforeWait == 1) "try" else "tries") + " before a wait."
+                } else {
+                    "Wrong PIN."
+                }
+                is AppLock.Check.Wait -> {
+                    ui.pinError = null
+                    ui.pinRetryAt = result.untilMs
+                }
+            }
+        }
+    }
+
+    /** "Forgot PIN?": back to a fresh install. */
+    private fun resetApp() {
+        forgetPairing()
+        appLock.clear()
+        ui.pinSet = false
+        ui.locked = false
+        ui.pinError = null
+        ui.pinRetryAt = 0
+    }
+
+    // ------------------------------------------------------------------ navigation
+
+    private fun homeScreen(): Screen = if (saved.brain != null) Screen.Picker else Screen.Welcome
+
+    private fun showHome() {
+        ui.screen = homeScreen()
+        if (ui.screen == Screen.Picker) refreshBrainStatus()
+    }
+
+    private fun setStage(text: String) {
+        ui.stage = text
+    }
+
+    private fun showError(title: String, body: String?, detail: String?, retry: Boolean = true, reenter: Boolean = false) {
+        ui.screen = Screen.Error(title, body, detail, retry, reenter)
+    }
+
+    /** The picker's Asleep/Offline badge (coordinator.sh's refresh_brain_status). */
+    private fun refreshBrainStatus() {
+        val brain = saved.brain ?: return
+        if (ui.tunnel != TunnelUi.Up) {
+            ui.brainStatus = null
+            return
+        }
+        statusJob?.cancel()
+        statusJob = lifecycleScope.launch {
+            val status = withContext(Dispatchers.IO) { BrainPower.status(brain.host, brain.port) }
+            ui.brainStatus = status
+        }
+    }
+
+    // ------------------------------------------------------------------ pairing and tunnel
+
+    private fun doPair(enrollmentHost: String, code: String) {
+        tunnelForPairing = true
+        ui.screen = Screen.Working("Pairing")
+        setStage("Fetching your Brain’s configuration…")
+        lifecycleScope.launch {
             try {
                 val config = withContext(Dispatchers.IO) {
                     PairingApi.fetchWireGuardConfig(enrollmentHost, code)
@@ -158,7 +568,8 @@ class MainActivity : ComponentActivity() {
                 saved.wgConfig = config.toWgQuickString()
                 startTunnel(config)
             } catch (e: Exception) {
-                uiState.status = "Pairing failed: ${e.message}"
+                tunnelForPairing = false
+                ui.screen = Screen.PairError("Couldn’t pair.", e.message)
             }
         }
     }
@@ -166,7 +577,8 @@ class MainActivity : ComponentActivity() {
     private fun startTunnel(config: Config) {
         tunnelStarting = true
         pendingConfig = config
-        uiState.status = "Requesting VPN permission..."
+        ui.tunnel = TunnelUi.Connecting
+        if (tunnelForPairing) setStage("Asking for the VPN permission…")
         val intent = GoBackend.VpnService.prepare(this)
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
@@ -175,7 +587,54 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun bringTunnelUp(config: Config) {
+        lifecycleScope.launch {
+            if (tunnelForPairing || connectAfterTunnel) setStage("Opening the secure tunnel…")
+            try {
+                withContext(Dispatchers.IO) {
+                    backend.setState(tunnel, Tunnel.State.UP, config)
+                }
+                ui.tunnel = TunnelUi.Up
+                onTunnelUp()
+            } catch (e: Exception) {
+                tunnelFailed("Couldn’t open the secure tunnel.", "Check this tablet’s internet connection.", e.message)
+            } finally {
+                tunnelStarting = false
+            }
+        }
+    }
+
+    private fun onTunnelUp() {
+        if (tunnelForPairing) {
+            tunnelForPairing = false
+            ui.screen = if (saved.brain == null) Screen.AddBrain() else Screen.Picker
+        }
+        if (connectAfterTunnel) {
+            connectAfterTunnel = false
+            saved.brain?.let { doConnect(it) }
+            return
+        }
+        if (ui.screen == Screen.Picker) refreshBrainStatus()
+    }
+
+    private fun tunnelFailed(title: String, body: String, detail: String?) {
+        ui.tunnel = TunnelUi.Down
+        when {
+            tunnelForPairing -> {
+                tunnelForPairing = false
+                ui.screen = Screen.PairError(title, listOfNotNull(body, detail).joinToString("\n"))
+            }
+            connectAfterTunnel -> {
+                connectAfterTunnel = false
+                showError(title, body, detail)
+            }
+            else -> ui.notice = "$title Tap your Brain to try again."
+        }
+    }
+
     private fun forgetPairing() {
+        connectJob?.cancel()
+        reconnecting = false
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -184,34 +643,61 @@ class MainActivity : ComponentActivity() {
                     // Already down.
                 }
             }
-            saved.clear()
-            uiState.savedBrain = null
-            uiState.tunnelUp = false
-            uiState.status = "Pairing forgotten."
+        }
+        saved.clear()
+        ui.savedBrain = null
+        ui.brainStatus = null
+        ui.notice = null
+        ui.tunnel = TunnelUi.Down
+        ui.screen = Screen.Welcome
+    }
+
+    // ------------------------------------------------------------------ sessions
+
+    /** A tap on a Brain: brings the tunnel up first if it's down. */
+    private fun connectTo(brain: SavedPairing.Brain) {
+        ui.notice = null
+        reconnecting = false
+        quickReconnects = 0
+        if (ui.tunnel == TunnelUi.Up) {
+            doConnect(brain)
+            return
+        }
+        val config = saved.wgConfig
+        if (config == null) {
+            ui.screen = Screen.Pair()
+            return
+        }
+        saved.brain = brain
+        ui.savedBrain = brain
+        lastConnect = brain
+        connectAfterTunnel = true
+        ui.screen = Screen.Connecting
+        setStage("Opening the secure tunnel…")
+        if (tunnelStarting) return
+        try {
+            startTunnel(Config.parse(config.byteInputStream()))
+        } catch (e: Exception) {
+            connectAfterTunnel = false
+            saved.wgConfig = null
+            ui.screen = Screen.Pair(hint = "The saved pairing couldn’t be read. Pair this tablet again.")
         }
     }
 
-    private fun bringTunnelUp(config: Config) {
-        lifecycleScope.launch {
-            uiState.status = "Bringing up tunnel..."
-            try {
-                withContext(Dispatchers.IO) {
-                    backend.setState(tunnel, Tunnel.State.UP, config)
-                }
-                uiState.tunnelUp = true
-                uiState.status = "Tunnel up."
-            } catch (e: Exception) {
-                uiState.status = "Tunnel failed: ${e.message}"
-            } finally {
-                tunnelStarting = false
-            }
-        }
+    private fun cancelConnect() {
+        connectJob?.cancel()
+        connectJob = null
+        reconnecting = false
+        quickReconnects = 0
+        connectAfterTunnel = false
+        showHome()
     }
 
     private fun onSessionEnded(resultCode: Int, data: Intent?) {
+        sessionRunning = false
         // This activity may have been recreated while the session ran.
         val target = lastConnect ?: saved.brain
-        val host = uiState.rdpHost.ifEmpty { target?.host ?: "" }
+        val host = target?.host ?: ""
         val endedByUser = data?.getBooleanExtra(SessionActivity.RESULT_ENDED_BY_USER, false) ?: false
         val errorInfo = data?.getIntExtra(SessionActivity.RESULT_ERROR_INFO, 0) ?: 0
         val wasConnected = data?.getBooleanExtra(SessionActivity.RESULT_WAS_CONNECTED, false) ?: false
@@ -222,8 +708,9 @@ class MainActivity : ComponentActivity() {
             Log.i("MainActivity", "Brain restart requested after a frozen session")
             reconnecting = true
             quickReconnects = 0
-            uiState.status = "Restarting your Brain... (about 2 minutes)"
-            doConnect(target.host, target.port, target.username, target.password)
+            ui.screen = Screen.Connecting
+            setStage("Restarting your Brain… (about 2 minutes)")
+            doConnect(target)
             return
         }
         Log.i(
@@ -241,21 +728,22 @@ class MainActivity : ComponentActivity() {
             // that would throw away the user's open windows.
             reconnecting = false
             quickReconnects = 0
-            uiState.status = "Disconnected."
             lifecycleScope.launch { withContext(Dispatchers.IO) { BrainPower.notifySessionEnded(host) } }
+            showHome()
             return
         }
         if (endedByUser) {
             reconnecting = false
             quickReconnects = 0
-            uiState.status = "Cancelled."
+            showHome()
             return
         }
         if (errorInfo == ERRINFO_DISCONNECTED_BY_OTHERCONNECTION) {
             // Reconnecting would take it straight back from the other device.
             reconnecting = false
             quickReconnects = 0
-            uiState.status = "Your session moved to another device."
+            ui.notice = "Your session moved to another device."
+            showHome()
             return
         }
         val quick = lasted < MIN_SESSION_MS
@@ -265,11 +753,14 @@ class MainActivity : ComponentActivity() {
             (!quick || quickReconnects < MAX_QUICK_RECONNECTS)
         ) {
             if (quick) quickReconnects++
+            if (!reconnecting) ui.reconnectAttempt = 0
             reconnecting = true
-            uiState.status = "Connection dropped. Reconnecting..."
-            lifecycleScope.launch {
+            ui.reconnectAttempt++
+            ui.screen = Screen.Reconnecting
+            setStage("")
+            connectJob = lifecycleScope.launch {
                 delay(RECONNECT_DELAY_MS)
-                doConnect(target.host, target.port, target.username, target.password)
+                doConnect(target)
             }
             return
         }
@@ -277,43 +768,64 @@ class MainActivity : ComponentActivity() {
         val gaveUp = reconnecting
         reconnecting = false
         quickReconnects = 0
-        uiState.status = if (errorInfo == 1) {
-            "The Brain closed the connection. Your session is kept; connect again when ready."
-        } else if (errorInfo != 0) {
-            "The Brain ended the session (code $errorInfo)."
-        } else if (gaveUp) {
-            "The connection keeps dropping. Your session is kept on the Brain; " +
-                "try again in a minute."
-        } else {
-            "Couldn't connect to the Brain. Try again in a moment."
+        val name = target?.name ?: "your Brain"
+        when {
+            errorInfo == 1 -> showError(
+                "$name closed the connection.",
+                "Your session is kept; connect again when ready.",
+                "ERRINFO 1 (RPC_INITIATED_DISCONNECT)"
+            )
+            errorInfo != 0 -> showError(
+                "$name ended the session.",
+                "Try again, or re-enter the password if it changed.",
+                "ERRINFO $errorInfo", reenter = true
+            )
+            gaveUp -> showError(
+                "The connection keeps dropping.",
+                "Your session is kept on the Brain; try again in a minute.",
+                "Gave up after $MAX_QUICK_RECONNECTS quick reconnects"
+            )
+            else -> showError(
+                "Couldn’t connect.",
+                "Couldn’t connect to $name. Try again in a moment, or re-enter the password if it changed.",
+                "No reason from the server (errorInfo 0, wasConnected=$wasConnected)", reenter = true
+            )
         }
     }
 
-    private fun doConnect(host: String, port: Int, username: String, password: String) {
-        uiState.rdpHost = host
-        saved.brain = SavedPairing.Brain(host, port, username, password)
-        lastConnect = saved.brain
-        lifecycleScope.launch {
+    private fun doConnect(brain: SavedPairing.Brain) {
+        saved.brain = brain
+        ui.savedBrain = brain
+        lastConnect = brain
+        val (host, port) = brain.host to brain.port
+        if (!reconnecting) ui.screen = Screen.Connecting
+        connectJob?.cancel()
+        connectJob = lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 OpenH264.prepareSession(applicationContext) {
-                    runOnUiThread { uiState.status = "Downloading the video codec from Cisco..." }
+                    runOnUiThread { setStage("Downloading the video codec from Cisco…") }
                 }
             }
-            if (!reconnecting) uiState.status = "Waking Brain..."
+            if (!reconnecting) setStage("Waking up your Brain…")
             val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host, port) }
             if (awake == Awake.No) {
                 reconnecting = false
                 quickReconnects = 0
-                uiState.status = "Brain didn't wake in time. Try again."
+                showError(
+                    "${brain.name} didn’t wake up.",
+                    "Try again in a moment.",
+                    "The hub couldn’t start it, or it took longer than 8 minutes."
+                )
                 return@launch
             }
             // Keep the "not allowed to wake" note visible while connecting.
-            if (awake == Awake.Yes) uiState.status = "Connecting..."
+            if (awake == Awake.Yes) setStage("Connecting…")
             sessionStartedAt = SystemClock.elapsedRealtime()
+            sessionRunning = true
             val size = screenSize()
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
-                    this@MainActivity, host, port, username, password,
+                    this@MainActivity, host, port, brain.username, brain.password,
                     widthPx = size.x, heightPx = size.y
                 )
             )
@@ -349,30 +861,32 @@ class MainActivity : ComponentActivity() {
                 BrainPower.WakeState.Ready -> {
                     if (BrainPower.rdpListening(host, port)) return Awake.Yes
                     sawRunning = true
-                    withContext(Dispatchers.Main) { uiState.status = "Brain is up. Starting the desktop..." }
+                    withContext(Dispatchers.Main) { setStage("Brain is up. Starting the desktop…") }
                     delay(3_000)
                 }
                 // The Brain may well be awake; only waking is refused, so try anyway
                 // and say why if the connection then fails.
                 BrainPower.WakeState.NotAllowed -> {
                     withContext(Dispatchers.Main) {
-                        uiState.status = "This device isn't allowed to wake the Brain. " +
-                            "Connecting anyway; if the Brain is asleep, wake it from another device."
+                        setStage(
+                            "This tablet isn’t allowed to wake the Brain. Connecting anyway; " +
+                                "if it’s asleep, wake it from another device."
+                        )
                     }
                     return Awake.Unknown
                 }
                 BrainPower.WakeState.Failed -> return Awake.No
                 BrainPower.WakeState.Restarting -> {
-                    withContext(Dispatchers.Main) { uiState.status = "Restarting your Brain... (about 2 minutes)" }
+                    withContext(Dispatchers.Main) { setStage("Restarting your Brain… (about 2 minutes)") }
                     delay(5_000)
                 }
                 BrainPower.WakeState.Cleaning -> {
-                    withContext(Dispatchers.Main) { uiState.status = "Finishing your last session..." }
+                    withContext(Dispatchers.Main) { setStage("Finishing your last session…") }
                     delay(5_000)
                 }
                 BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
                     attempt++
-                    withContext(Dispatchers.Main) { uiState.status = "Waking Brain... (attempt $attempt)" }
+                    withContext(Dispatchers.Main) { setStage("Waking up your Brain… (attempt $attempt)") }
                     delay(5_000)
                 }
             }
@@ -382,108 +896,50 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private class UiState {
-    var status by mutableStateOf("")
-    var tunnelUp by mutableStateOf(false)
-    var rdpHost by mutableStateOf("")
-    var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
-    var h264Enabled by mutableStateOf(false)
+private sealed interface Screen {
+    object Welcome : Screen
+    data class Pair(val hint: String? = null) : Screen
+    /** Pairing in progress: ring, title, ui.stage. */
+    data class Working(val title: String) : Screen
+    data class PairError(val title: String, val detail: String?) : Screen
+    data class AddBrain(
+        val name: String = "",
+        val host: String = "",
+        val port: Int = 3389
+    ) : Screen
+    data class Credentials(val name: String, val host: String, val port: Int, val username: String) : Screen
+    object Picker : Screen
+    object Connecting : Screen
+    object Reconnecting : Screen
+    data class Error(
+        val title: String,
+        val body: String?,
+        val detail: String?,
+        val retry: Boolean,
+        val reenter: Boolean
+    ) : Screen
 }
 
-@Composable
-private fun PairingScreen(
-    state: UiState,
-    onPair: (host: String, code: String) -> Unit,
-    onConnect: (host: String, port: Int, user: String, pass: String) -> Unit,
-    onForget: () -> Unit,
-    onH264Changed: (Boolean) -> Unit,
-    licenseText: () -> String
-) {
-    var showLicense by remember { mutableStateOf(false) }
-    var enrollmentHost by remember { mutableStateOf("enroll.slimeos.com") }
-    var code by remember { mutableStateOf("") }
-    val brain = state.savedBrain
-    var rdpHost by remember(brain) { mutableStateOf(brain?.host ?: "") }
-    var rdpPort by remember(brain) { mutableStateOf((brain?.port ?: 3389).toString()) }
-    var username by remember(brain) { mutableStateOf(brain?.username ?: "") }
-    var password by remember(brain) { mutableStateOf(brain?.password ?: "") }
+private enum class Modal { RemoveBrain, ForgetPairing, ResetApp, Licence }
 
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Slime OS", style = MaterialTheme.typography.headlineSmall)
+private class UiState {
+    var screen by mutableStateOf<Screen>(Screen.Welcome)
+    var stage by mutableStateOf("")
+    var notice by mutableStateOf<String?>(null)
+    var tunnel by mutableStateOf(TunnelUi.Down)
+    var pingMs by mutableStateOf<Long?>(null)
+    var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
+    var brainStatus by mutableStateOf<BrainPower.Status?>(null)
+    var reconnectAttempt by mutableIntStateOf(0)
+    var h264Enabled by mutableStateOf(false)
+    var settingsTab by mutableStateOf<SettingsTab?>(null)
+    var modal by mutableStateOf<Modal?>(null)
 
-        if (!state.tunnelUp) {
-            OutlinedTextField(
-                value = enrollmentHost,
-                onValueChange = { enrollmentHost = it },
-                label = { Text("Enrollment host") }
-            )
-            OutlinedTextField(
-                value = code,
-                onValueChange = { code = it },
-                label = { Text("Pairing code") }
-            )
-            Button(onClick = { onPair(enrollmentHost, code) }) { Text("Pair") }
-        } else {
-            Text("Tunnel up — connect to the Brain:")
-            OutlinedTextField(
-                value = rdpHost,
-                onValueChange = { rdpHost = it },
-                label = { Text("Brain host (in-tunnel address)") }
-            )
-            OutlinedTextField(
-                value = rdpPort,
-                onValueChange = { rdpPort = it },
-                label = { Text("Port") }
-            )
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Username") }
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                // Now that it's saved and pre-filled, don't show it on every launch.
-                visualTransformation = PasswordVisualTransformation()
-            )
-            Button(onClick = {
-                onConnect(rdpHost, rdpPort.toIntOrNull() ?: 3389, username, password)
-            }) { Text("Connect") }
-            OutlinedButton(onClick = onForget) { Text("Forget pairing") }
-
-            // Cisco's OpenH264 license: the user controls its use, and this
-            // control must show the notice and the license text.
-            if (OpenH264.isSupported) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = state.h264Enabled, onCheckedChange = onH264Changed)
-                    Column(modifier = Modifier.padding(start = 12.dp)) {
-                        Text("Smooth video (H.264, downloaded on first use)")
-                        Text(OpenH264.NOTICE, style = MaterialTheme.typography.bodySmall)
-                    }
-                    TextButton(onClick = { showLicense = true }) { Text("Licence") }
-                }
-            }
-        }
-
-        if (showLicense) {
-            AlertDialog(
-                onDismissRequest = { showLicense = false },
-                confirmButton = { TextButton(onClick = { showLicense = false }) { Text("Close") } },
-                title = { Text("OpenH264 licence") },
-                text = {
-                    Text(
-                        licenseText(),
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            )
-        }
-
-        Text(state.status)
-    }
+    var pinSet by mutableStateOf(false)
+    var locked by mutableStateOf(false)
+    var changingPin by mutableStateOf(false)
+    var pinWorking by mutableStateOf(false)
+    var pinError by mutableStateOf<String?>(null)
+    var pinRetryAt by mutableLongStateOf(0L)
+    var pinResetKey by mutableIntStateOf(0)
 }

@@ -1,5 +1,6 @@
 package com.slimeos.app
 
+import android.os.SystemClock
 import android.util.Log
 import org.json.JSONObject
 import java.io.OutputStreamWriter
@@ -7,6 +8,7 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 /**
@@ -109,6 +111,49 @@ object BrainPower {
         } catch (e: Exception) {
             Log.e("BrainPower", "restart($host) failed", e)
             false
+        }
+    }
+
+    enum class Status { Online, Asleep, Offline }
+
+    /**
+     * The picker's badge, same probe as coordinator.sh's brain_probes_start():
+     * RDP answers -> online; else a Brain the hub manages is asleep (it wakes on
+     * connect); else offline. Read-only: /status never starts a VM, /wake would.
+     */
+    fun status(host: String, port: Int): Status {
+        if (rdpListening(host, port)) return Status.Online
+        return try {
+            val conn = URL("$POWER_URL/status?host=" + URLEncoder.encode(host, "UTF-8"))
+                .openConnection() as HttpURLConnection
+            conn.connectTimeout = 3_000
+            conn.readTimeout = 3_000
+            val managed = conn.inputStream.bufferedReader().use {
+                JSONObject(it.readText()).optBoolean("managed", false)
+            }
+            conn.disconnect()
+            if (managed) Status.Asleep else Status.Offline
+        } catch (e: Exception) {
+            Status.Offline
+        }
+    }
+
+    /**
+     * Round trip to the hub through the tunnel in ms, or null without an answer.
+     * The status strip's signal bars, like the Membrane's measureTunnelPing().
+     */
+    fun pingHubMs(): Long? {
+        val start = SystemClock.elapsedRealtime()
+        return try {
+            val conn = URL("$POWER_URL/status").openConnection() as HttpURLConnection
+            conn.connectTimeout = 3_000
+            conn.readTimeout = 3_000
+            conn.useCaches = false
+            conn.inputStream.use { it.readBytes() }
+            conn.disconnect()
+            SystemClock.elapsedRealtime() - start
+        } catch (e: Exception) {
+            null
         }
     }
 

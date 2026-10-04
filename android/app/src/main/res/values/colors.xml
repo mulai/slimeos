@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="slime_base_shell">#0D1117</color>
+    <color name="slime_surface">#13191F</color>
+    <color name="slime_teal">#00C2A8</color>
+    <color name="slime_cyan">#00F2FE</color>
+    <color name="slime_deep_teal">#008B99</color>
+    <color name="slime_aurora_blue">#4FACFE</color>
+    <color name="slime_aurora_green">#00FF87</color>
+    <color name="slime_text_primary">#EAF1F7</color>
+    <color name="slime_text_muted">#8B97A7</color>
+    <!-- The Membrane kiosk's page background (its shell colour), darker than Base Shell. -->
+    <color name="slime_shell">#05080B</color>
+</resources>

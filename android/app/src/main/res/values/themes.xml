@@ -1,3 +1,12 @@
 <resources>
-    <style name="Theme.SlimeOS" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Same dark shell as the Membrane kiosk (lockscreen/index.html, shell colour),
+         so nothing flashes white between the splash and the first frame. -->
+    <style name="Theme.SlimeOS" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/slime_shell</item>
+        <item name="android:colorBackground">@color/slime_shell</item>
+        <item name="android:colorAccent">@color/slime_teal</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>
