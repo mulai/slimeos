@@ -43,11 +43,12 @@ object RdpLauncher {
             // gets freeRDPCore's own "verify certificate" dialog.
             if (TUNNEL_HOST.matches(host)) append("&cert=ignore")
             append("&network=auto")
-            // Tell Windows not to wait for frame acknowledgements. Otherwise it sends
-            // the next frame only once earlier ones are acked, so the frame rate is
-            // capped by round trip + decode time (~70 ms here: ~20 fps, audio
-            // following). The tablet decodes a frame in ~25 ms, well under 30 fps.
-            append("&gfx=").append(enc("frame-ack:off"))
+            // Frame acknowledgements stay on (no gfx frame-ack:off): Windows then sends
+            // only as fast as the tablet decodes. Without them the Azure Brain's NVIDIA
+            // encoder sent 32 frames/s to a MatePad SE 11 decoding ~24 (2026-10-04):
+            // H.264 frames can't be skipped, so the rest queued in the app (+0.6 MB/s)
+            // and video and sound fell further behind the longer they played. With
+            // acks: 19-25 frames/s from the Brain, memory flat, no growing lag.
             // Play the Brain's audio here (OpenSL ES) instead of FreeRDP's fake backend.
             append("&sound=")
             // Video optimised remoting (MS-RDPEVOR), as connect.sh's +video: Windows sends
