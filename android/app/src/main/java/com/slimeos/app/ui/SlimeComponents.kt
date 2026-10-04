@@ -796,3 +796,36 @@ fun SegmentedRow(label: String, options: List<String>, selected: Int, onSelect: 
         }
     }
 }
+
+/** textarea.field: several lines, same look as SlimeField. */
+@Composable
+fun SlimeTextArea(label: String, value: String, onValueChange: (String) -> Unit, placeholder: String = "") {
+    var focused by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            label.uppercase(), color = Slime.Mint, modifier = Modifier.padding(bottom = 8.dp),
+            style = TextStyle(fontFamily = Slime.Mono, fontSize = 10.5.sp, letterSpacing = 1.5.sp)
+        )
+        BasicTextField(
+            value = value,
+            onValueChange = { onValueChange(it.take(4000)) },
+            cursorBrush = SolidColor(Slime.Teal),
+            textStyle = TextStyle(fontFamily = Slime.Body, fontSize = 15.sp, lineHeight = 22.sp, color = Slime.Text),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+            decorationBox = { inner ->
+                Box(
+                    Modifier.fillMaxWidth().height(132.dp)
+                        .clip(RoundedCornerShape(10.dp)).background(Slime.Field)
+                        .border(1.dp, if (focused) Slime.Teal else Slime.BorderField, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                ) {
+                    if (value.isEmpty() && placeholder.isNotEmpty()) {
+                        Text(placeholder, color = Slime.TextDim, style = TextStyle(fontFamily = Slime.Body, fontSize = 15.sp))
+                    }
+                    inner()
+                }
+            }
+        )
+    }
+}

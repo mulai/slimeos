@@ -478,12 +478,22 @@ private fun PadKey(label: String, enabled: Boolean, small: Boolean = false, onCl
 
 // ---------------------------------------------------------------- Settings
 
+/** The pages, in order. Pages of one group show as tabs across the top, as on the kiosk. */
 enum class SettingsTab(val group: String, val label: String) {
     Pairing("Network", "Pairing"),
     Video("Display & Sound", "Video"),
     Security("Security & Privacy", "App PIN"),
-    About("System", "About")
+    Privacy("Security & Privacy", "Privacy"),
+    About("System", "About"),
+    Feedback("System", "Send Feedback");
+
+    companion object {
+        val groups: List<String> get() = entries.map { it.group }.distinct()
+        fun inGroup(group: String) = entries.filter { it.group == group }
+    }
 }
+
+enum class FeedbackStatus { Idle, Sending, Sent, Error }
 
 class SettingsInfo(
     val paired: Boolean,
@@ -495,7 +505,12 @@ class SettingsInfo(
     val h264Notice: String,
     val smoothResolution: Boolean,
     val pinSet: Boolean,
-    val version: String
+    val version: String,
+    val crashReports: Boolean,
+    val feedbackCategory: Int,
+    val feedbackMessage: String,
+    val feedbackStatus: FeedbackStatus,
+    val feedbackResult: String?
 )
 
 class SettingsActions(
@@ -507,14 +522,26 @@ class SettingsActions(
     val onShowLicence: () -> Unit,
     val onSmoothResolution: (Boolean) -> Unit,
     val onChangePin: () -> Unit,
-    val onLockNow: () -> Unit
+    val onLockNow: () -> Unit,
+    val onCrashReports: (Boolean) -> Unit,
+    val onFeedbackCategory: (Int) -> Unit,
+    val onFeedbackMessage: (String) -> Unit,
+    val onSendFeedback: () -> Unit
 )
 
 /** renderSettingsShell: sidebar of categories, the page on the right. */
 @Composable
-fun SettingsPanel(tab: SettingsTab, info: SettingsInfo, actions: SettingsActions, compact: Boolean, height: Dp) {
+fun SettingsPanel(
+    tab: SettingsTab,
+    info: SettingsInfo,
+    actions: SettingsActions,
+    compact: Boolean,
+    height: Dp,
+    tight: Boolean = false
+) {
     Column(
-        Modifier.padding(if (compact) 12.dp else 24.dp).widthIn(max = 840.dp).fillMaxWidth()
+        Modifier.padding(horizontal = if (compact) 12.dp else 24.dp, vertical = if (tight) 4.dp else 24.dp)
+            .widthIn(max = 840.dp).fillMaxWidth()
             .height(height)
             .clip(RoundedCornerShape(20.dp)).background(Slime.Surface)
             .border(1.dp, Slime.BorderField, RoundedCornerShape(20.dp))
@@ -524,7 +551,9 @@ fun SettingsPanel(tab: SettingsTab, info: SettingsInfo, actions: SettingsActions
             ) {}
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 26.dp, end = 14.dp, top = 16.dp, bottom = 10.dp),
+            Modifier.fillMaxWidth().padding(
+                start = 26.dp, end = 14.dp, top = if (tight) 4.dp else 16.dp, bottom = if (tight) 2.dp else 10.dp
+            ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -548,14 +577,15 @@ fun SettingsPanel(tab: SettingsTab, info: SettingsInfo, actions: SettingsActions
         } else {
             Row(Modifier.weight(1f)) {
                 Column(Modifier.width(196.dp).padding(horizontal = 12.dp, vertical = 16.dp)) {
-                    SettingsTab.entries.forEach { t ->
-                        val active = t == tab
+                    SettingsTab.groups.forEach { group ->
+                        val active = group == tab.group
                         Text(
-                            t.group, color = if (active) Slime.Mint else Slime.TextMuted,
+                            group, color = if (active) Slime.Mint else Slime.TextMuted,
                             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (active) Slime.Teal.copy(alpha = 0.10f) else Slime.Shell.copy(alpha = 0f))
-                                .clickable(role = Role.Tab) { actions.onTab(t) }
+                                // A group opens its first page; the one you're in stays put.
+                                .clickable(role = Role.Tab) { if (!active) actions.onTab(SettingsTab.inGroup(group).first()) }
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             style = TextStyle(fontFamily = Slime.Display, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                         )
@@ -563,7 +593,9 @@ fun SettingsPanel(tab: SettingsTab, info: SettingsInfo, actions: SettingsActions
                 }
                 Box(Modifier.width(1.dp).fillMaxHeight().background(Slime.Border))
                 Column(Modifier.weight(1f)) {
-                    Row(Modifier.padding(start = 16.dp, top = 10.dp)) { SubTab(tab.label, true) {} }
+                    Row(Modifier.padding(start = 16.dp, top = 10.dp)) {
+                        SettingsTab.inGroup(tab.group).forEach { t -> SubTab(t.label, t == tab) { actions.onTab(t) } }
+                    }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Slime.Border))
                     SettingsPage(tab, info, actions, Modifier.weight(1f))
                 }
@@ -656,9 +688,54 @@ private fun SettingsPage(tab: SettingsTab, info: SettingsInfo, actions: Settings
                     size = 12.5.sp, color = Slime.TextFaint
                 )
             }
+            SettingsTab.Privacy -> {
+                // Same wording and opt-in as the kiosk's Privacy tab.
+                PageHeading(
+                    "Privacy",
+                    "Automatically send anonymous error reports to help us fix bugs faster. No personal " +
+                        "data, network details, or anything you type is ever included."
+                )
+                ToggleRow(
+                    "Send crash reports",
+                    "If Slime OS stops during a session, the next start sends what went wrong.",
+                    info.crashReports, actions.onCrashReports
+                )
+            }
             SettingsTab.About -> {
                 PageHeading("About", "Slime OS for Android tablets.")
                 InfoBox(listOf("Version" to info.version))
+            }
+            SettingsTab.Feedback -> {
+                PageHeading(
+                    "Send Feedback",
+                    "Found a bug or have an idea? It goes straight to the Slime OS team, with this tablet’s " +
+                        "app version, model and settings. No names, addresses or passwords."
+                )
+                SegmentedRow(
+                    label = "About",
+                    options = listOf("Bug", "Idea", "Other"),
+                    selected = info.feedbackCategory,
+                    onSelect = actions.onFeedbackCategory
+                )
+                SlimeTextArea(
+                    label = "Message",
+                    value = info.feedbackMessage,
+                    onValueChange = actions.onFeedbackMessage,
+                    placeholder = "What happened, or what would you like?"
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PrimaryButton(
+                        if (info.feedbackStatus == FeedbackStatus.Sending) "Sending…" else "Send",
+                        actions.onSendFeedback,
+                        enabled = info.feedbackStatus != FeedbackStatus.Sending &&
+                            info.feedbackMessage.trim().length >= 3
+                    )
+                }
+                when (info.feedbackStatus) {
+                    FeedbackStatus.Sent -> Muted(info.feedbackResult ?: "Thanks! Sent.", color = Slime.Mint)
+                    FeedbackStatus.Error -> Muted(info.feedbackResult ?: "Couldn’t send.", color = Slime.Error)
+                    else -> {}
+                }
             }
         }
     }

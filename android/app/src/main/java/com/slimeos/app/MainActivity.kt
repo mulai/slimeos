@@ -53,6 +53,7 @@ import com.slimeos.app.ui.ConnectingScreen
 import com.slimeos.app.ui.CredentialsScreen
 import com.slimeos.app.ui.DangerButton
 import com.slimeos.app.ui.ErrorScreen
+import com.slimeos.app.ui.FeedbackStatus
 import com.slimeos.app.ui.ModalTitle
 import com.slimeos.app.ui.Muted
 import com.slimeos.app.ui.PairScreen
@@ -168,12 +169,15 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
+        Reporter.install(applicationContext)
+        lifecycleScope.launch(Dispatchers.IO) { Reporter.sendPending(applicationContext) }
         backend = GoBackend(applicationContext)
         saved = SavedPairing(applicationContext)
         appLock = AppLock(applicationContext)
         ui.savedBrain = saved.brain
         ui.h264Enabled = OpenH264.isEnabled(applicationContext)
         ui.smoothResolution = DisplayPrefs.resolution(applicationContext) == DisplayPrefs.Resolution.Smooth
+        ui.crashReports = Reporter.crashReportsEnabled(applicationContext)
         ui.pinSet = appLock.isSet
         ui.locked = ui.pinSet && (savedInstanceState?.getBoolean(STATE_LOCKED, true) ?: true)
         ui.pinRetryAt = appLock.retryAtMs
@@ -261,14 +265,18 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 ui.settingsTab?.let { tab ->
-                    Box(
-                        Modifier.fillMaxSize().background(Color(0x99040608)).systemBarsPadding()
+                    // imePadding: the panel shrinks to the space above the keyboard (half a
+                    // landscape tablet), and its page scrolls the field being typed in into view.
+                    BoxWithConstraints(
+                        Modifier.fillMaxSize().background(Color(0x99040608)).systemBarsPadding().imePadding()
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() }, indication = null
                             ) { ui.settingsTab = null },
                         contentAlignment = Alignment.Center
                     ) {
-                        SettingsPanel(tab, settingsInfo(), settingsActions(), compact, min(600.dp, fullHeight * 0.88f))
+                        val keyboardUp = maxHeight < fullHeight * 0.75f
+                        val panelHeight = if (keyboardUp) maxHeight - 8.dp else min(600.dp, maxHeight * 0.92f)
+                        SettingsPanel(tab, settingsInfo(), settingsActions(), compact, panelHeight, tight = keyboardUp)
                     }
                 }
                 Modal()
@@ -440,7 +448,12 @@ class MainActivity : ComponentActivity() {
             packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
         } catch (e: Exception) {
             "?"
-        }
+        },
+        crashReports = ui.crashReports,
+        feedbackCategory = ui.feedbackCategory,
+        feedbackMessage = ui.feedbackMessage,
+        feedbackStatus = ui.feedbackStatus,
+        feedbackResult = ui.feedbackResult
     )
 
     private fun settingsActions() = SettingsActions(
@@ -470,8 +483,54 @@ class MainActivity : ComponentActivity() {
         onLockNow = {
             ui.settingsTab = null
             lock()
-        }
+        },
+        onCrashReports = { enabled ->
+            Reporter.setCrashReportsEnabled(applicationContext, enabled)
+            ui.crashReports = enabled
+        },
+        onFeedbackCategory = {
+            ui.feedbackCategory = it
+            if (ui.feedbackStatus != FeedbackStatus.Sending) ui.feedbackStatus = FeedbackStatus.Idle
+        },
+        onFeedbackMessage = {
+            ui.feedbackMessage = it
+            if (ui.feedbackStatus != FeedbackStatus.Sending) ui.feedbackStatus = FeedbackStatus.Idle
+        },
+        onSendFeedback = { sendFeedback() }
     )
+
+    private fun sendFeedback() {
+        val message = ui.feedbackMessage.trim()
+        if (message.length < 3 || ui.feedbackStatus == FeedbackStatus.Sending) return
+        val category = listOf("bug", "feature", "other")[ui.feedbackCategory]
+        // What the Membrane's feedback_collect_diagnostics() would say, minus anything
+        // identifying: no Brain address or name, no pairing details.
+        val extra = mapOf<String, Any?>(
+            "tunnel" to ui.tunnel.name.lowercase(),
+            "paired" to (saved.wgConfig != null),
+            "brain_saved" to (ui.savedBrain != null),
+            "brain_status" to ui.brainStatus?.name?.lowercase(),
+            "pin_set" to ui.pinSet,
+            "crash_reports" to ui.crashReports
+        )
+        ui.feedbackStatus = FeedbackStatus.Sending
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                Reporter.sendFeedback(applicationContext, category, message, extra)
+            }
+            when (result) {
+                is Reporter.Result.Sent -> {
+                    ui.feedbackStatus = FeedbackStatus.Sent
+                    ui.feedbackResult = "Thanks! The Slime OS team has it."
+                    ui.feedbackMessage = ""
+                }
+                is Reporter.Result.Failed -> {
+                    ui.feedbackStatus = FeedbackStatus.Error
+                    ui.feedbackResult = result.message
+                }
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ PIN
 
@@ -704,6 +763,7 @@ class MainActivity : ComponentActivity() {
 
     private fun onSessionEnded(resultCode: Int, data: Intent?) {
         sessionRunning = false
+        Reporter.sessionEnded(applicationContext)
         // This activity may have been recreated while the session ran.
         val target = lastConnect ?: saved.brain
         val host = target?.host ?: ""
@@ -831,6 +891,7 @@ class MainActivity : ComponentActivity() {
             if (awake == Awake.Yes) setStage("Connecting…")
             sessionStartedAt = SystemClock.elapsedRealtime()
             sessionRunning = true
+            Reporter.sessionStarted(applicationContext)
             val size = DisplayPrefs.sessionSize(applicationContext, screenSize())
             Log.i("MainActivity", "Session size ${size.x}x${size.y} (${DisplayPrefs.resolution(applicationContext)})")
             rdpSessionLauncher.launch(
@@ -943,6 +1004,11 @@ private class UiState {
     var reconnectAttempt by mutableIntStateOf(0)
     var h264Enabled by mutableStateOf(false)
     var smoothResolution by mutableStateOf(true)
+    var crashReports by mutableStateOf(false)
+    var feedbackCategory by mutableIntStateOf(0)
+    var feedbackMessage by mutableStateOf("")
+    var feedbackStatus by mutableStateOf(FeedbackStatus.Idle)
+    var feedbackResult by mutableStateOf<String?>(null)
     var settingsTab by mutableStateOf<SettingsTab?>(null)
     var modal by mutableStateOf<Modal?>(null)
 
