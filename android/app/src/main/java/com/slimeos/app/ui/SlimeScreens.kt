@@ -493,6 +493,7 @@ class SettingsInfo(
     val h264Supported: Boolean,
     val h264Enabled: Boolean,
     val h264Notice: String,
+    val smoothResolution: Boolean,
     val pinSet: Boolean,
     val version: String
 )
@@ -504,6 +505,7 @@ class SettingsActions(
     val onForgetPairing: () -> Unit,
     val onH264: (Boolean) -> Unit,
     val onShowLicence: () -> Unit,
+    val onSmoothResolution: (Boolean) -> Unit,
     val onChangePin: () -> Unit,
     val onLockNow: () -> Unit
 )

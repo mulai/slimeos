@@ -1,0 +1,121 @@
+Fit a remote screen smaller than the view (Slime OS "Smooth" asks Windows for
+fewer pixels than the tablet has, to decode faster) to the view: the session
+starts at that zoom, and pinch and "reset zoom" never go below it. Applies
+after session-min-zoom.patch.
+
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionInputManager.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionInputManager.java
+@@ -435,7 +435,7 @@
+ 
+ 	@Override public void onTouchPointerResetScrollZoom()
+ 	{
+-		sessionView.setZoom(1.0f);
++		sessionView.setZoom(sessionView.getMinZoom());
+ 		scrollView.scrollTo(0, 0);
+ 	}
+ 
+@@ -576,6 +576,7 @@
+ 
+ 		@Override public boolean onScaleBegin(ScaleGestureDetector detector)
+ 		{
++			scaleFactor = sessionView.getZoom();
+ 			scrollView.setScrollEnabled(false);
+ 			return true;
+ 		}
+@@ -584,7 +585,7 @@
+ 		{
+ 			// calc scale factor
+ 			scaleFactor *= detector.getScaleFactor();
+-			scaleFactor = Math.max(SessionView.MIN_SCALE_FACTOR,
++			scaleFactor = Math.max(sessionView.getMinZoom(),
+ 			                       Math.min(scaleFactor, SessionView.MAX_SCALE_FACTOR));
+ 			sessionView.setZoom(scaleFactor);
+ 
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionView.java
+@@ -58,6 +58,10 @@
+ 	private boolean railMode = false;
+ 	// helpers for scaling gesture handling
+ 	private float scaleFactor = 1.0f;
++	// The zoom that fits the remote screen to the view: above 1.0 when Slime OS
++	// asks Windows for a smaller desktop than the screen ("Smooth"), so it
++	// fills the screen instead of sitting in a corner. Never below it.
++	private float minScale = MIN_SCALE_FACTOR;
+ 	private Matrix scaleMatrix;
+ 	private Matrix invScaleMatrix;
+ 	private RectF invalidRegionF;
+@@ -163,8 +167,53 @@
+ 
+ 		requestLayout();
+ 		currentSession = session;
++		post(this::fitToParent);
+ 	}
+ 
++	@Override protected void onAttachedToWindow()
++	{
++		super.onAttachedToWindow();
++		View viewport = viewport();
++		if (viewport != null)
++			viewport.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fitToParent());
++	}
++
++	// The scroll view the session sits in: the visible area. The direct parent
++	// (railContainer) wraps this view's own size, so it can't say how big the
++	// screen is.
++	private View viewport()
++	{
++		for (android.view.ViewParent p = getParent(); p instanceof View; p = p.getParent())
++		{
++			if (p instanceof ScrollView2D)
++				return (View)p;
++		}
++		return null;
++	}
++
++	private void fitToParent()
++	{
++		View parent = viewport();
++		if (parent == null || width <= 0 || height <= 0)
++			return;
++		int pw = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
++		int ph = parent.getHeight() - parent.getPaddingTop() - parent.getPaddingBottom();
++		if (pw <= 0 || ph <= 0)
++			return;
++		float fit = Math.max(MIN_SCALE_FACTOR, Math.min((float)pw / width, (float)ph / height));
++		if (Math.abs(fit - minScale) < SCALE_FACTOR_DELTA)
++			return;
++		boolean atMin = scaleFactor < minScale + SCALE_FACTOR_DELTA;
++		minScale = fit;
++		if (atMin || scaleFactor < minScale)
++			setZoom(minScale);
++	}
++
++	public float getMinZoom()
++	{
++		return minScale;
++	}
++
+ 	public float getZoom()
+ 	{
+ 		return scaleFactor;
+@@ -210,7 +259,7 @@
+ 
+ 	public boolean isAtMinZoom()
+ 	{
+-		return (scaleFactor < (MIN_SCALE_FACTOR + SCALE_FACTOR_DELTA));
++		return (scaleFactor < (minScale + SCALE_FACTOR_DELTA));
+ 	}
+ 
+ 	public boolean zoomIn(float factor)
+@@ -230,9 +279,9 @@
+ 	{
+ 		boolean res = true;
+ 		scaleFactor -= factor;
+-		if (scaleFactor < (MIN_SCALE_FACTOR + SCALE_FACTOR_DELTA))
++		if (scaleFactor < (minScale + SCALE_FACTOR_DELTA))
+ 		{
+-			scaleFactor = MIN_SCALE_FACTOR;
++			scaleFactor = minScale;
+ 			res = false;
+ 		}
+ 		setZoom(scaleFactor);

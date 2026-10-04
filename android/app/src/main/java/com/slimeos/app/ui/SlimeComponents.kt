@@ -768,3 +768,31 @@ fun InfoBox(rows: List<Pair<String, String>>) {
         }
     }
 }
+
+/** .seg-group / .seg-btn: pick one, as on the kiosk's Display & Sound tab. */
+@Composable
+fun SegmentedRow(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Column {
+        Text(
+            label.uppercase(), color = Slime.Mint, modifier = Modifier.padding(bottom = 8.dp),
+            style = TextStyle(fontFamily = Slime.Mono, fontSize = 10.5.sp, letterSpacing = 1.5.sp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEachIndexed { i, option ->
+                val active = i == selected
+                Box(
+                    Modifier.clip(RoundedCornerShape(10.dp))
+                        .background(if (active) Slime.AccentGradient else SolidColor(Slime.Field))
+                        .border(1.dp, if (active) Color.Transparent else Slime.BorderField, RoundedCornerShape(10.dp))
+                        .clickable(role = Role.RadioButton) { onSelect(i) }
+                        .padding(horizontal = 18.dp, vertical = 11.dp)
+                ) {
+                    Text(
+                        option, color = if (active) Slime.OnAccent else Slime.TextMuted,
+                        style = TextStyle(fontFamily = Slime.Display, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    )
+                }
+            }
+        }
+    }
+}

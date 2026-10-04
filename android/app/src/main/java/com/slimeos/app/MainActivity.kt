@@ -173,6 +173,7 @@ class MainActivity : ComponentActivity() {
         appLock = AppLock(applicationContext)
         ui.savedBrain = saved.brain
         ui.h264Enabled = OpenH264.isEnabled(applicationContext)
+        ui.smoothResolution = DisplayPrefs.resolution(applicationContext) == DisplayPrefs.Resolution.Smooth
         ui.pinSet = appLock.isSet
         ui.locked = ui.pinSet && (savedInstanceState?.getBoolean(STATE_LOCKED, true) ?: true)
         ui.pinRetryAt = appLock.retryAtMs
@@ -433,6 +434,7 @@ class MainActivity : ComponentActivity() {
         h264Supported = OpenH264.isSupported,
         h264Enabled = ui.h264Enabled,
         h264Notice = OpenH264.NOTICE,
+        smoothResolution = ui.smoothResolution,
         pinSet = ui.pinSet,
         version = try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
@@ -454,6 +456,13 @@ class MainActivity : ComponentActivity() {
             ui.h264Enabled = enabled
         },
         onShowLicence = { ui.modal = Modal.Licence },
+        onSmoothResolution = { smooth ->
+            DisplayPrefs.setResolution(
+                applicationContext,
+                if (smooth) DisplayPrefs.Resolution.Smooth else DisplayPrefs.Resolution.Sharp
+            )
+            ui.smoothResolution = smooth
+        },
         onChangePin = {
             ui.settingsTab = null
             ui.changingPin = true
@@ -822,7 +831,8 @@ class MainActivity : ComponentActivity() {
             if (awake == Awake.Yes) setStage("Connecting…")
             sessionStartedAt = SystemClock.elapsedRealtime()
             sessionRunning = true
-            val size = screenSize()
+            val size = DisplayPrefs.sessionSize(applicationContext, screenSize())
+            Log.i("MainActivity", "Session size ${size.x}x${size.y} (${DisplayPrefs.resolution(applicationContext)})")
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
                     this@MainActivity, host, port, brain.username, brain.password,
@@ -932,6 +942,7 @@ private class UiState {
     var brainStatus by mutableStateOf<BrainPower.Status?>(null)
     var reconnectAttempt by mutableIntStateOf(0)
     var h264Enabled by mutableStateOf(false)
+    var smoothResolution by mutableStateOf(true)
     var settingsTab by mutableStateOf<SettingsTab?>(null)
     var modal by mutableStateOf<Modal?>(null)
 
