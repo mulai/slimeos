@@ -1,0 +1,77 @@
+drdynvc: the UDP transport (udp-transport.patch) delivers PDUs from its receive thread while the
+main thread delivers TCP data; both used drdynvc->data_in with no lock, which corrupted the DVC
+stream pool (SIGSEGV in StreamPool_Take on the MatePad SE 11, 2026-10-04). A lock around the
+receive function makes them take turns and leaves the data path unchanged. Same fix as the
+Membrane's membrane/freerdp/udp-patches/slimeos-drdynvc-lock.patch. It replaces
+drdynvc-whole-pdu.patch (a stream of its own per whole PDU), which made video lag in bursts
+on the Membrane: 16-23% of packets resent and RTT up to 980 ms, against ~1% and ~40 ms.
+
+--- a/channels/drdynvc/client/drdynvc_main.c
++++ b/channels/drdynvc/client/drdynvc_main.c
+@@ -1684,9 +1684,9 @@ static UINT drdynvc_order_recv(drdynvcPlugin* drdynvc, wStream* s, UINT32 Thread
+  *
+  * @return 0 on success, otherwise a Win32 error code
+  */
+-static UINT drdynvc_virtual_channel_event_data_received(drdynvcPlugin* drdynvc, void* pData,
+-                                                        UINT32 dataLength, UINT32 totalLength,
+-                                                        UINT32 dataFlags)
++static UINT drdynvc_virtual_channel_event_data_received_locked(drdynvcPlugin* drdynvc,
++                                                               void* pData, UINT32 dataLength,
++                                                               UINT32 totalLength, UINT32 dataFlags)
+ {
+ 	wStream* data_in = nullptr;
+ 
+@@ -1760,6 +1760,25 @@ static UINT drdynvc_virtual_channel_event_data_received(drdynvcPlugin* drdynvc,
+ 	return CHANNEL_RC_OK;
+ }
+ 
++/*
++ * Slime OS: the UDP transport (udp-transport.patch) delivers PDUs from its own receive thread
++ * while the main thread delivers TCP data. Both used drdynvc->data_in with no lock, which
++ * corrupted the DVC stream pool (SIGSEGV in StreamPool_Take, MatePad SE 11, 2026-10-04). Take
++ * turns instead. In async mode (the default) the locked part only copies the PDU and queues it,
++ * so neither thread holds the lock for long.
++ */
++static UINT drdynvc_virtual_channel_event_data_received(drdynvcPlugin* drdynvc, void* pData,
++                                                        UINT32 dataLength, UINT32 totalLength,
++                                                        UINT32 dataFlags)
++{
++	WINPR_ASSERT(drdynvc);
++	EnterCriticalSection(&drdynvc->data_in_lock);
++	const UINT rc = drdynvc_virtual_channel_event_data_received_locked(drdynvc, pData, dataLength,
++	                                                                   totalLength, dataFlags);
++	LeaveCriticalSection(&drdynvc->data_in_lock);
++	return rc;
++}
++
+ static void VCAPITYPE drdynvc_virtual_channel_open_event_ex(LPVOID lpUserParam, DWORD openHandle,
+                                                             UINT event, LPVOID pData,
+                                                             UINT32 dataLength, UINT32 totalLength,
+@@ -2083,6 +2102,7 @@ static UINT drdynvc_virtual_channel_event_terminated(drdynvcPlugin* drdynvc)
+ 		drdynvc->channel_mgr = nullptr;
+ 	}
+ 	drdynvc->InitHandle = nullptr;
++	DeleteCriticalSection(&drdynvc->data_in_lock);
+ 	free(drdynvc->context);
+ 	free(drdynvc);
+ 	return CHANNEL_RC_OK;
+@@ -2302,6 +2322,8 @@ FREERDP_ENTRY_POINT(BOOL VCAPITYPE VirtualChannelEntryEx(PCHANNEL_ENTRY_POINTS_E
+ 		return FALSE;
+ 	}
+ 
++	/* Slime OS: before any data can arrive; deleted in drdynvc_virtual_channel_event_terminated. */
++	InitializeCriticalSection(&drdynvc->data_in_lock);
+ 	drdynvc->channelEntryPoints.pInterface = context;
+ 	return TRUE;
+ }
+--- a/channels/drdynvc/client/drdynvc_main.h
++++ b/channels/drdynvc/client/drdynvc_main.h
+@@ -126,6 +126,8 @@ struct drdynvc_plugin
+ 	HANDLE thread;
+ 	BOOL async;
+ 	wStream* data_in;
++	/* Slime OS: serializes data_in between the main thread (TCP) and the UDP receive thread. */
++	CRITICAL_SECTION data_in_lock;
+ 	void* InitHandle;
+ 	DWORD OpenHandle;
+ 	wMessageQueue* queue;

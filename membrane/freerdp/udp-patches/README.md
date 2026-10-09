@@ -5,6 +5,17 @@
 Initiate Multitransport Request and always declines it. Maintainers
 confirmed this in FreeRDP#10669 and #4978.
 
+`slimeos-drdynvc-lock.patch` fixes a race the UDP transport opened in
+drdynvc: its receive thread delivers PDUs while the main thread delivers
+TCP data, and both used the shared `drdynvc->data_in` with no lock. That
+corrupted the DVC stream pool (SIGSEGV in `StreamPool_Take`, first caught
+on the Android build on 2026-10-04). A lock around the receive function
+makes the threads take turns; the data path itself is unchanged. The
+first attempt, `+slimeos12` (a separate stream for each whole PDU, as on
+Android at the time), made video lag in bursts on the AMD box (16% of
+packets resent, RTT up to 900 ms, against under 1% and ~40 ms on
+`+slimeos11`), so it was dropped.
+
 `slimeos-vaapi-decode-optin.patch` makes the build's VAAPI hardware H.264
 decode run only when `SLIMEOS_VAAPI_DECODE=1`. connect.sh sets it for
 hardware profiles that opt in (today only 010, the NUC6CAxx, with
@@ -15,13 +26,15 @@ FreeRDP#8276).
 as `+slimeos7` (v0.3.27), `+slimeos8` (v0.3.28, adds opt-in VAAPI),
 `+slimeos9` (v0.3.29, fixes a crash on disconnect), then `+slimeos11`
 (v0.3.38, adds the send path below; `+slimeos10` was an unreleased trial
-build), together with the camera and keyboard patches. Users switch it
+build), then `+slimeos13` (v0.3.52, the drdynvc race fix), together with
+the camera and keyboard patches. Users switch it
 on per device in Settings > Display & Sound > Brain connection >
 "Faster (beta)", on by default since v0.3.36.
 
 **Android:** `android/freerdp-patches/udp-transport.patch` is this patch
 ported to FreeRDP 3.31.1 (identical code, minus the research fps counter in
-rdpgfx_main.c). Change both together.
+rdpgfx_main.c), and `android/freerdp-patches/drdynvc-lock.patch` is
+the drdynvc fix. Change both sides together.
 
 ## What it does
 
@@ -118,13 +131,14 @@ and reproduces the shipped +slimeos9 debs bit for bit.
    (`dget`/`dpkg-source -x freerdp3_3.15.0+dfsg-2.1+deb13u3.dsc`). On the
    build VM, `apt-get source freerdp3` picks up the 3.31 backport instead.
 2. Add the camera and keyboard patches (see those READMEs), then
-   `slimeos-udp-transport.patch` and `slimeos-vaapi-decode-optin.patch`, to
-   `debian/patches/series`, in that order. `debian/rules` also needs
+   `slimeos-udp-transport.patch`, `slimeos-vaapi-decode-optin.patch` and
+   `slimeos-drdynvc-lock.patch`, to `debian/patches/series`, in that
+   order. `debian/rules` also needs
    `-DRDPECAM_INPUT_FORMAT_H264=OFF` (camera README) and
    `-DWITH_VAAPI=ON` (it ships OFF). Add `libva-dev` to Build-Depends.
    The runtime dependencies don't change, which matters because the OTA
    installs with plain `dpkg -i`.
-3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos12`...).
+3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos14`...).
    Always bump, even for a build that only went to a test device: the OTA
    sync skips a device whose installed version string already matches.
    Write it by hand; `dch` hangs when run non-interactively.
