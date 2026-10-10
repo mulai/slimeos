@@ -757,7 +757,17 @@ do_connect() {
             # NUC6CAYH 2026-09-22). A profile that needs the older driver
             # names it in SLIMEOS_LIBVA_DRIVER; if that driver isn't
             # installed, stay on software decode rather than risk the crash.
-            local vaapi_env="env -u SLIMEOS_VAAPI_DECODE"
+            #
+            # The same build also has FreeRDP's VAAPI H.264 *encoder*, which
+            # the webcam channel always asks for. On a GPU that can decode
+            # but not encode (the AMD box's Radeon HD: VLD only, no EncSlice)
+            # the encoder fails to open on every frame and never falls back
+            # to software, so Windows gets no picture (Camera app error
+            # 0xA00F4271 / 0x80070102, seen 2026-10-10 on +slimeos13). Off the
+            # VAAPI-decode path, point libva at a driver that doesn't exist:
+            # opening the VAAPI device fails and FreeRDP uses its software
+            # encoder, as in +slimeos5. Decode there is software already.
+            local vaapi_env="env -u SLIMEOS_VAAPI_DECODE LIBVA_DRIVER_NAME=slimeos-no-vaapi"
             if [[ "${SLIMEOS_VAAPI_DECODE:-}" == "1" ]]; then
                 local va_drv="${SLIMEOS_LIBVA_DRIVER:-}" va_ok=false lib
                 for lib in /usr/lib/*/libfreerdp3.so.3; do

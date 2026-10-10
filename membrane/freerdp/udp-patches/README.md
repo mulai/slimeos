@@ -134,8 +134,11 @@ and reproduces the shipped +slimeos9 debs bit for bit.
    `slimeos-udp-transport.patch`, `slimeos-vaapi-decode-optin.patch` and
    `slimeos-drdynvc-lock.patch`, to `debian/patches/series`, in that
    order. `debian/rules` also needs
-   `-DRDPECAM_INPUT_FORMAT_H264=OFF` (camera README) and
-   `-DWITH_VAAPI=ON` (it ships OFF). Add `libva-dev` to Build-Depends.
+   `-DRDPECAM_INPUT_FORMAT_H264=OFF` (camera README),
+   `-DWITH_VAAPI=ON` (it ships OFF) and `-DWITH_VAAPI_H264_ENCODING=OFF`
+   (it defaults ON; the webcam channel then picks `h264_vaapi` on GPUs
+   that can only decode and sends no frames — connect.sh works around
+   it on builds up to `+slimeos13`). Add `libva-dev` to Build-Depends.
    The runtime dependencies don't change, which matters because the OTA
    installs with plain `dpkg -i`.
 3. Add a `debian/changelog` entry that bumps the suffix (`+slimeos14`...).
