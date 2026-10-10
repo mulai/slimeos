@@ -1,0 +1,78 @@
+--- a/client/Android/cmake/ExternalDeps.cmake
++++ b/client/Android/cmake/ExternalDeps.cmake
+@@ -8,6 +8,9 @@
+ 
+ option(WITH_OPENSSL "Build and enable OpenSSL" ON)
+ option(WITH_FFMPEG "Build and enable FFmpeg codec support" ON)
++# Slime OS: FFmpeg's swscale and avutil only, no codecs: the camera's NV12 to YUV420P
++# conversion (rdpecam) without FFmpeg's H.264 decoder; OpenH264 stays the codec.
++option(WITH_SWSCALE "Build FFmpeg's swscale (camera redirection) even without WITH_FFMPEG" OFF)
+ option(WITH_OPENH264 "Build and enable OpenH264 codec support" ON)
+ option(WITH_CJSON "Build cJSON for Azure AD (AAD) support" ON)
+ option(WITH_MEDIACODEC "Enable Android MediaCodec API" OFF)
+@@ -32,6 +35,7 @@
+ )
+ 
+ set(ANDROID_NATIVE_DEPS "")
++set(FREERDP_WITH_SWSCALE OFF)
+ 
+ if(WITH_OPENSSL)
+   include(ExternalOpenSSL)
+@@ -68,7 +72,8 @@
+   list(APPEND ANDROID_NATIVE_DEPS jpeg)
+ endif()
+ 
+-if(WITH_FFMPEG)
++if(WITH_FFMPEG OR WITH_SWSCALE)
++  set(FREERDP_WITH_SWSCALE ON)
+   include(ExternalFFmpeg)
+   list(APPEND ANDROID_NATIVE_DEPS ffmpeg)
+ endif()
+--- a/client/Android/cmake/ExternalFFmpeg.cmake
++++ b/client/Android/cmake/ExternalFFmpeg.cmake
+@@ -51,12 +51,20 @@
+   set(FFMPEG_BIGENDIAN_ENV "")
+ endif()
+ 
+-if("openh264" IN_LIST ANDROID_NATIVE_DEPS)
+-  list(APPEND FFMPEG_EXTRA_ARGS --enable-libopenh264)
++if(NOT WITH_FFMPEG)
++  # WITH_SWSCALE alone: swscale and avutil, nothing else.
++  list(APPEND FFMPEG_EXTRA_ARGS --disable-everything --disable-avcodec --disable-avformat --disable-avdevice
++       --disable-avfilter --disable-swresample --disable-network --enable-swscale
++  )
++else()
++  list(APPEND FFMPEG_EXTRA_ARGS --enable-jni --enable-mediacodec)
++  if("openh264" IN_LIST ANDROID_NATIVE_DEPS)
++    list(APPEND FFMPEG_EXTRA_ARGS --enable-libopenh264)
++  endif()
++  if("opus" IN_LIST ANDROID_NATIVE_DEPS)
++    list(APPEND FFMPEG_EXTRA_ARGS --enable-libopus)
++  endif()
+ endif()
+-if("opus" IN_LIST ANDROID_NATIVE_DEPS)
+-  list(APPEND FFMPEG_EXTRA_ARGS --enable-libopus)
+-endif()
+ 
+ ExternalProject_Add(
+   ffmpeg
+@@ -74,7 +82,7 @@
+     <SOURCE_DIR>/configure --cross-prefix=${NDK_TOOLCHAIN_BIN}/llvm- --cc=${FFMPEG_CC} --cxx=${FFMPEG_CXX}
+     --pkg-config=${PKG_CONFIG_EXECUTABLE} --sysroot=${NDK_SYSROOT} --arch=${FFMPEG_ARCH} ${FFMPEG_CPU}
+     --extra-ldflags="${FFMPEG_LDFLAGS}" ${FFMPEG_EXTRA_ARGS} --target-os=android --enable-cross-compile --enable-pic
+-    --enable-lto --enable-jni --enable-mediacodec --enable-shared --disable-static --disable-programs --disable-doc
++    --enable-lto --enable-shared --disable-static --disable-programs --disable-doc
+     --prefix=${DEPS_INSTALL_DIR} --libdir=${DEPS_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}
+   BUILD_COMMAND ${CMAKE_COMMAND} -E env "PATH=${NDK_TOOLCHAIN_BIN}:$ENV{PATH}" make -j
+   INSTALL_COMMAND ${CMAKE_COMMAND} -E env "PATH=${NDK_TOOLCHAIN_BIN}:$ENV{PATH}" make -j install
+--- a/client/Android/cmake/ExternalFreeRDP.cmake
++++ b/client/Android/cmake/ExternalFreeRDP.cmake
+@@ -43,6 +43,8 @@
+     -DCHANNEL_PRINTER_CLIENT:BOOL=ON
+     # Camera redirection (Android NDK Camera2 HAL)
+     -DCHANNEL_RDPECAM_CLIENT:BOOL=ON
++    # Slime OS: swscale without the rest of FFmpeg (ExternalDeps' WITH_SWSCALE); overrides the above
++    -DWITH_SWSCALE:BOOL=${FREERDP_WITH_SWSCALE}
+     -DWITH_VERBOSE_WINPR_ASSERT:BOOL=OFF
+ )
+ 

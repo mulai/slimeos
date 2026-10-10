@@ -16,8 +16,8 @@ import java.nio.charset.StandardCharsets
  * freeRDPCore's LibFreeRDP.setConnectionInfo(Uri) maps each query param directly
  * onto an xfreerdp-style flag (key=value -> /key:value, key= -> /key), so this
  * mirrors the exact flags membrane/freerdp/connect.sh passes to xfreerdp3 for the
- * desktop Membrane (see connect.sh:731-745), skipping only what M1 explicitly
- * defers (mic/cam redirection, drive redirection, scale flags).
+ * desktop Membrane (see connect.sh:731-745), skipping only drive redirection and
+ * scale flags.
  */
 object RdpLauncher {
 
@@ -33,7 +33,9 @@ object RdpLauncher {
         username: String,
         password: String,
         widthPx: Int,
-        heightPx: Int
+        heightPx: Int,
+        microphone: Boolean,
+        camera: Boolean
     ): Intent {
         val authority = "${enc(username)}@$host:$port"
         val query = buildString {
@@ -59,6 +61,11 @@ object RdpLauncher {
             // playing video as its own stream, presented on its own timeline.
             append("&video=")
             append("&dynamic-resolution=")
+            // The tablet's microphone (OpenSL ES) and camera (NDK Camera2, MS-RDPECAM) in
+            // the Brain, as connect.sh's /microphone and /dvc:rdpecam. Only once Android
+            // allowed them: FreeRDP's URI path never asks.
+            if (microphone) append("&microphone=")
+            if (camera) append("&dvc=rdpecam")
             // Reconnect inside the session on a drop (e.g. the Brain's TermService
             // crashing and restarting): the desktop stays on screen and Windows hands
             // back the same session. First try at once, then every 5 s; FreeRDP never

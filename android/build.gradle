@@ -29,7 +29,7 @@ ext {
     abiFilters = releaseProperties.get('ABI_FILTERS', 'arm64-v8a').split(';')
     // Default matches release.properties (see its comments, incl. RelWithDebInfo).
     cmakeArguments = releaseProperties.get('CMAKE_ARGUMENTS',
-        '-DWITH_FFMPEG=OFF;-DWITH_OPENH264=ON;-DWITH_OPENH264_LOADING=ON;-DWITH_MEDIACODEC=OFF;-DWITH_OPUS=OFF;-DWITH_WEBP=OFF;-DWITH_JPEG=OFF;-DWITH_PNG=OFF;-DWITH_CJSON=ON;-DWITH_OPENSSL=ON;-DCMAKE_BUILD_TYPE=RelWithDebInfo'
+        '-DWITH_FFMPEG=OFF;-DWITH_SWSCALE=ON;-DWITH_OPENH264=ON;-DWITH_OPENH264_LOADING=ON;-DWITH_MEDIACODEC=OFF;-DWITH_OPUS=OFF;-DWITH_WEBP=OFF;-DWITH_JPEG=OFF;-DWITH_PNG=OFF;-DWITH_CJSON=ON;-DWITH_OPENSSL=ON;-DCMAKE_BUILD_TYPE=RelWithDebInfo'
     ).split(';')
     cmakeVersion = releaseProperties.get('CMAKE_VERSION', '4.1.2')
     splitEnabled = false

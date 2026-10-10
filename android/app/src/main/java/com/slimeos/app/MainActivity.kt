@@ -1,7 +1,9 @@
 package com.slimeos.app
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Point
 import android.os.Build
 import android.os.Bundle
@@ -57,6 +59,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.freerdp.freerdpcore.presentation.SessionActivity
+import com.freerdp.freerdpcore.services.LibFreeRDP
 import com.slimeos.app.ui.AddBrainScreen
 import com.slimeos.app.ui.ConnectingScreen
 import com.slimeos.app.ui.CredentialsScreen
@@ -176,6 +179,15 @@ class MainActivity : ComponentActivity() {
     private var statusJob: Job? = null
     private var sessionRunning = false
     private var backgroundedAt = 0L
+
+    // Microphone and camera for the session, asked before the first one; a denied one
+    // just stays out of the Brain.
+    private var launchAfterPermissions: (() -> Unit)? = null
+    private val mediaPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            launchAfterPermissions?.invoke()
+            launchAfterPermissions = null
+        }
 
     private val rdpSessionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -1227,18 +1239,48 @@ class MainActivity : ComponentActivity() {
             }
             // Keep the "not allowed to wake" note visible while connecting.
             if (awake == Awake.Yes) setStage("Connecting…")
-            sessionStartedAt = SystemClock.elapsedRealtime()
-            sessionRunning = true
-            Reporter.sessionStarted(applicationContext)
-            val size = DisplayPrefs.sessionSize(applicationContext, screenSize())
-            Log.i("MainActivity", "Session size ${size.x}x${size.y} (${DisplayPrefs.resolution(applicationContext)})")
-            rdpSessionLauncher.launch(
-                RdpLauncher.buildSessionIntent(
-                    this@MainActivity, host, port, username, password,
-                    widthPx = size.x, heightPx = size.y
-                )
-            )
+            withMediaPermissions { launchSession(host, port, username, password) }
         }
+    }
+
+    private fun granted(permission: String) =
+        checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    /** The camera only counts when this FreeRDP build can send it (LibFreeRDP's own check). */
+    private fun cameraSupported() = LibFreeRDP.hasCameraRedirectionSupport()
+
+    private fun withMediaPermissions(launch: () -> Unit) {
+        val needed = buildList {
+            if (!granted(Manifest.permission.RECORD_AUDIO)) add(Manifest.permission.RECORD_AUDIO)
+            if (cameraSupported() && !granted(Manifest.permission.CAMERA)) add(Manifest.permission.CAMERA)
+        }
+        // A reconnect never stops to ask: the answer was given before the session.
+        if (needed.isEmpty() || reconnecting) {
+            launch()
+            return
+        }
+        launchAfterPermissions = launch
+        mediaPermissionLauncher.launch(needed.toTypedArray())
+    }
+
+    private fun launchSession(host: String, port: Int, username: String, password: String) {
+        sessionStartedAt = SystemClock.elapsedRealtime()
+        sessionRunning = true
+        Reporter.sessionStarted(applicationContext)
+        val size = DisplayPrefs.sessionSize(applicationContext, screenSize())
+        val microphone = granted(Manifest.permission.RECORD_AUDIO)
+        val camera = cameraSupported() && granted(Manifest.permission.CAMERA)
+        Log.i(
+            "MainActivity",
+            "Session size ${size.x}x${size.y} (${DisplayPrefs.resolution(applicationContext)}), " +
+                "microphone=$microphone camera=$camera (supported=${cameraSupported()})"
+        )
+        rdpSessionLauncher.launch(
+            RdpLauncher.buildSessionIntent(
+                this, host, port, username, password,
+                widthPx = size.x, heightPx = size.y, microphone = microphone, camera = camera
+            )
+        )
     }
 
     private fun screenSize(): Point {
