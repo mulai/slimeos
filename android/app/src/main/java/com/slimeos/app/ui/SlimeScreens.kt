@@ -1,5 +1,7 @@
 package com.slimeos.app.ui
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,6 +10,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -32,7 +36,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.slimeos.app.AppLock
 import com.slimeos.app.BrainPower
 import com.slimeos.app.SavedPairing
+import com.slimeos.app.SlimeId
 import kotlinx.coroutines.delay
 
 // One composable per kiosk screen (lockscreen/index.html's render*()), same
@@ -56,9 +64,23 @@ private val HOST_RE = Regex(
         "(?:\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$"
 )
 
+/** The empty and picker screens' foot: "Sign in with Slime ID", or who's signed in. */
+class SlimeIdFoot(val email: String?, val onSignIn: () -> Unit, val onSignOut: () -> Unit)
+
+@Composable
+private fun SlimeIdFooter(foot: SlimeIdFoot, top: Dp) {
+    Spacer(Modifier.height(top))
+    if (foot.email != null) {
+        GhostLabel("Signed in as ${SlimeId.maskEmail(foot.email)}")
+        GhostButton("Sign out", foot.onSignOut)
+    } else {
+        GhostButton("Sign in with Slime ID", foot.onSignIn)
+    }
+}
+
 /** renderEmpty, with the Demo Brain card (demoBrainCardHTML). */
 @Composable
-fun WelcomeScreen(onAddBrain: () -> Unit, onTryDemo: () -> Unit) {
+fun WelcomeScreen(onAddBrain: () -> Unit, onTryDemo: () -> Unit, slimeId: SlimeIdFoot) {
     SlimeScreen {
         SlimeMark(96.dp, drip = true, float = true)
         Spacer(Modifier.height(24.dp))
@@ -80,6 +102,41 @@ fun WelcomeScreen(onAddBrain: () -> Unit, onTryDemo: () -> Unit) {
         )
         Spacer(Modifier.height(28.dp))
         PrimaryButton("Add a Brain", onAddBrain, large = true)
+        SlimeIdFooter(slimeId, top = 14.dp)
+    }
+}
+
+/** renderSlimeIdEntry: the QR and code to approve on a phone, polled until approved. */
+@Composable
+fun SlimeIdEntryScreen(userCode: String, verificationUri: String, qr: Bitmap?, onBack: () -> Unit) {
+    SlimeScreen {
+        Column(Modifier.widthIn(max = 380.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            ScreenTitle("Sign in with Slime ID", size = 22.sp)
+            Muted(
+                "Scan this code with your phone, or visit $verificationUri and enter the code below.",
+                Modifier.padding(top = 8.dp, bottom = 24.dp), align = TextAlign.Center
+            )
+            if (qr != null) {
+                Box(Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(16.dp)) {
+                    Image(
+                        qr.asImageBitmap(), contentDescription = "QR code", modifier = Modifier.size(180.dp),
+                        filterQuality = FilterQuality.None
+                    )
+                }
+                Spacer(Modifier.height(22.dp))
+            }
+            Text(
+                SlimeId.displayCode(userCode), color = Slime.Mint,
+                style = TextStyle(fontFamily = Slime.Mono, fontWeight = FontWeight.Bold, fontSize = 26.sp, letterSpacing = 3.sp)
+            )
+            Row(Modifier.padding(top = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spinner(14.dp)
+                Spacer(Modifier.width(8.dp))
+                Muted("Waiting for approval…", size = 12.5.sp, color = Slime.TextDim)
+            }
+            Spacer(Modifier.height(14.dp))
+            TertiaryButton("Back", onBack)
+        }
     }
 }
 
@@ -229,44 +286,80 @@ fun CredentialsScreen(
     }
 }
 
-/** renderPicker, for the one Brain this app keeps. */
+/**
+ * One card on the picker: a Brain saved on this tablet ([remote] false), or one on the
+ * Slime ID account that isn't saved here yet.
+ */
+class PickerItem(
+    val key: String,
+    val name: String,
+    val host: String,
+    val remote: Boolean,
+    val status: BrainPower.Status?,
+    val lastConnected: Long,
+    val onClick: () -> Unit,
+    val onRemove: (() -> Unit)?
+)
+
+/** renderPicker: this tablet's Brains, then the account's, then "+ Add a Brain". */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PickerScreen(
-    name: String,
-    host: String,
-    status: BrainPower.Status?,
+    items: List<PickerItem>,
     notice: String?,
-    onConnect: () -> Unit,
-    onRemove: () -> Unit
+    onAddBrain: () -> Unit,
+    slimeId: SlimeIdFoot
 ) {
     SlimeScreen {
         SlimeMark(52.dp)
         Spacer(Modifier.height(20.dp))
         ScreenTitle("Choose a Brain", size = 26.sp)
         Muted("Tap a card to connect", Modifier.padding(top = 4.dp, bottom = 32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
-            BrainCard(
-                name = name,
-                host = host,
-                accent = Slime.Accents[0],
-                meta = when (status) {
-                    BrainPower.Status.Asleep -> "Wakes up when you connect"
-                    BrainPower.Status.Offline -> "Not reachable right now"
-                    else -> "Saved on this tablet"
-                },
-                action = "Connect →",
-                badge = when (status) {
-                    BrainPower.Status.Asleep -> BadgeKind.Asleep
-                    BrainPower.Status.Offline -> BadgeKind.Offline
-                    else -> null
-                },
-                onClick = onConnect,
-                onRemove = onRemove
-            )
+        FlowRow(
+            Modifier.widthIn(max = 948.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items.forEachIndexed { i, b ->
+                BrainCard(
+                    name = b.name,
+                    host = b.host,
+                    accent = Slime.Accents[i % Slime.Accents.size],
+                    meta = when {
+                        b.remote -> "Not paired on this device"
+                        b.status == BrainPower.Status.Asleep -> "Wakes up when you connect"
+                        b.status == BrainPower.Status.Offline -> "Not reachable right now"
+                        else -> "Last connected ${relativeTime(b.lastConnected)}"
+                    },
+                    action = if (b.remote) "Tap to reconnect →" else "Connect →",
+                    badge = when {
+                        b.remote -> BadgeKind.SlimeId
+                        b.status == BrainPower.Status.Asleep -> BadgeKind.Asleep
+                        b.status == BrainPower.Status.Offline -> BadgeKind.Offline
+                        else -> null
+                    },
+                    onClick = b.onClick,
+                    onRemove = b.onRemove
+                )
+            }
+            AddCard("Add a Brain", onAddBrain)
         }
         if (notice != null) {
             Muted(notice, Modifier.padding(top = 28.dp).widthIn(max = 460.dp), align = TextAlign.Center)
         }
+        SlimeIdFooter(slimeId, top = 30.dp)
+    }
+}
+
+/** coordinator.sh's relative_time(). */
+private fun relativeTime(ms: Long): String {
+    if (ms <= 0L) return "never"
+    val s = (System.currentTimeMillis() - ms) / 1000
+    return when {
+        s < 60 -> "just now"
+        s < 3600 -> "${s / 60} minutes ago"
+        s < 86400 -> "${s / 3600} hours ago"
+        else -> "${s / 86400} days ago"
     }
 }
 
@@ -509,8 +602,8 @@ enum class FeedbackStatus { Idle, Sending, Sent, Error }
 class SettingsInfo(
     val paired: Boolean,
     val tunnel: TunnelUi,
-    val brainName: String?,
-    val brainHost: String?,
+    val brainNames: List<String>,
+    val slimeIdEmail: String?,
     val h264Supported: Boolean,
     val h264Enabled: Boolean,
     val h264Notice: String,
@@ -652,13 +745,14 @@ private fun SettingsPage(tab: SettingsTab, info: SettingsInfo, actions: Settings
                                 TunnelUi.Connecting -> "Connecting…"
                                 TunnelUi.Down -> "Not connected"
                             },
-                            "Brain" to (info.brainName ?: "None yet"),
-                            "Address" to (info.brainHost ?: "—")
+                            (if (info.brainNames.size > 1) "Brains" else "Brain") to
+                                (info.brainNames.joinToString(", ").ifEmpty { "None yet" }),
+                            "Slime ID" to (info.slimeIdEmail?.let { SlimeId.maskEmail(it) } ?: "Not signed in")
                         )
                     )
                     Muted(
-                        "Forgetting the pairing removes this tablet’s tunnel key and the saved Brain " +
-                            "password. You’ll need a new pairing code to connect again.",
+                        "Forgetting the pairing removes this tablet’s tunnel key and its saved Brains " +
+                            "and passwords. You’ll need a new pairing code to connect again.",
                         size = 12.5.sp, color = Slime.TextFaint
                     )
                     Row { DangerButton("Forget pairing", actions.onForgetPairing) }

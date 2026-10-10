@@ -66,7 +66,9 @@ import com.slimeos.app.ui.FeedbackStatus
 import com.slimeos.app.ui.ModalTitle
 import com.slimeos.app.ui.Muted
 import com.slimeos.app.ui.PairScreen
+import com.slimeos.app.ui.PickerItem
 import com.slimeos.app.ui.PickerScreen
+import com.slimeos.app.ui.PrimaryButton
 import com.slimeos.app.ui.PinSetupScreen
 import com.slimeos.app.ui.PinUnlockScreen
 import com.slimeos.app.ui.ReconnectingScreen
@@ -77,6 +79,8 @@ import com.slimeos.app.ui.SettingsPanel
 import com.slimeos.app.ui.SettingsTab
 import com.slimeos.app.ui.Slime
 import com.slimeos.app.ui.SlimeBackground
+import com.slimeos.app.ui.SlimeIdEntryScreen
+import com.slimeos.app.ui.SlimeIdFoot
 import com.slimeos.app.ui.SlimeModal
 import com.slimeos.app.ui.SlimeTheme
 import com.slimeos.app.ui.StatusStrip
@@ -89,6 +93,8 @@ import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -121,7 +127,7 @@ private const val STATE_LOCKED = "locked"
  * Pairing code -> WireGuard tunnel -> RDP session, with the Membrane kiosk's
  * screens (membrane/lockscreen/index.html): welcome, pair, add a Brain, who
  * signs in, choose a Brain, connecting, error, reconnecting, and Settings.
- * One Brain per tablet for now; no Slime ID yet.
+ * Brains saved on the tablet, and with Slime ID the account's own.
  */
 class MainActivity : ComponentActivity() {
 
@@ -159,6 +165,10 @@ class MainActivity : ComponentActivity() {
         }
 
     private var lastConnect: SavedPairing.Brain? = null
+    // A Slime ID Brain waiting for the tunnel, or for a pairing code, before it's tried.
+    private var pendingBookmark: SlimeId.RemoteBrain? = null
+    private var slimeIdJob: Job? = null
+    private var remoteJob: Job? = null
     private var sessionStartedAt = 0L
     private var reconnecting = false
     private var quickReconnects = 0
@@ -184,7 +194,8 @@ class MainActivity : ComponentActivity() {
         backend = GoBackend(applicationContext)
         saved = SavedPairing(applicationContext)
         appLock = AppLock(applicationContext)
-        ui.savedBrain = saved.brain
+        ui.brains = saved.brains
+        ui.slimeIdEmail = saved.slimeIdSession?.let(::accountLabel)
         ui.h264Enabled = OpenH264.isEnabled(applicationContext)
         ui.smoothResolution = DisplayPrefs.resolution(applicationContext) == DisplayPrefs.Resolution.Smooth
         ui.crashReports = Reporter.crashReportsEnabled(applicationContext)
@@ -192,6 +203,7 @@ class MainActivity : ComponentActivity() {
         ui.locked = ui.pinSet && (savedInstanceState?.getBoolean(STATE_LOCKED, true) ?: true)
         ui.pinRetryAt = appLock.retryAtMs
         ui.screen = homeScreen()
+        refreshRemoteBrains()
 
         // The status strip's tunnel quality and the tablet's own network and battery,
         // while the app is on screen.
@@ -229,6 +241,7 @@ class MainActivity : ComponentActivity() {
         }
         backgroundedAt = 0L
         if (ui.screen == Screen.Picker) refreshBrainStatus()
+        if (ui.screen == Screen.Picker || ui.screen == Screen.Welcome) refreshRemoteBrains()
     }
 
     override fun onStop() {
@@ -348,11 +361,9 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        val brain = ui.savedBrain
         when (val s = ui.screen) {
             Screen.Welcome -> WelcomeScreen(
-                onAddBrain = { ui.screen = if (saved.wgConfig == null) Screen.Pair() else Screen.AddBrain() },
-                onTryDemo = { ui.demoBrain = true }
+                onAddBrain = { addBrain() }, onTryDemo = { ui.demoBrain = true }, slimeId = slimeIdFoot()
             )
             is Screen.Pair -> PairScreen(
                 hint = s.hint,
@@ -367,28 +378,37 @@ class MainActivity : ComponentActivity() {
             )
             is Screen.AddBrain -> AddBrainScreen(
                 initialName = s.name, initialHost = s.host, initialPort = s.port,
-                onContinue = { name, host, port -> ui.screen = Screen.Credentials(name, host, port, "") },
+                onContinue = { name, host, port -> brainAdded(name, host, port) },
                 onCancel = { showHome() }
             )
             is Screen.Credentials -> CredentialsScreen(
-                brainName = s.name,
-                initialUsername = s.username,
-                onConnect = { user, pass ->
-                    connectTo(SavedPairing.Brain(s.host, s.port, user, pass, s.name))
-                },
-                onBack = { ui.screen = Screen.AddBrain(s.name, s.host, s.port) }
+                brainName = s.brain.name,
+                initialUsername = s.brain.username,
+                onConnect = { user, pass -> connectTo(s.brain.copy(username = user, password = pass)) },
+                onBack = {
+                    if (s.backToAddBrain) ui.screen = Screen.AddBrain(s.brain.name, s.brain.host, s.brain.port)
+                    else showHome()
+                }
             )
-            Screen.Picker -> if (brain == null) {
-                WelcomeScreen(onAddBrain = { ui.screen = Screen.AddBrain() }, onTryDemo = { ui.demoBrain = true })
-            } else {
-                PickerScreen(
-                    name = brain.name, host = brain.host, status = ui.brainStatus, notice = ui.notice,
-                    onConnect = { connectTo(brain) },
-                    onRemove = { ui.modal = Modal.RemoveBrain }
-                )
+            Screen.Picker -> {
+                val items = pickerItems()
+                if (items.isEmpty()) {
+                    WelcomeScreen(onAddBrain = { addBrain() }, onTryDemo = { ui.demoBrain = true }, slimeId = slimeIdFoot())
+                } else {
+                    PickerScreen(items, ui.notice, onAddBrain = { addBrain() }, slimeId = slimeIdFoot())
+                }
             }
+            is Screen.SlimeIdEntry -> SlimeIdEntryScreen(
+                userCode = s.code.userCode, verificationUri = s.code.verificationUri, qr = s.code.qr,
+                onBack = { cancelSlimeIdSignIn() }
+            )
+            is Screen.SlimeIdError -> ErrorScreen(
+                title = s.message, body = null, detail = s.detail,
+                onTryAgain = { startSlimeIdSignIn() }, onReenterPassword = null,
+                backLabel = "Back", onBack = { showHome() }
+            )
             Screen.Connecting -> ConnectingScreen(
-                brainName = (lastConnect ?: brain)?.name ?: "your Brain",
+                brainName = ui.connectingName,
                 stage = ui.stage,
                 onCancel = { cancelConnect() }
             )
@@ -398,13 +418,14 @@ class MainActivity : ComponentActivity() {
             )
             is Screen.Error -> ErrorScreen(
                 title = s.title, body = s.body, detail = s.detail,
-                onTryAgain = if (s.retry) ({ (lastConnect ?: saved.brain)?.let { connectTo(it) } }) else null,
-                onReenterPassword = if (s.reenter) ({
-                    (lastConnect ?: saved.brain)?.let {
-                        ui.screen = Screen.Credentials(it.name, it.host, it.port, it.username)
-                    }
+                onTryAgain = if (s.retry) ({
+                    val bookmark = pendingBookmark
+                    if (bookmark != null) connectBookmark(bookmark) else lastConnect?.let { connectTo(it) }
                 }) else null,
-                backLabel = if (saved.brain != null) "Back to Brain list" else "Back",
+                onReenterPassword = if (s.reenter) ({
+                    lastConnect?.let { ui.screen = Screen.Credentials(it, backToAddBrain = false) }
+                }) else null,
+                backLabel = if (ui.brains.isNotEmpty()) "Back to Brain list" else "Back",
                 onBack = { showHome() }
             )
         }
@@ -415,7 +436,7 @@ class MainActivity : ComponentActivity() {
         when (ui.modal) {
             null -> {}
             Modal.RemoveBrain -> SlimeModal(onDismiss = { ui.modal = null }) {
-                ModalTitle("Remove ${ui.savedBrain?.name ?: "this Brain"}?")
+                ModalTitle("Remove ${ui.removeTarget?.name ?: "this Brain"}?")
                 Muted(
                     "Its saved password will be deleted too. You’ll need to sign in again next time. " +
                         "This tablet stays paired.",
@@ -423,16 +444,32 @@ class MainActivity : ComponentActivity() {
                 )
                 ModalButtons("Remove", onCancel = { ui.modal = null }) {
                     ui.modal = null
-                    saved.brain = null
-                    ui.savedBrain = null
-                    ui.brainStatus = null
+                    ui.removeTarget?.let { saved.remove(it.id) }
+                    ui.removeTarget = null
+                    ui.brains = saved.brains
                     showHome()
+                }
+            }
+            // The kiosk's showSaveBrainPromptModal: opt-in, never automatic (brains-save.ts).
+            Modal.SaveToSlimeId -> SlimeModal(onDismiss = { ui.modal = null }) {
+                ModalTitle("Save to your Slime ID?")
+                Muted(
+                    "“${ui.saveTarget?.name ?: "This brain"}” will show up as a bookmark on any other device " +
+                        "you sign in to. Reconnecting there will still need a fresh pairing code.",
+                    size = 13.sp
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SecondaryButton("Not now", { ui.modal = null }, Modifier.weight(1f))
+                    PrimaryButton("Save", {
+                        ui.modal = null
+                        ui.saveTarget?.let { saveToSlimeId(it) }
+                    }, Modifier.weight(1f))
                 }
             }
             Modal.ForgetPairing -> SlimeModal(onDismiss = { ui.modal = null }) {
                 ModalTitle("Forget this pairing?")
                 Muted(
-                    "This tablet disconnects from your hub, and its saved Brain password is deleted. " +
+                    "This tablet disconnects from your hub, and its saved Brains and passwords are deleted. " +
                         "You’ll need a new pairing code to connect again.",
                     size = 13.sp
                 )
@@ -445,7 +482,7 @@ class MainActivity : ComponentActivity() {
             Modal.ResetApp -> SlimeModal(onDismiss = { ui.modal = null }) {
                 ModalTitle("Reset Slime OS on this tablet?")
                 Muted(
-                    "This removes the PIN, the pairing and the saved Brain password from this tablet. " +
+                    "This removes the PIN, the pairing, the saved Brains and the Slime ID sign-in from this tablet. " +
                         "Your Brain and everything on it stay as they are. You’ll need a new pairing " +
                         "code to connect again.",
                     size = 13.sp
@@ -481,8 +518,8 @@ class MainActivity : ComponentActivity() {
     private fun settingsInfo() = SettingsInfo(
         paired = saved.wgConfig != null,
         tunnel = ui.tunnel,
-        brainName = ui.savedBrain?.name,
-        brainHost = ui.savedBrain?.host,
+        brainNames = ui.brains.map { it.name },
+        slimeIdEmail = ui.slimeIdEmail,
         h264Supported = OpenH264.isSupported,
         h264Enabled = ui.h264Enabled,
         h264Notice = OpenH264.NOTICE,
@@ -552,8 +589,10 @@ class MainActivity : ComponentActivity() {
         val extra = mapOf<String, Any?>(
             "tunnel" to ui.tunnel.name.lowercase(),
             "paired" to (saved.wgConfig != null),
-            "brain_saved" to (ui.savedBrain != null),
-            "brain_status" to ui.brainStatus?.name?.lowercase(),
+            "brains_saved" to ui.brains.size,
+            "brain_status" to ui.brains.joinToString(",") { ui.brainStatus[it.id]?.name?.lowercase() ?: "unknown" },
+            "slime_id" to (ui.slimeIdEmail != null),
+            "slime_id_brains" to ui.remoteBrains.size,
             "pin_set" to ui.pinSet,
             "crash_reports" to ui.crashReports
         )
@@ -628,6 +667,7 @@ class MainActivity : ComponentActivity() {
     /** "Forgot PIN?": back to a fresh install. */
     private fun resetApp() {
         forgetPairing()
+        signOutSlimeId()
         appLock.clear()
         ui.pinSet = false
         ui.locked = false
@@ -637,12 +677,50 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------ navigation
 
-    private fun homeScreen(): Screen = if (saved.brain != null) Screen.Picker else Screen.Welcome
+    private fun homeScreen(): Screen =
+        if (ui.brains.isNotEmpty() || unsavedRemoteBrains().isNotEmpty()) Screen.Picker else Screen.Welcome
 
     private fun showHome() {
+        pendingBookmark = null
         ui.screen = homeScreen()
         if (ui.screen == Screen.Picker) refreshBrainStatus()
     }
+
+    private fun addBrain() {
+        ui.screen = if (saved.wgConfig == null) Screen.Pair() else Screen.AddBrain()
+    }
+
+    /** Add a Brain -> who signs in, offering to save it to the Slime ID first (coordinator.sh's addBrain). */
+    private fun brainAdded(name: String, host: String, port: Int) {
+        val brain = SavedPairing.Brain(host, port, "", "", name)
+        ui.screen = Screen.Credentials(brain, backToAddBrain = true)
+        if (ui.slimeIdEmail != null && ui.remoteBrains.none { it.host.equals(host, true) && it.port == port }) {
+            ui.saveTarget = brain
+            ui.modal = Modal.SaveToSlimeId
+        }
+    }
+
+    /** The account's Brains not saved on this tablet: matched by address, like show_picker_or_empty(). */
+    private fun unsavedRemoteBrains() =
+        ui.remoteBrains.filter { r -> ui.brains.none { it.sameAddress(r.host, r.port) } }
+
+    private fun pickerItems(): List<PickerItem> =
+        ui.brains.map { b ->
+            PickerItem(
+                key = b.id, name = b.name, host = b.host, remote = false,
+                status = ui.brainStatus[b.id], lastConnected = b.lastConnected,
+                onClick = { connectTo(b) },
+                onRemove = {
+                    ui.removeTarget = b
+                    ui.modal = Modal.RemoveBrain
+                }
+            )
+        } + unsavedRemoteBrains().map { r ->
+            PickerItem(
+                key = "remote:${r.id}", name = r.name, host = r.host, remote = true,
+                status = null, lastConnected = 0L, onClick = { connectBookmark(r) }, onRemove = null
+            )
+        }
 
     private fun setStage(text: String) {
         ui.stage = text
@@ -652,17 +730,196 @@ class MainActivity : ComponentActivity() {
         ui.screen = Screen.Error(title, body, detail, retry, reenter)
     }
 
-    /** The picker's Asleep/Offline badge (coordinator.sh's refresh_brain_status). */
+    /** The picker's Asleep/Offline badges (coordinator.sh's refresh_brain_status), probed in parallel. */
     private fun refreshBrainStatus() {
-        val brain = saved.brain ?: return
+        val brains = ui.brains
+        if (brains.isEmpty()) return
         if (ui.tunnel != TunnelUi.Up) {
-            ui.brainStatus = null
+            ui.brainStatus = emptyMap()
             return
         }
         statusJob?.cancel()
         statusJob = lifecycleScope.launch {
-            val status = withContext(Dispatchers.IO) { BrainPower.status(brain.host, brain.port) }
-            ui.brainStatus = status
+            ui.brainStatus = withContext(Dispatchers.IO) {
+                brains.map { b -> async { b.id to BrainPower.status(b.host, b.port) } }.awaitAll().toMap()
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Slime ID
+
+    private fun accountLabel(session: SlimeId.Session) =
+        session.email.ifBlank { session.name }.ifBlank { "your Slime ID" }
+
+    private fun slimeIdFoot() = SlimeIdFoot(
+        email = ui.slimeIdEmail,
+        onSignIn = { startSlimeIdSignIn() },
+        onSignOut = { signOutSlimeId() }
+    )
+
+    /** slime-id.sh's do_slime_id_login(): a code to approve on a phone, polled until approved. */
+    private fun startSlimeIdSignIn() {
+        slimeIdJob?.cancel()
+        ui.screen = Screen.Working("Slime ID")
+        setStage("Preparing sign-in…")
+        slimeIdJob = lifecycleScope.launch {
+            val code = try {
+                withContext(Dispatchers.IO) { SlimeId.start(applicationContext) }
+            } catch (e: Exception) {
+                Log.i("MainActivity", "Slime ID device/start failed: ${e.message}")
+                ui.screen = Screen.SlimeIdError("Couldn’t reach Slime ID right now.", e.message)
+                return@launch
+            }
+            ui.screen = Screen.SlimeIdEntry(code)
+            val deadline = SystemClock.elapsedRealtime() + code.expiresInS * 1000L
+            while (SystemClock.elapsedRealtime() < deadline) {
+                delay(code.intervalS * 1000L)
+                when (val poll = withContext(Dispatchers.IO) { SlimeId.poll(code.deviceCode) }) {
+                    is SlimeId.Poll.Approved -> {
+                        saved.slimeIdSession = poll.session
+                        ui.slimeIdEmail = accountLabel(poll.session)
+                        Log.i("MainActivity", "Signed in with Slime ID")
+                        showHome()
+                        refreshRemoteBrains()
+                        return@launch
+                    }
+                    SlimeId.Poll.Expired -> break
+                    SlimeId.Poll.Pending -> {}
+                }
+            }
+            ui.screen = Screen.SlimeIdError("That sign-in link expired.", "device code expired before approval")
+        }
+    }
+
+    private fun cancelSlimeIdSignIn() {
+        slimeIdJob?.cancel()
+        slimeIdJob = null
+        showHome()
+    }
+
+    /** slime_id_logout(): the server is told best effort, the tablet forgets it either way. */
+    private fun signOutSlimeId() {
+        val token = saved.slimeIdSession?.token
+        saved.slimeIdSession = null
+        ui.slimeIdEmail = null
+        ui.remoteBrains = emptyList()
+        remoteJob?.cancel()
+        if (token != null) lifecycleScope.launch(Dispatchers.IO) { SlimeId.logout(token) }
+        if (ui.screen == Screen.Picker || ui.screen == Screen.Welcome) showHome()
+    }
+
+    /** refresh_remote_brains(): the account's Brains, at a few entry points rather than every render. */
+    private fun refreshRemoteBrains() {
+        val token = saved.slimeIdSession?.token
+        if (token == null) {
+            ui.remoteBrains = emptyList()
+            return
+        }
+        remoteJob?.cancel()
+        remoteJob = lifecycleScope.launch {
+            val list = withContext(Dispatchers.IO) { SlimeId.brains(token) } ?: return@launch
+            ui.remoteBrains = list
+            linkSavedBrains(list)
+            if (ui.screen == Screen.Welcome && list.isNotEmpty()) showHome()
+        }
+    }
+
+    /**
+     * A Brain saved here that's also on the account (same address) remembers its
+     * Slime ID id and kind, so a paid one can fetch its Windows sign-in.
+     */
+    private fun linkSavedBrains(list: List<SlimeId.RemoteBrain>) {
+        var changed = false
+        val updated = saved.brains.map { b ->
+            val r = list.firstOrNull { b.sameAddress(it.host, it.port) } ?: return@map b
+            if (b.slimeIdBrainId == r.id && b.kind == r.kind) {
+                b
+            } else {
+                changed = true
+                b.copy(slimeIdBrainId = r.id, kind = r.kind)
+            }
+        }
+        if (changed) {
+            saved.brains = updated
+            ui.brains = updated
+        }
+    }
+
+    private fun saveToSlimeId(brain: SavedPairing.Brain) {
+        val token = saved.slimeIdSession?.token ?: return
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) { SlimeId.saveBrain(token, brain.name, brain.host, brain.port) }
+            Log.i("MainActivity", "Save Brain to Slime ID: ${if (ok) "saved" else "failed"}")
+            if (ok) refreshRemoteBrains()
+        }
+    }
+
+    /** A paid Brain from the account: its Windows sign-in comes from Slime ID. */
+    private fun signsInWithSlimeId(brain: SavedPairing.Brain) =
+        brain.kind == "paid" && brain.slimeIdBrainId != null && saved.slimeIdSession != null
+
+    /**
+     * A tap on a Slime ID card (coordinator.sh's remote: connect). Slime ID never holds
+     * the WireGuard key, but this tablet's tunnel may already reach the Brain: then it's
+     * saved here and connected. Only a Brain that isn't reachable asks for a pairing code,
+     * since pairing replaces the tunnel this tablet already has.
+     */
+    private fun connectBookmark(r: SlimeId.RemoteBrain) {
+        ui.notice = null
+        reconnecting = false
+        quickReconnects = 0
+        ui.connectingName = r.name
+        val config = saved.wgConfig
+        if (config == null) {
+            askPairingFor(r)
+            return
+        }
+        if (ui.tunnel == TunnelUi.Up) {
+            probeBookmark(r)
+            return
+        }
+        pendingBookmark = r
+        connectAfterTunnel = true
+        ui.screen = Screen.Connecting
+        setStage("Opening the secure tunnel…")
+        if (tunnelStarting) return
+        try {
+            startTunnel(Config.parse(config.byteInputStream()))
+        } catch (e: Exception) {
+            connectAfterTunnel = false
+            saved.wgConfig = null
+            ui.screen = Screen.Pair(hint = "The saved pairing couldn’t be read. Pair this tablet again.")
+        }
+    }
+
+    private fun askPairingFor(r: SlimeId.RemoteBrain) {
+        Log.i("MainActivity", "Slime ID Brain isn't reachable over this tablet's tunnel; needs a pairing code")
+        pendingBookmark = r
+        ui.screen = Screen.Pair(
+            hint = "Reconnecting to “${r.name}” (${r.host}) — enter a fresh pairing code from its enroll screen."
+        )
+    }
+
+    /** Tunnel up: an answering Brain, or one the hub keeps asleep, is on this tablet's network. */
+    private fun probeBookmark(r: SlimeId.RemoteBrain) {
+        pendingBookmark = r
+        ui.connectingName = r.name
+        ui.screen = Screen.Connecting
+        setStage("Looking for ${r.name}…")
+        connectJob?.cancel()
+        connectJob = lifecycleScope.launch {
+            val status = withContext(Dispatchers.IO) { BrainPower.status(r.host, r.port) }
+            if (status == BrainPower.Status.Offline) {
+                askPairingFor(r)
+                return@launch
+            }
+            pendingBookmark = null
+            Log.i("MainActivity", "Slime ID Brain is reachable over this tablet's tunnel ($status); saving it here")
+            val brain = SavedPairing.Brain(
+                r.host, r.port, "", "", r.name, kind = r.kind, slimeIdBrainId = r.id
+            )
+            if (signsInWithSlimeId(brain)) doConnect(brain)
+            else ui.screen = Screen.Credentials(brain, backToAddBrain = false)
         }
     }
 
@@ -720,11 +977,17 @@ class MainActivity : ComponentActivity() {
     private fun onTunnelUp() {
         if (tunnelForPairing) {
             tunnelForPairing = false
-            ui.screen = if (saved.brain == null) Screen.AddBrain() else Screen.Picker
+            // Paired for a Slime ID Brain: try it now.
+            pendingBookmark?.let {
+                probeBookmark(it)
+                return
+            }
+            ui.screen = if (ui.brains.isEmpty()) Screen.AddBrain() else Screen.Picker
         }
         if (connectAfterTunnel) {
             connectAfterTunnel = false
-            saved.brain?.let { doConnect(it) }
+            val bookmark = pendingBookmark
+            if (bookmark != null) probeBookmark(bookmark) else lastConnect?.let { doConnect(it) }
             return
         }
         if (ui.screen == Screen.Picker) refreshBrainStatus()
@@ -758,8 +1021,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         saved.clear()
-        ui.savedBrain = null
-        ui.brainStatus = null
+        pendingBookmark = null
+        ui.brains = emptyList()
+        ui.brainStatus = emptyMap()
         ui.notice = null
         ui.tunnel = TunnelUi.Down
         ui.screen = Screen.Welcome
@@ -767,11 +1031,17 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------ sessions
 
-    /** A tap on a Brain: brings the tunnel up first if it's down. */
+    /** A tap on a Brain: asks who signs in if nobody's saved, brings the tunnel up first if it's down. */
     private fun connectTo(brain: SavedPairing.Brain) {
         ui.notice = null
         reconnecting = false
         quickReconnects = 0
+        pendingBookmark = null
+        if (brain.password.isEmpty() && !signsInWithSlimeId(brain)) {
+            ui.screen = Screen.Credentials(brain, backToAddBrain = false)
+            return
+        }
+        ui.connectingName = brain.name
         if (ui.tunnel == TunnelUi.Up) {
             doConnect(brain)
             return
@@ -781,8 +1051,6 @@ class MainActivity : ComponentActivity() {
             ui.screen = Screen.Pair()
             return
         }
-        saved.brain = brain
-        ui.savedBrain = brain
         lastConnect = brain
         connectAfterTunnel = true
         ui.screen = Screen.Connecting
@@ -810,7 +1078,7 @@ class MainActivity : ComponentActivity() {
         sessionRunning = false
         Reporter.sessionEnded(applicationContext)
         // This activity may have been recreated while the session ran.
-        val target = lastConnect ?: saved.brain
+        val target = lastConnect ?: ui.brains.maxByOrNull { it.lastConnected }
         val host = target?.host ?: ""
         val endedByUser = data?.getBooleanExtra(SessionActivity.RESULT_ENDED_BY_USER, false) ?: false
         val errorInfo = data?.getIntExtra(SessionActivity.RESULT_ERROR_INFO, 0) ?: 0
@@ -907,14 +1175,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun doConnect(brain: SavedPairing.Brain) {
-        saved.brain = brain
-        ui.savedBrain = brain
+    private fun doConnect(target: SavedPairing.Brain) {
+        val brain = target.copy(lastConnected = System.currentTimeMillis())
+        saved.put(brain)
+        ui.brains = saved.brains
         lastConnect = brain
+        ui.connectingName = brain.name
         val (host, port) = brain.host to brain.port
         if (!reconnecting) ui.screen = Screen.Connecting
         connectJob?.cancel()
         connectJob = lifecycleScope.launch {
+            // A password saved here wins; a paid Brain without one gets it from Slime ID,
+            // fresh before every connect and never stored (connect.sh's fetch_brain_credential).
+            var username = brain.username
+            var password = brain.password
+            if (password.isEmpty()) {
+                val token = saved.slimeIdSession?.token
+                val id = brain.slimeIdBrainId
+                val credential = if (token != null && id != null && brain.kind == "paid") {
+                    if (!reconnecting) setStage("Getting your sign-in from Slime ID…")
+                    withContext(Dispatchers.IO) { SlimeId.credential(token, id) }
+                } else {
+                    null
+                }
+                if (credential == null) {
+                    Log.i("MainActivity", "No Slime ID sign-in for this Brain; asking for it")
+                    reconnecting = false
+                    quickReconnects = 0
+                    ui.screen = Screen.Credentials(brain, backToAddBrain = false)
+                    return@launch
+                }
+                username = credential.username.ifEmpty { brain.username }
+                password = credential.password
+            }
             withContext(Dispatchers.IO) {
                 OpenH264.prepareSession(applicationContext) {
                     runOnUiThread { setStage("Downloading the video codec from Cisco…") }
@@ -941,7 +1234,7 @@ class MainActivity : ComponentActivity() {
             Log.i("MainActivity", "Session size ${size.x}x${size.y} (${DisplayPrefs.resolution(applicationContext)})")
             rdpSessionLauncher.launch(
                 RdpLauncher.buildSessionIntent(
-                    this@MainActivity, host, port, brain.username, brain.password,
+                    this@MainActivity, host, port, username, password,
                     widthPx = size.x, heightPx = size.y
                 )
             )
@@ -1023,8 +1316,11 @@ private sealed interface Screen {
         val host: String = "",
         val port: Int = 3389
     ) : Screen
-    data class Credentials(val name: String, val host: String, val port: Int, val username: String) : Screen
+    /** Who signs in on [brain]; Back goes to Add a Brain when it's being added by hand. */
+    data class Credentials(val brain: SavedPairing.Brain, val backToAddBrain: Boolean) : Screen
     object Picker : Screen
+    data class SlimeIdEntry(val code: SlimeId.DeviceCode) : Screen
+    data class SlimeIdError(val message: String, val detail: String?) : Screen
     object Connecting : Screen
     object Reconnecting : Screen
     data class Error(
@@ -1036,7 +1332,7 @@ private sealed interface Screen {
     ) : Screen
 }
 
-private enum class Modal { RemoveBrain, ForgetPairing, ResetApp, Licence }
+private enum class Modal { RemoveBrain, SaveToSlimeId, ForgetPairing, ResetApp, Licence }
 
 private class UiState {
     var screen by mutableStateOf<Screen>(Screen.Welcome)
@@ -1047,8 +1343,14 @@ private class UiState {
     var pingFailed by mutableStateOf(false)
     var device by mutableStateOf<DeviceStatus?>(null)
     var demoBrain by mutableStateOf(false)
-    var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
-    var brainStatus by mutableStateOf<BrainPower.Status?>(null)
+    var brains by mutableStateOf<List<SavedPairing.Brain>>(emptyList())
+    var brainStatus by mutableStateOf<Map<String, BrainPower.Status>>(emptyMap())
+    /** The Slime ID account's Brains (empty when signed out). */
+    var remoteBrains by mutableStateOf<List<SlimeId.RemoteBrain>>(emptyList())
+    var slimeIdEmail by mutableStateOf<String?>(null)
+    var connectingName by mutableStateOf("your Brain")
+    var removeTarget by mutableStateOf<SavedPairing.Brain?>(null)
+    var saveTarget by mutableStateOf<SavedPairing.Brain?>(null)
     var reconnectAttempt by mutableIntStateOf(0)
     var h264Enabled by mutableStateOf(false)
     var smoothResolution by mutableStateOf(true)
