@@ -24,8 +24,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -44,6 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -183,14 +190,19 @@ class MainActivity : ComponentActivity() {
         ui.pinRetryAt = appLock.retryAtMs
         ui.screen = homeScreen()
 
-        // The status strip's signal bars, while the app is on screen.
+        // The status strip's tunnel quality and the tablet's own network and battery,
+        // while the app is on screen.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
-                    ui.pingMs = if (ui.tunnel == TunnelUi.Up) {
-                        withContext(Dispatchers.IO) { BrainPower.pingHubMs() }
+                    ui.device = DeviceStatus.read(applicationContext)
+                    if (ui.tunnel == TunnelUi.Up) {
+                        val ms = withContext(Dispatchers.IO) { BrainPower.pingHubMs() }
+                        ui.pingMs = ms
+                        ui.pingFailed = ms == null
                     } else {
-                        null
+                        ui.pingMs = null
+                        ui.pingFailed = false
                     }
                     delay(5_000)
                 }
@@ -223,6 +235,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        hideStatusBar()
         // Paired before: bring the saved tunnel back up instead of asking for a new
         // code. Here rather than in onCreate: Android refuses to start the VPN
         // service while the app is in the background (e.g. launched with the screen
@@ -240,17 +253,37 @@ class MainActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------ UI
 
+    /**
+     * The Membrane screens draw their own status strip (tunnel, network, battery,
+     * clock), so Android's status bar stays hidden; a swipe from the top shows it for a
+     * moment. The navigation bar stays for Back and Home. The session screen hides both
+     * on its own (RdpLauncher).
+     */
+    private fun hideStatusBar() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
+    }
+
     @Composable
     private fun App() {
+        // The status bar is hidden, so also keep clear of a camera cutout in its place.
+        val screenInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
         SlimeBackground {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val compact = maxWidth < 600.dp
                 val fullHeight = maxHeight
-                Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Column(Modifier.fillMaxSize().windowInsetsPadding(screenInsets)) {
                     val settingsAllowed = !ui.locked && ui.pinSet && !ui.changingPin &&
                         ui.screen !is Screen.Working
                     StatusStrip(
-                        ui.tunnel, ui.pingMs,
+                        ui.tunnel, ui.pingMs, ui.pingFailed, ui.device,
                         onSettings = if (settingsAllowed) ({ ui.settingsTab = SettingsTab.Pairing }) else null
                     )
                     BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).imePadding()) {
@@ -268,7 +301,7 @@ class MainActivity : ComponentActivity() {
                     // imePadding: the panel shrinks to the space above the keyboard (half a
                     // landscape tablet), and its page scrolls the field being typed in into view.
                     BoxWithConstraints(
-                        Modifier.fillMaxSize().background(Color(0x99040608)).systemBarsPadding().imePadding()
+                        Modifier.fillMaxSize().background(Color(0x99040608)).windowInsetsPadding(screenInsets).imePadding()
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() }, indication = null
                             ) { ui.settingsTab = null },
@@ -999,6 +1032,8 @@ private class UiState {
     var notice by mutableStateOf<String?>(null)
     var tunnel by mutableStateOf(TunnelUi.Down)
     var pingMs by mutableStateOf<Long?>(null)
+    var pingFailed by mutableStateOf(false)
+    var device by mutableStateOf<DeviceStatus?>(null)
     var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
     var brainStatus by mutableStateOf<BrainPower.Status?>(null)
     var reconnectAttempt by mutableIntStateOf(0)

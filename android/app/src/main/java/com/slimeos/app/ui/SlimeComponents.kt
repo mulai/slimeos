@@ -1,5 +1,6 @@
 package com.slimeos.app.ui
 
+import android.text.format.DateFormat
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
@@ -34,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,17 +45,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -67,7 +75,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.slimeos.app.DeviceStatus
 import com.slimeos.app.R
+import kotlinx.coroutines.delay
 
 // The kiosk's building blocks (.screen, .card, .btn-*, input.field, .brain-card,
 // .ring-wrap, .error-card, .modal-card, ...), sized like the CSS.
@@ -102,9 +112,31 @@ fun SlimeBackground(content: @Composable BoxScope.() -> Unit) {
 
 enum class TunnelUi { Down, Connecting, Up }
 
-/** .status-strip: brand on the left; tunnel, settings and signal bars on the right. */
+/** How the tunnel to the hub is doing, from the hub ping. Same thresholds as the kiosk's tunnelQuality(). */
+enum class TunnelQuality { Down, Connecting, Good, Slow, Weak }
+
+fun tunnelQuality(tunnel: TunnelUi, pingMs: Long?, pingFailed: Boolean): TunnelQuality = when {
+    tunnel == TunnelUi.Down -> TunnelQuality.Down
+    tunnel == TunnelUi.Connecting -> TunnelQuality.Connecting
+    pingFailed || (pingMs != null && pingMs >= 400) -> TunnelQuality.Weak
+    pingMs != null && pingMs >= 200 -> TunnelQuality.Slow
+    else -> TunnelQuality.Good
+}
+
+/**
+ * .status-strip: brand on the left; the hub tunnel and settings, then the tablet's own
+ * network, battery and clock on the right (Android's status bar is hidden on these
+ * screens). The tunnel shows its quality in its own colour and words, never as bars,
+ * so it can't be mistaken for the Wi-Fi or mobile signal next to it.
+ */
 @Composable
-fun StatusStrip(tunnel: TunnelUi, pingMs: Long?, onSettings: (() -> Unit)?) {
+fun StatusStrip(
+    tunnel: TunnelUi,
+    pingMs: Long?,
+    pingFailed: Boolean,
+    device: DeviceStatus?,
+    onSettings: (() -> Unit)?
+) {
     val mono = TextStyle(fontFamily = Slime.Mono, fontSize = 11.5.sp, letterSpacing = 0.5.sp)
     Row(
         modifier = Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 22.dp),
@@ -119,26 +151,37 @@ fun StatusStrip(tunnel: TunnelUi, pingMs: Long?, onSettings: (() -> Unit)?) {
         Text("Slime OS", style = mono, color = Slime.TextMuted)
         Spacer(Modifier.weight(1f))
 
-        val color = when (tunnel) {
-            TunnelUi.Up -> Slime.AuroraGreen
-            TunnelUi.Connecting -> Slime.Mint
-            TunnelUi.Down -> Slime.TextDim
+        val quality = tunnelQuality(tunnel, pingMs, pingFailed)
+        val color = when (quality) {
+            TunnelQuality.Good -> Slime.AuroraGreen
+            TunnelQuality.Connecting -> Slime.Mint
+            TunnelQuality.Slow -> Slime.Amber
+            TunnelQuality.Weak -> Slime.Error
+            TunnelQuality.Down -> Slime.TextDim
         }
-        Box(
-            Modifier.size(6.dp).drawBehind {
-                drawCircle(color.copy(alpha = 0.35f), radius = size.minDimension)
-                drawCircle(color)
-            }
-        )
-        Spacer(Modifier.width(7.dp))
-        Text(
-            when (tunnel) {
-                TunnelUi.Up -> "Secure tunnel"
-                TunnelUi.Connecting -> "Connecting…"
-                TunnelUi.Down -> "Not connected"
+        val label = when (quality) {
+            TunnelQuality.Good -> "Secure tunnel"
+            TunnelQuality.Connecting -> "Connecting…"
+            TunnelQuality.Slow -> "Tunnel slow"
+            TunnelQuality.Weak -> "Tunnel weak"
+            TunnelQuality.Down -> "Not connected"
+        }
+        Row(
+            Modifier.semantics(mergeDescendants = true) {
+                contentDescription = "Secure tunnel to the Slime OS hub: " + label +
+                    (if (tunnel == TunnelUi.Up && pingMs != null) ", $pingMs milliseconds" else "")
             },
-            style = mono, color = color
-        )
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(6.dp).drawBehind {
+                    drawCircle(color.copy(alpha = 0.35f), radius = size.minDimension)
+                    drawCircle(color)
+                }
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(label, style = mono, color = color)
+        }
         if (onSettings != null) {
             Spacer(Modifier.width(14.dp))
             Box(
@@ -151,32 +194,163 @@ fun StatusStrip(tunnel: TunnelUi, pingMs: Long?, onSettings: (() -> Unit)?) {
                     modifier = Modifier.size(17.dp), colorFilter = ColorFilter.tint(Slime.TextMuted)
                 )
             }
+        } else {
+            Spacer(Modifier.width(14.dp))
         }
-        Spacer(Modifier.width(10.dp))
-        SignalBars(level = signalLevel(tunnel, pingMs))
+        if (device != null) {
+            // A hairline between the Slime OS group and the tablet's own status.
+            Box(Modifier.padding(horizontal = 6.dp).width(1.dp).height(14.dp).background(Slime.Border))
+            Spacer(Modifier.width(8.dp))
+            NetworkIcon(device)
+            device.batteryPercent?.let {
+                Spacer(Modifier.width(12.dp))
+                BatteryIcon(it, device.charging)
+                Spacer(Modifier.width(5.dp))
+                Text("$it%", style = mono, color = Slime.TextMuted)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        StripClock(mono)
     }
 }
 
-// Same thresholds as the kiosk's tunnelBarLevel().
-private fun signalLevel(tunnel: TunnelUi, ms: Long?): Int = when {
-    tunnel != TunnelUi.Up || ms == null -> 0
-    ms < 80 -> 3
-    ms < 200 -> 2
-    ms < 400 -> 1
-    else -> 0
+/** Wi-Fi fan or mobile bars, lit to the signal level; dimmed with a slash when offline. */
+@Composable
+private fun NetworkIcon(device: DeviceStatus) {
+    val on = Slime.TextSoft
+    val off = Slime.TextMuted.copy(alpha = 0.28f)
+    val description = when (device.network) {
+        DeviceStatus.Network.Wifi -> "Wi-Fi, signal ${device.signal} of 3"
+        DeviceStatus.Network.Cellular -> "Mobile data, signal ${device.signal} of 4"
+        DeviceStatus.Network.Ethernet -> "Ethernet"
+        DeviceStatus.Network.None -> "No internet connection"
+    }
+    Canvas(Modifier.size(16.dp).semantics { contentDescription = description }) {
+        val w = size.width
+        val h = size.height
+        when (device.network) {
+            DeviceStatus.Network.Wifi, DeviceStatus.Network.None -> {
+                // Three arcs and a dot, fanning up from the bottom centre.
+                val cx = w / 2
+                val cy = h * 0.88f
+                val stroke = w * 0.11f
+                listOf(0.30f, 0.56f, 0.82f).forEachIndexed { i, r ->
+                    val radius = w * r
+                    val lit = device.network == DeviceStatus.Network.Wifi && device.signal >= i + 1
+                    drawArc(
+                        color = if (lit) on else off,
+                        startAngle = 225f, sweepAngle = 90f, useCenter = false,
+                        topLeft = Offset(cx - radius, cy - radius),
+                        size = Size(radius * 2, radius * 2),
+                        style = Stroke(width = stroke, cap = StrokeCap.Round)
+                    )
+                }
+                drawCircle(
+                    if (device.network == DeviceStatus.Network.Wifi) on else off,
+                    radius = w * 0.08f, center = Offset(cx, cy - w * 0.04f)
+                )
+                if (device.network == DeviceStatus.Network.None) {
+                    drawLine(
+                        Slime.TextMuted, Offset(w * 0.12f, h * 0.10f), Offset(w * 0.88f, h * 0.90f),
+                        strokeWidth = stroke, cap = StrokeCap.Round
+                    )
+                }
+            }
+            DeviceStatus.Network.Cellular -> {
+                // Four rising bars: the phone's own signal, not the tunnel.
+                val gap = w * 0.08f
+                val bw = (w - gap * 3) / 4
+                for (i in 0 until 4) {
+                    val bh = h * (0.34f + 0.22f * i)
+                    drawRoundRect(
+                        if (device.signal >= i + 1) on else off,
+                        topLeft = Offset(i * (bw + gap), h - bh),
+                        size = Size(bw, bh),
+                        cornerRadius = CornerRadius(bw * 0.3f)
+                    )
+                }
+            }
+            DeviceStatus.Network.Ethernet -> {
+                // A plug: a square jack with three pins.
+                val s = w * 0.11f
+                drawRoundRect(
+                    on, topLeft = Offset(w * 0.14f, h * 0.30f),
+                    size = Size(w * 0.72f, h * 0.56f),
+                    cornerRadius = CornerRadius(w * 0.08f), style = Stroke(width = s)
+                )
+                for (i in 0 until 3) {
+                    val x = w * (0.34f + 0.16f * i)
+                    drawLine(on, Offset(x, h * 0.46f), Offset(x, h * 0.62f), strokeWidth = s * 0.8f)
+                }
+            }
+        }
+    }
 }
 
+/** Battery outline filled to the level; a bolt while charging; red under 15 %. */
 @Composable
-private fun SignalBars(level: Int) {
-    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        listOf(4.dp, 7.dp, 11.dp).forEachIndexed { i, h ->
-            Box(
-                Modifier.width(3.dp).height(h).clip(RoundedCornerShape(1.dp)).background(
-                    if (i < level) Slime.Mint else Slime.TextMuted.copy(alpha = 0.25f)
-                )
+private fun BatteryIcon(percent: Int, charging: Boolean) {
+    val fill = when {
+        charging -> Slime.AuroraGreen
+        percent < 15 -> Slime.Error
+        else -> Slime.TextSoft
+    }
+    Canvas(
+        Modifier.width(22.dp).height(11.dp).semantics {
+            contentDescription = "Battery $percent percent" + if (charging) ", charging" else ""
+        }
+    ) {
+        val w = size.width
+        val h = size.height
+        val stroke = h * 0.11f
+        val bodyW = w * 0.88f
+        drawRoundRect(
+            Slime.TextMuted, topLeft = Offset(stroke / 2, stroke / 2),
+            size = Size(bodyW - stroke, h - stroke),
+            cornerRadius = CornerRadius(h * 0.22f), style = Stroke(width = stroke)
+        )
+        drawRoundRect(
+            Slime.TextMuted, topLeft = Offset(bodyW + w * 0.02f, h * 0.30f),
+            size = Size(w * 0.08f, h * 0.40f),
+            cornerRadius = CornerRadius(h * 0.1f)
+        )
+        val inset = stroke * 2
+        val innerW = (bodyW - inset * 2) * (percent.coerceIn(0, 100) / 100f)
+        if (innerW > 0f) {
+            drawRoundRect(
+                fill, topLeft = Offset(inset, inset),
+                size = Size(innerW, h - inset * 2),
+                cornerRadius = CornerRadius(h * 0.1f)
             )
         }
+        if (charging) {
+            val bolt = Path().apply {
+                moveTo(bodyW * 0.56f, h * 0.08f)
+                lineTo(bodyW * 0.34f, h * 0.56f)
+                lineTo(bodyW * 0.50f, h * 0.56f)
+                lineTo(bodyW * 0.44f, h * 0.92f)
+                lineTo(bodyW * 0.68f, h * 0.42f)
+                lineTo(bodyW * 0.52f, h * 0.42f)
+                close()
+            }
+            drawPath(bolt, Slime.Shell)
+        }
     }
+}
+
+/** HH:mm (or h:mm with the tablet's 12-hour setting), ticking on the minute. */
+@Composable
+private fun StripClock(style: TextStyle) {
+    val context = LocalContext.current
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(60_000 - now % 60_000)
+        }
+    }
+    val pattern = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm"
+    Text(DateFormat.format(pattern, now).toString(), style = style, color = Slime.TextMuted)
 }
 
 /** The colour mark; [drip] for the welcome screen, without it elsewhere (slimeBlobSVG). */
