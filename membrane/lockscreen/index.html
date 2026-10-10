@@ -452,7 +452,15 @@
  Load with ?demo=1 to run a self-contained driver (bottom of this file) that
  seeds two Brains, logs every slime:* event to the console, and simulates a
  connect → connecting → error → retry → connecting → reconnecting flow so
- every screen is reachable by clicking through. Without ?demo=1 the page
+ every screen is reachable by clicking through.
+
+ ?demo=site is the same driver for the slimeos.com demo, which shows this
+ page in an iframe: the tunnel is up, the clock is real, and Connect goes
+ straight to 'sessionActive' and tells the parent page
+ ({ source: 'slimeos-membrane', type: 'session-start', brain: { name, host } }),
+ which then shows its Brain desktop over this page. Disconnect here sends
+ 'session-end'; the parent's own Disconnect sends
+ { source: 'slimeos-site', type: 'session-end' } back. Without ?demo=1 the page
  boots to 'disconnected' and opens a WebSocket to slimeos-bridge on
  ws://127.0.0.1:7770 (see the bridge glue script at the bottom of this file);
  the real backend takes over from there via SlimeUI calls.
@@ -548,9 +556,6 @@
   .status-strip .right{display:flex;align-items:center;gap:18px;}
   .tunnel-dot{width:6px;height:6px;border-radius:50%;display:inline-block;}
   .tunnel{display:flex;align-items:center;gap:6px;}
-  .bars{display:flex;align-items:flex-end;gap:2px;height:11px;}
-  .bars span{width:3px;background:rgba(139,151,167,0.25);border-radius:1px;transition:background 0.2s;}
-  .bars span.lit{background:var(--mint);}
   .settings-gear{display:flex;align-items:center;cursor:pointer;color:var(--text-muted);outline:none;}
   .settings-gear:hover{color:#C9D3DF;}
   .settings-gear:focus-visible{outline:2px solid var(--mint);outline-offset:3px;border-radius:4px;}
@@ -767,12 +772,11 @@
       <span>Slime OS</span>
     </div>
     <div class="right">
-      <span class="tunnel" id="tunnelIndicator"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
+      <span class="tunnel" id="tunnelIndicator" title="Secure tunnel to the Slime OS hub"><span class="tunnel-dot" id="tunnelDot"></span><span id="tunnelLabel">Not connected</span></span>
       <span class="settings-gear hidden" id="btnUpdate" tabindex="0" role="button" title="Update available"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg></span>
       <span class="settings-gear" id="btnOpenSettings" tabindex="0" role="button" title="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8.1 8.1 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8.1 8.1 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1l.4 2.9h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.1-1.6Z"></path></svg></span>
       <span class="settings-gear hidden" id="btnLockNow" tabindex="0" role="button" title="Lock now"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span>
       <span class="settings-gear" id="btnPower" tabindex="0" role="button" title="Power options"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v8"></path><path d="M18.4 6.6a9 9 0 1 1-12.8 0"></path></svg></span>
-      <span class="bars" id="tunnelBars" title="Connection quality"><span id="bar1" style="height:4px;"></span><span id="bar2" style="height:7px;"></span><span id="bar3" style="height:11px;"></span></span>
       <span id="clockLabel">--:--</span>
     </div>
   </div>
@@ -1037,13 +1041,13 @@
     lastTunnel = tunnel;
     var dot = document.getElementById('tunnelDot');
     var label = document.getElementById('tunnelLabel');
-    var color = tunnel === 'up' ? '#00FF87' : tunnel === 'connecting' ? '#5FE6D2' : '#56616f';
-    var text = tunnel === 'up' ? 'Secure tunnel' : tunnel === 'connecting' ? 'Connecting\u2026' : 'Not connected';
-    dot.style.background = color;
-    dot.style.boxShadow = '0 0 6px ' + color;
-    label.style.color = color;
-    label.textContent = text;
-    renderTunnelBars(tunnel);
+    var q = TUNNEL_QUALITY[tunnelQuality(tunnel, tunnelPingMs, tunnelPingFailed)];
+    dot.style.background = q.color;
+    dot.style.boxShadow = '0 0 6px ' + q.color;
+    label.style.color = q.color;
+    label.textContent = q.text;
+    document.getElementById('tunnelIndicator').title = 'Secure tunnel to the Slime OS hub' +
+      (tunnel === 'up' && tunnelPingMs != null ? ' \u00b7 ' + tunnelPingMs + ' ms' : '');
 
     // Ping only runs while the tunnel is actually up -- no point timing a
     // request over a down/still-connecting tunnel. Purely client-side
@@ -1056,45 +1060,60 @@
     // indicator, so this reads as the same feature Tommy's used to.
     if (tunnel === 'up'){
       if (!tunnelPingTimer){
-        measureTunnelPing();
+        // Timer first: the demo's measureTunnelPing() calls back into
+        // renderTunnel() synchronously.
         tunnelPingTimer = setInterval(measureTunnelPing, 5000);
+        measureTunnelPing();
       }
     } else if (tunnelPingTimer){
       clearInterval(tunnelPingTimer);
       tunnelPingTimer = null;
       tunnelPingMs = null;
+      tunnelPingFailed = false;
     }
   }
 
-  // Signal-strength icon instead of a numeric "·Xms" label -- lower latency
-  // lights more bars, same idea as a phone's signal indicator. Thresholds
-  // are a reasonable default (not measured against real-world Brain RTTs);
-  // adjust here if they read wrong in practice.
-  function tunnelBarLevel(tunnel, ms){
-    if (tunnel !== 'up' || ms == null) return 0;
-    if (ms < 80) return 3;
-    if (ms < 200) return 2;
-    if (ms < 400) return 1;
-    return 0;
-  }
-  function renderTunnelBars(tunnel){
-    var level = tunnelBarLevel(tunnel, tunnelPingMs);
-    [1, 2, 3].forEach(function(n){
-      document.getElementById('bar' + n).classList.toggle('lit', n <= level);
-    });
+  // The tunnel's quality shows in its own dot colour and words, not as
+  // signal bars: bars read as the device's Wi-Fi or mobile signal (the
+  // tablet and phone apps show those next to it). Latency is in the
+  // tooltip. Same thresholds as the Android app's tunnelQuality().
+  var TUNNEL_QUALITY = {
+    down:       { color: '#56616f', text: 'Not connected' },
+    connecting: { color: '#5FE6D2', text: 'Connecting\u2026' },
+    good:       { color: '#00FF87', text: 'Secure tunnel' },
+    slow:       { color: '#F5B955', text: 'Tunnel slow' },
+    weak:       { color: '#FF8F8F', text: 'Tunnel weak' }
+  };
+  function tunnelQuality(tunnel, ms, failed){
+    if (tunnel === 'connecting') return 'connecting';
+    if (tunnel !== 'up') return 'down';
+    if (failed || (ms != null && ms >= 400)) return 'weak';
+    if (ms != null && ms >= 200) return 'slow';
+    return 'good';
   }
 
   var tunnelPingMs = null;
+  var tunnelPingFailed = false;
   var tunnelPingTimer = null;
   function measureTunnelPing(){
+    if (isDemo){
+      // No hub to reach from a browser: never probe a private address from
+      // the website demo. A made-up healthy latency instead.
+      tunnelPingMs = 14 + Math.round(Math.random() * 18);
+      tunnelPingFailed = false;
+      if (lastTunnel === 'up') renderTunnel('up');
+      return;
+    }
     var t0 = performance.now();
     fetch('http://10.10.0.1:7677/status', { mode: 'no-cors', cache: 'no-store' })
       .then(function(){
         tunnelPingMs = Math.round(performance.now() - t0);
+        tunnelPingFailed = false;
         if (lastTunnel === 'up') renderTunnel('up');
       })
       .catch(function(){
         tunnelPingMs = null;
+        tunnelPingFailed = true;
         if (lastTunnel === 'up') renderTunnel('up');
       });
   }
@@ -3146,7 +3165,8 @@
   };
 
   var params = new URLSearchParams(window.location.search);
-  var isDemo = params.get('demo') === '1';
+  var isSiteDemo = params.get('demo') === 'site';
+  var isDemo = params.get('demo') === '1' || isSiteDemo;
 
   /* initial paint */
   if (isDemo){
@@ -3465,12 +3485,52 @@
       window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
-    setStatus({ clock: '14:32', tunnel: 'down' });
+    var demoIdleTunnel = isSiteDemo ? 'up' : 'down';
+    if (isSiteDemo){
+      var nowHm = new Date();
+      setStatus({ clock: String(nowHm.getHours()).padStart(2, '0') + ':' + String(nowHm.getMinutes()).padStart(2, '0'), tunnel: 'up' });
+    } else {
+      setStatus({ clock: '14:32', tunnel: 'down' });
+    }
     window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
+
+    function postToSite(type, extra){
+      if (!isSiteDemo || window.parent === window) return;
+      var msg = { source: 'slimeos-membrane', type: type };
+      for (var k in (extra || {})) msg[k] = extra[k];
+      window.parent.postMessage(msg, '*');
+    }
+    function endSiteSession(){
+      setStatus({ tunnel: 'up' });
+      window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
+    }
+    if (isSiteDemo){
+      window.addEventListener('message', function(e){
+        if (e.source !== window.parent || !e.data || e.data.source !== 'slimeos-site') return;
+        if (e.data.type === 'session-end' && current.state === 'sessionActive') endSiteSession();
+      });
+      document.addEventListener('slime:cancel-connect', function(){
+        if (current.state === 'sessionActive') postToSite('session-end');
+        endSiteSession();
+      });
+    }
 
     document.addEventListener('slime:connect', function(e){
       var b = demoBrains.filter(function(x){ return String(x.id) === String(e.detail.id); })[0];
       if (!b) return;
+      if (isSiteDemo){
+        window.SlimeUI.setState('connecting', { brainName: b.name, stage: 'Waking up your Brain\u2026' });
+        setTimeout(function(){
+          if (current.state !== 'connecting') return;
+          window.SlimeUI.setState('connecting', { brainName: b.name, stage: 'Securing the connection\u2026' });
+        }, 900);
+        setTimeout(function(){
+          if (current.state !== 'connecting') return;
+          window.SlimeUI.setState('sessionActive', { brainName: b.name });
+          postToSite('session-start', { brain: { name: b.name, host: b.host } });
+        }, 1900);
+        return;
+      }
       setStatus({ tunnel: 'connecting' });
       window.SlimeUI.setState('connecting', { brainName: b.name, stage: 'Waking up your Brain\u2026' });
       setTimeout(function(){
@@ -3529,7 +3589,7 @@
         window.SlimeUI.setState('pairEntry', { mode: pmode, skippable: pmode === 'boot' });
         return;
       }
-      setStatus({ tunnel: 'down' });
+      setStatus({ tunnel: demoIdleTunnel });
       window.SlimeUI.setState('picker', { brains: demoBrains, signedInEmail: demoSignedInEmail });
     });
 
