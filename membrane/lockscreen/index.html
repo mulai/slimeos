@@ -654,6 +654,16 @@
   .brain-status-badge{display:inline-block;font-family:var(--font-sans, inherit);font-weight:600;font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;border-radius:5px;padding:2px 6px;margin-left:4px;vertical-align:middle;}
   .brain-status-badge.asleep{color:var(--amber);background:rgba(245,185,85,0.12);}
   .brain-status-badge.offline{color:var(--text-dim);background:rgba(86,97,111,0.18);}
+  /* Demo Brain: the slimeos.com demo desktop, offered while no Brain is added. */
+  .brain-avatar.demo{background:linear-gradient(150deg,#00F2FE,#00C2A8);}
+  .demo-brain-card{margin-top:30px;text-align:left;}
+  .demo-brain{position:fixed;inset:0;z-index:60;background:var(--shell);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:var(--font-mono);font-size:12.5px;color:var(--text-muted);}
+  .demo-brain iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--shell);visibility:hidden;}
+  .demo-brain.loaded iframe{visibility:visible;}
+  .demo-brain-bar{position:absolute;top:0;left:50%;transform:translateX(-50%);z-index:1;display:flex;align-items:center;gap:10px;padding:5px 8px 5px 12px;border-radius:0 0 12px 12px;background:rgba(8,12,16,0.85);border:1px solid rgba(255,255,255,0.1);border-top:0;font-family:var(--font-mono);font-size:11.5px;color:#C9D3DF;white-space:nowrap;}
+  .demo-brain-bar .tunnel-dot{background:var(--aurora-green, #00FF87);box-shadow:0 0 6px #00FF87;}
+  .demo-brain-bar button{border:1px solid rgba(255,255,255,0.14);background:transparent;color:#EAF1F7;border-radius:7px;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:11.5px;}
+  .demo-brain-bar button:focus-visible{outline:2px solid var(--mint);outline-offset:2px;}
   .add-card{width:280px;background:transparent;border:1px dashed rgba(255,255,255,0.16);border-radius:16px;padding:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;min-height:96px;outline:none;color:var(--text-muted);}
   .add-card:hover{border-color:rgba(0,194,168,0.5);color:var(--mint);}
 
@@ -1235,6 +1245,9 @@
   // via this catch instead of the generic global fallback -- swallow, don't
   // rethrow, so it isn't double-reported.
   function render(){
+    // The demo Brain only belongs over the welcome screen: the lock screen,
+    // a pairing flow or a real Brain session replaces it.
+    if (demoBrainOpen && current.state !== 'empty') closeDemoBrain();
     try { renderImpl(); }
     catch (err) { reportCaughtError(err); }
     renderUpdateIcon();
@@ -1271,6 +1284,9 @@
   });
   setInterval(guarded(function(){
     if (!idleLockEnabled || idleLockMinutes <= 0) return;
+    // Input inside the demo Brain's iframe never reaches this page: treat it
+    // like a Brain session, which the idle lock leaves alone.
+    if (demoBrainOpen){ lastActivityAt = Date.now(); return; }
     var st = current.state, d = current.data || {};
     var inSettings = SETTINGS_STATES[st] && d.mode === 'settings';
     if (!(st === 'picker' || st === 'empty' || st === 'securitySettings' || inSettings)) return;
@@ -1420,7 +1436,8 @@
         '<span style="display:inline-block;animation:blobFloat 6s ease-in-out infinite;">' + slimeBlobSVG(96, 'color', true) + '</span>' +
         '<h1 class="title">Welcome to Slime OS</h1>' +
         '<p class="subtitle">Your Brain is a computer in the cloud that does the heavy lifting. Add one so this machine can connect to it.</p>' +
-        '<button class="btn-primary" style="margin-top:36px;" id="btnAddBrain" data-autofocus>Add a Brain</button>' +
+        demoBrainCardHTML() +
+        '<button class="btn-primary" style="margin-top:28px;" id="btnAddBrain" data-autofocus>Add a Brain</button>' +
         (data.signedInEmail
           ? (
               '<p class="btn-ghost" style="margin-top:22px;margin-bottom:0;cursor:default;">Signed in as ' + escapeHtml(maskEmail(data.signedInEmail)) + '</p>' +
@@ -1430,6 +1447,80 @@
       '</div>'
     );
   }
+
+  // Demo Brain: until a Brain is added (the 'empty' screen), a card that opens
+  // the slimeos.com demo desktop full screen, so a new Membrane shows what a
+  // Brain session feels like before anyone buys or sets one up. It's a web
+  // page in an iframe (no RDP, no Brain, no hub), closed with the bar's
+  // Disconnect, by the page itself, or by the lock screen.
+  var DEMO_BRAIN_URL = 'https://www.slimeos.com/demo/brain/'; // www: slimeos.com 301s there
+  var demoBrainOpen = false;
+  var demoBrainTimer = null;
+
+  function demoBrainCardHTML(){
+    return (
+      '<div class="brain-card demo-brain-card" tabindex="0" id="demoBrainCard">' +
+        '<div class="brain-row">' +
+          '<div class="brain-id">' +
+            '<span class="brain-avatar demo">D</span>' +
+            '<div style="min-width:0;">' +
+              '<div class="brain-name"><span class="brain-name-text">Demo Brain</span> <span class="brain-bookmark-badge">Demo</span></div>' +
+              '<div class="brain-host">slimeos.com</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="brain-meta"><span class="last">See what a Brain feels like</span><span class="connect">Try it &rarr;</span></div>' +
+      '</div>'
+    );
+  }
+
+  function openDemoBrain(){
+    if (isSiteDemo){
+      // On slimeos.com the page around this one shows its Brain itself.
+      emit('slime:connect', { id: 'demo' });
+      return;
+    }
+    if (demoBrainOpen) return;
+    demoBrainOpen = true;
+    closeModal();
+    var root = document.createElement('div');
+    root.className = 'demo-brain';
+    root.id = 'demoBrain';
+    root.innerHTML =
+      '<div id="demoBrainWait">Connecting to the demo Brain\u2026</div>' +
+      '<iframe title="Demo Brain" src="' + DEMO_BRAIN_URL + '"></iframe>' +
+      '<div class="demo-brain-bar"><span class="tunnel-dot"></span>Demo Brain<button id="demoBrainClose">Disconnect</button></div>';
+    document.getElementById('app').appendChild(root);
+    var frame = root.querySelector('iframe');
+    frame.onload = function(){ root.classList.add('loaded'); };
+    // No internet: say so instead of a blank screen. A loaded page cancels it.
+    demoBrainTimer = setTimeout(function(){
+      if (!root.classList.contains('loaded')){
+        document.getElementById('demoBrainWait').textContent = 'Couldn\u2019t reach the demo Brain. Check the internet connection.';
+      }
+    }, 15000);
+    var closeBtn = document.getElementById('demoBrainClose');
+    closeBtn.onclick = closeDemoBrain;
+    closeBtn.focus();
+  }
+
+  function closeDemoBrain(){
+    if (!demoBrainOpen) return;
+    demoBrainOpen = false;
+    clearTimeout(demoBrainTimer);
+    var root = document.getElementById('demoBrain');
+    if (root) root.parentNode.removeChild(root);
+    lastActivityAt = Date.now();
+    var card = document.getElementById('demoBrainCard');
+    if (card) card.focus();
+  }
+
+  window.addEventListener('message', function(e){
+    // The demo page's own "disconnect" (Back past its last window).
+    if (!demoBrainOpen || !e.data || e.data.source !== 'slimeos-brain' || e.data.type !== 'disconnect') return;
+    var frame = document.querySelector('#demoBrain iframe');
+    if (frame && e.source === frame.contentWindow) closeDemoBrain();
+  });
 
   function renderPicker(data){
     var brains = data.brains || [];
@@ -2480,6 +2571,9 @@
   function bindScreenImpl(state, data){
     if (state === 'empty'){
       document.getElementById('btnAddBrain').onclick = guarded(showLocalAddBrain);
+      var demoCard = document.getElementById('demoBrainCard');
+      on(demoCard, 'click', openDemoBrain);
+      on(demoCard, 'keydown', function(e){ if (e.key === 'Enter') openDemoBrain(); });
       var slimeIdBtn = document.getElementById('btnSlimeId');
       if (slimeIdBtn) slimeIdBtn.onclick = guarded(function(){ emit('slime:slime-id-start'); });
       var slimeIdLogoutBtn = document.getElementById('btnSlimeIdLogout');
@@ -3516,7 +3610,9 @@
     }
 
     document.addEventListener('slime:connect', function(e){
-      var b = demoBrains.filter(function(x){ return String(x.id) === String(e.detail.id); })[0];
+      var b = e.detail.id === 'demo'
+        ? { name: 'Demo Brain', host: 'slimeos.com' }
+        : demoBrains.filter(function(x){ return String(x.id) === String(e.detail.id); })[0];
       if (!b) return;
       if (isSiteDemo){
         window.SlimeUI.setState('connecting', { brainName: b.name, stage: 'Waking up your Brain\u2026' });
