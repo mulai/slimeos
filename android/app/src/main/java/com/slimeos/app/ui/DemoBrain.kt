@@ -2,7 +2,6 @@ package com.slimeos.app.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.net.Uri
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -38,7 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 
 /** The Membrane kiosk's DEMO_BRAIN_URL: the slimeos.com demo desktop. */
-const val DEMO_BRAIN_URL = "https://slimeos.com/demo/brain/"
+const val DEMO_BRAIN_URL = "https://www.slimeos.com/demo/brain/" // slimeos.com 301s to www
 
 /**
  * Demo Brain: until a Brain is added, the welcome screen offers the slimeos.com demo
@@ -88,9 +87,11 @@ fun DemoBrainView(modifier: Modifier = Modifier, onClose: () -> Unit) {
                             }
                         }
 
-                        // Stay on the demo: nothing else of the web opens in here.
-                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                            request.url.host != Uri.parse(DEMO_BRAIN_URL).host
+                        // Stay on slimeos.com: nothing else of the web opens in here.
+                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                            val host = request.url.host ?: return true
+                            return host != "slimeos.com" && !host.endsWith(".slimeos.com")
+                        }
                     }
                     loadUrl(DEMO_BRAIN_URL)
                 }
