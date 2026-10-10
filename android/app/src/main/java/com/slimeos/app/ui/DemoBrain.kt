@@ -2,6 +2,7 @@ package com.slimeos.app.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.view.ViewGroup
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -66,6 +67,11 @@ fun DemoBrainView(modifier: Modifier = Modifier, onClose: () -> Unit) {
             modifier = Modifier.fillMaxSize().alpha(if (loaded) 1f else 0f),
             factory = { context ->
                 WebView(context).apply {
+                    // AndroidView's default wrap_content makes Chromium lay the page out with a
+                    // zero height for vh units: 100vh = 0, and the demo's windows collapse.
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
