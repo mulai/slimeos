@@ -56,9 +56,9 @@ private val HOST_RE = Regex(
         "(?:\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$"
 )
 
-/** renderEmpty. */
+/** renderEmpty, with the Demo Brain card (demoBrainCardHTML). */
 @Composable
-fun WelcomeScreen(onAddBrain: () -> Unit) {
+fun WelcomeScreen(onAddBrain: () -> Unit, onTryDemo: () -> Unit) {
     SlimeScreen {
         SlimeMark(96.dp, drip = true, float = true)
         Spacer(Modifier.height(24.dp))
@@ -67,7 +67,18 @@ fun WelcomeScreen(onAddBrain: () -> Unit) {
             "Your Brain is a computer in the cloud that does the heavy lifting. " +
                 "Add one so this tablet can connect to it."
         )
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(30.dp))
+        BrainCard(
+            name = "Demo Brain",
+            host = "slimeos.com",
+            accent = Slime.Teal,
+            meta = "See what a Brain feels like",
+            action = "Try it →",
+            badge = BadgeKind.Demo,
+            onClick = onTryDemo,
+            onRemove = null
+        )
+        Spacer(Modifier.height(28.dp))
         PrimaryButton("Add a Brain", onAddBrain, large = true)
     }
 }

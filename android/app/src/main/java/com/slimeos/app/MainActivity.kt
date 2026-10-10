@@ -24,7 +24,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
@@ -78,6 +80,7 @@ import com.slimeos.app.ui.SlimeBackground
 import com.slimeos.app.ui.SlimeModal
 import com.slimeos.app.ui.SlimeTheme
 import com.slimeos.app.ui.StatusStrip
+import com.slimeos.app.ui.DemoBrainView
 import com.slimeos.app.ui.TunnelUi
 import com.slimeos.app.ui.WelcomeScreen
 import com.slimeos.app.ui.WorkingScreen
@@ -273,8 +276,12 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun App() {
-        // The status bar is hidden, so also keep clear of a camera cutout in its place.
+        // Sides and bottom only: the status bar is hidden and the strip is the top edge.
+        // Some devices (the MatePad) still report its height as a top inset once hidden,
+        // which left an empty band above the strip. The app is landscape-only, so a
+        // camera cutout is always on a side.
         val screenInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
         SlimeBackground {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val compact = maxWidth < 600.dp
@@ -313,6 +320,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Modal()
+                if (ui.demoBrain) {
+                    DemoBrainView(Modifier.windowInsetsPadding(screenInsets), onClose = { ui.demoBrain = false })
+                }
             }
         }
     }
@@ -340,9 +350,10 @@ class MainActivity : ComponentActivity() {
         }
         val brain = ui.savedBrain
         when (val s = ui.screen) {
-            Screen.Welcome -> WelcomeScreen(onAddBrain = {
-                ui.screen = if (saved.wgConfig == null) Screen.Pair() else Screen.AddBrain()
-            })
+            Screen.Welcome -> WelcomeScreen(
+                onAddBrain = { ui.screen = if (saved.wgConfig == null) Screen.Pair() else Screen.AddBrain() },
+                onTryDemo = { ui.demoBrain = true }
+            )
             is Screen.Pair -> PairScreen(
                 hint = s.hint,
                 onPair = { host, code -> doPair(host, code) },
@@ -368,7 +379,7 @@ class MainActivity : ComponentActivity() {
                 onBack = { ui.screen = Screen.AddBrain(s.name, s.host, s.port) }
             )
             Screen.Picker -> if (brain == null) {
-                WelcomeScreen(onAddBrain = { ui.screen = Screen.AddBrain() })
+                WelcomeScreen(onAddBrain = { ui.screen = Screen.AddBrain() }, onTryDemo = { ui.demoBrain = true })
             } else {
                 PickerScreen(
                     name = brain.name, host = brain.host, status = ui.brainStatus, notice = ui.notice,
@@ -569,6 +580,7 @@ class MainActivity : ComponentActivity() {
 
     private fun lock() {
         ui.locked = true
+        ui.demoBrain = false
         ui.settingsTab = null
         ui.modal = null
         ui.pinError = null
@@ -1034,6 +1046,7 @@ private class UiState {
     var pingMs by mutableStateOf<Long?>(null)
     var pingFailed by mutableStateOf(false)
     var device by mutableStateOf<DeviceStatus?>(null)
+    var demoBrain by mutableStateOf(false)
     var savedBrain by mutableStateOf<SavedPairing.Brain?>(null)
     var brainStatus by mutableStateOf<BrainPower.Status?>(null)
     var reconnectAttempt by mutableIntStateOf(0)

@@ -686,7 +686,7 @@ fun Spinner(size: Dp = 26.dp) {
     }
 }
 
-enum class BadgeKind { Asleep, Offline, SlimeId }
+enum class BadgeKind { Asleep, Offline, SlimeId, Demo }
 
 @Composable
 fun Badge(kind: BadgeKind) {
@@ -694,6 +694,7 @@ fun Badge(kind: BadgeKind) {
         BadgeKind.Asleep -> Triple("Asleep", Slime.Amber, Slime.Amber.copy(alpha = 0.12f))
         BadgeKind.Offline -> Triple("Offline", Slime.TextDim, Slime.TextDim.copy(alpha = 0.18f))
         BadgeKind.SlimeId -> Triple("Slime ID", Slime.Mint, Slime.Teal.copy(alpha = 0.12f))
+        BadgeKind.Demo -> Triple("Demo", Slime.Mint, Slime.Teal.copy(alpha = 0.12f))
     }
     Text(
         text.uppercase(), color = fg,
