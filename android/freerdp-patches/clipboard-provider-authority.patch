@@ -1,0 +1,56 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/AndroidManifest.xml b/client/Android/Studio/freeRDPCore/src/main/AndroidManifest.xml
+index e44f97b..4e00558 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/AndroidManifest.xml
++++ b/client/Android/Studio/freeRDPCore/src/main/AndroidManifest.xml
+@@ -109,7 +109,7 @@
+ 
+         <provider
+             android:name=".utils.ClipboardImageProvider"
+-            android:authorities="com.freerdp.freerdpcore.clipboard"
++            android:authorities="${applicationId}.freerdpcore.clipboard"
+             android:exported="false"
+             android:grantUriPermissions="true" />
+ 
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardImageProvider.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardImageProvider.java
+index 519e0b7..302e810 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardImageProvider.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardImageProvider.java
+@@ -12,6 +12,7 @@ package com.freerdp.freerdpcore.utils;
+ 
+ import android.content.ContentProvider;
+ import android.content.ContentValues;
++import android.content.Context;
+ import android.database.Cursor;
+ import android.net.Uri;
+ import android.os.ParcelFileDescriptor;
+@@ -21,8 +22,15 @@ import java.io.OutputStream;
+ 
+ public class ClipboardImageProvider extends ContentProvider
+ {
+-	public static final String AUTHORITY = "com.freerdp.freerdpcore.clipboard";
+-	public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/image");
++	/*
++	 * Authorities are unique across every app on a device (and on Google Play),
++	 * so the provider is named after the app that embeds freeRDPCore, as its
++	 * manifest entry is (${applicationId}.freerdpcore.clipboard).
++	 */
++	public static Uri contentUri(Context context)
++	{
++		return Uri.parse("content://" + context.getPackageName() + ".freerdpcore.clipboard/image");
++	}
+ 
+ 	private static volatile byte[] sImageData;
+ 
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardManagerProxy.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardManagerProxy.java
+index 35a79c0..7481e7f 100644
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardManagerProxy.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/utils/ClipboardManagerProxy.java
+@@ -68,7 +68,7 @@ public abstract class ClipboardManagerProxy
+ 		{
+ 			ClipboardImageProvider.setImageData(pngData);
+ 			ClipData clip = new ClipData("rdp-clipboard", new String[] { "image/png" },
+-			                             new ClipData.Item(ClipboardImageProvider.CONTENT_URI));
++			                             new ClipData.Item(ClipboardImageProvider.contentUri(mContext)));
+ 			mClipboardManager.setPrimaryClip(clip);
+ 		}
+ 
