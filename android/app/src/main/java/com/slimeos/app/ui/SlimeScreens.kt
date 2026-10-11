@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalUriHandler
 import com.slimeos.app.AppLock
 import com.slimeos.app.BrainPower
 import com.slimeos.app.SavedPairing
@@ -583,6 +584,10 @@ private fun PadKey(label: String, enabled: Boolean, small: Boolean = false, onCl
 // ---------------------------------------------------------------- Settings
 
 /** The pages, in order. Pages of one group show as tabs across the top, as on the kiosk. */
+// Linked from Settings > Privacy (both stores want the policy reachable in the app).
+private const val PRIVACY_URL = "https://www.slimeos.com/privacy"
+private const val DELETE_ACCOUNT_URL = "https://www.slimeos.com/delete-account"
+
 enum class SettingsTab(val group: String, val label: String) {
     Pairing("Network", "Pairing"),
     Video("Display & Sound", "Video"),
@@ -795,9 +800,15 @@ private fun SettingsPage(tab: SettingsTab, info: SettingsInfo, actions: Settings
                 )
                 ToggleRow(
                     "Send crash reports",
-                    "If Slime OS stops during a session, the next start sends what went wrong.",
+                    "If Slime OS stops during a session, the next start sends what went wrong. " +
+                        "Reports are public on Slime OS’s GitHub, with personal details removed.",
                     info.crashReports, actions.onCrashReports
                 )
+                val uriHandler = LocalUriHandler.current
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TertiaryButton("Privacy policy", { uriHandler.openUri(PRIVACY_URL) }, color = Slime.Mint)
+                    TertiaryButton("Delete your Slime ID", { uriHandler.openUri(DELETE_ACCOUNT_URL) }, color = Slime.Mint)
+                }
             }
             SettingsTab.About -> {
                 PageHeading("About", "Slime OS for Android tablets.")
@@ -806,8 +817,8 @@ private fun SettingsPage(tab: SettingsTab, info: SettingsInfo, actions: Settings
             SettingsTab.Feedback -> {
                 PageHeading(
                     "Send Feedback",
-                    "Found a bug or have an idea? It goes straight to the Slime OS team, with this tablet’s " +
-                        "app version, model and settings. No names, addresses or passwords."
+                    "Found a bug or have an idea? It becomes a public issue on Slime OS’s GitHub, with this " +
+                        "tablet’s app version, model, settings and network type. Please leave out names, addresses and passwords."
                 )
                 SegmentedRow(
                     label = "About",
