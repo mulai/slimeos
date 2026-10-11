@@ -16,6 +16,7 @@ answers with what the app does.
 | Privacy policy | https://www.slimeos.com/privacy |
 | Account deletion | https://www.slimeos.com/delete-account |
 | Website | https://www.slimeos.com |
+| Support email (public) | hi@slimeos.com |
 | Privacy contact | privacy@slimeos.com |
 | Devices | arm64 Android 10 (API 29) and later, landscape; tablets first |
 | Upload | Play: `android/app/build/outputs/bundle/release/app-release.aab`; AppGallery: `.../apk/release/app-release.apk` |
