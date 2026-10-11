@@ -208,7 +208,6 @@ class MainActivity : ComponentActivity() {
         appLock = AppLock(applicationContext)
         ui.brains = saved.brains
         ui.slimeIdEmail = saved.slimeIdSession?.let(::accountLabel)
-        ui.h264Enabled = OpenH264.isEnabled(applicationContext)
         ui.smoothResolution = DisplayPrefs.resolution(applicationContext) == DisplayPrefs.Resolution.Smooth
         ui.crashReports = Reporter.crashReportsEnabled(applicationContext)
         ui.pinSet = appLock.isSet
@@ -533,8 +532,6 @@ class MainActivity : ComponentActivity() {
         brainNames = ui.brains.map { it.name },
         slimeIdEmail = ui.slimeIdEmail,
         h264Supported = OpenH264.isSupported,
-        h264Enabled = ui.h264Enabled,
-        h264Notice = OpenH264.NOTICE,
         smoothResolution = ui.smoothResolution,
         pinSet = ui.pinSet,
         version = try {
@@ -557,10 +554,6 @@ class MainActivity : ComponentActivity() {
             ui.screen = Screen.Pair()
         },
         onForgetPairing = { ui.modal = Modal.ForgetPairing },
-        onH264 = { enabled ->
-            OpenH264.setEnabled(applicationContext, enabled)
-            ui.h264Enabled = enabled
-        },
         onShowLicence = { ui.modal = Modal.Licence },
         onSmoothResolution = { smooth ->
             DisplayPrefs.setResolution(
@@ -1220,11 +1213,6 @@ class MainActivity : ComponentActivity() {
                 username = credential.username.ifEmpty { brain.username }
                 password = credential.password
             }
-            withContext(Dispatchers.IO) {
-                OpenH264.prepareSession(applicationContext) {
-                    runOnUiThread { setStage("Downloading the video codec from Cisco…") }
-                }
-            }
             if (!reconnecting) setStage("Waking up your Brain…")
             val awake = withContext(Dispatchers.IO) { waitForBrainAwake(host, port) }
             if (awake == Awake.No) {
@@ -1394,7 +1382,6 @@ private class UiState {
     var removeTarget by mutableStateOf<SavedPairing.Brain?>(null)
     var saveTarget by mutableStateOf<SavedPairing.Brain?>(null)
     var reconnectAttempt by mutableIntStateOf(0)
-    var h264Enabled by mutableStateOf(false)
     var smoothResolution by mutableStateOf(true)
     var crashReports by mutableStateOf(false)
     var feedbackCategory by mutableIntStateOf(0)

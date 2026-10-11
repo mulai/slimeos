@@ -94,10 +94,13 @@ object RdpLauncher {
         // view is the whole screen, the size the session is requested at above.
         // Otherwise the desktop is 42 px taller than the view and the Windows
         // taskbar at the bottom sits off screen until you scroll.
+        // FreeRDP treats the camera as experimental: without its opt-in it stops
+        // the session with an "experimental feature" dialog when the camera starts.
         context.getSharedPreferences(context.packageName + "_preferences", Context.MODE_PRIVATE)
             .edit()
             .putBoolean("ui.hide_status_bar", true)
             .putBoolean("ui.hide_navigation_bar", true)
+            .putBoolean("experimental.camera", true)
             .apply()
 
         val intent = Intent(Intent.ACTION_VIEW, uri)

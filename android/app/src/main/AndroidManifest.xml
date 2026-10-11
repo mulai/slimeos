@@ -6,8 +6,19 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Wi-Fi signal strength for the status strip (the system status bar is hidden) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- WireGuard tunnel -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Store builds: the camera and microphone (freeRDPCore asks for both) are
+         optional, so devices without them still get the app. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- freeRDPCore asks for these for drive redirection and printer
+         notifications, which Slime OS sessions don't use. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
 
     <application
         android:name="com.freerdp.freerdpcore.application.GlobalApp"
@@ -82,6 +93,13 @@
             android:exported="false"
             tools:node="merge"
             tools:replace="android:exported" />
+
+        <!-- freeRDPCore's optional keyboard accessibility service: nothing here
+             turns it on, and store review treats any accessibility service as
+             one that needs a declared purpose. -->
+        <service
+            android:name="com.freerdp.freerdpcore.presentation.KeyboardAccessibilityService"
+            tools:node="remove" />
 
     </application>
 

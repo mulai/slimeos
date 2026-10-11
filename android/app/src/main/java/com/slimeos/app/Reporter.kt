@@ -109,7 +109,7 @@ object Reporter {
         val note = JSONObject()
             .put("startedAt", System.currentTimeMillis())
             .put("resolution", DisplayPrefs.resolution(context).name)
-            .put("h264", OpenH264.isEnabled(context))
+            .put("h264", OpenH264.isSupported)
         runCatching { sessionFile(context).writeText(note.toString()) }
     }
 
@@ -209,7 +209,7 @@ object Reporter {
             .put("ram_mb", mem.totalMem / (1024 * 1024))
             .put("ram_available_mb", mem.availMem / (1024 * 1024))
             .put("resolution", DisplayPrefs.resolution(context).name)
-            .put("h264", OpenH264.isEnabled(context))
+            .put("h264", OpenH264.isSupported)
         extra.forEach { (k, v) -> if (k != "tunnel") d.put(k, v) }
         // The shape the server's issue summary reads (net.iface_type / mtu / tunnel,
         // brain.stack_guess), as the Membrane's diagnostics have it.

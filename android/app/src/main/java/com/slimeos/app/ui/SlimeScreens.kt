@@ -605,8 +605,6 @@ class SettingsInfo(
     val brainNames: List<String>,
     val slimeIdEmail: String?,
     val h264Supported: Boolean,
-    val h264Enabled: Boolean,
-    val h264Notice: String,
     val smoothResolution: Boolean,
     val pinSet: Boolean,
     val version: String,
@@ -622,7 +620,6 @@ class SettingsActions(
     val onTab: (SettingsTab) -> Unit,
     val onPair: () -> Unit,
     val onForgetPairing: () -> Unit,
-    val onH264: (Boolean) -> Unit,
     val onShowLicence: () -> Unit,
     val onSmoothResolution: (Boolean) -> Unit,
     val onChangePin: () -> Unit,
@@ -764,14 +761,10 @@ private fun SettingsPage(tab: SettingsTab, info: SettingsInfo, actions: Settings
             SettingsTab.Video -> {
                 PageHeading("Video", "How your Brain’s screen is sent to this tablet.")
                 if (info.h264Supported) {
-                    ToggleRow(
-                        "Smooth video (H.264)",
-                        "Downloaded from Cisco on first use. ${info.h264Notice}",
-                        info.h264Enabled, actions.onH264
-                    )
+                    Muted("Smooth video (H.264) is on, decoded by OpenH264.")
                     Row { TertiaryButton("OpenH264 licence", actions.onShowLicence, color = Slime.Mint) }
                 } else {
-                    Muted("Smooth video isn’t available on this tablet’s processor.")
+                    Muted("Smooth video isn’t available on this tablet.")
                 }
             }
             SettingsTab.Security -> {

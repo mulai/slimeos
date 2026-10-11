@@ -10,8 +10,37 @@ android {
         applicationId "com.slimeos.app"
         minSdkVersion rootProject.ext.minApi
         targetSdkVersion rootProject.ext.targetApi
-        versionCode 1
-        versionName "0.1.0-m1"
+        versionCode 2
+        versionName "1.0.0"
+        // FreeRDP is only built for arm64 (release.properties ABI_FILTERS): keep the
+        // other ABIs' WireGuard/SQLCipher libraries out, so the stores only offer
+        // the app to devices that can run a session.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    // Upload key for Play App Signing and AppGallery, kept outside the repo:
+    // ~/.gradle/gradle.properties (or -P) sets SLIMEOS_UPLOAD_STORE_FILE,
+    // SLIMEOS_UPLOAD_STORE_PASSWORD, SLIMEOS_UPLOAD_KEY_ALIAS and
+    // SLIMEOS_UPLOAD_KEY_PASSWORD. Without them, release builds come out unsigned.
+    signingConfigs {
+        if (project.hasProperty('SLIMEOS_UPLOAD_STORE_FILE')) {
+            upload {
+                storeFile file(SLIMEOS_UPLOAD_STORE_FILE)
+                storePassword SLIMEOS_UPLOAD_STORE_PASSWORD
+                keyAlias SLIMEOS_UPLOAD_KEY_ALIAS
+                keyPassword SLIMEOS_UPLOAD_KEY_PASSWORD
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (project.hasProperty('SLIMEOS_UPLOAD_STORE_FILE')) {
+                signingConfig signingConfigs.upload
+            }
+        }
     }
 
     buildFeatures {
@@ -24,14 +53,6 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
-    }
-
-    // FreeRDP's build compiles OpenH264 for its headers, but the library itself
-    // must come from Cisco's download on the device (see OpenH264.kt).
-    packaging {
-        jniLibs {
-            excludes += ['**/libopenh264.so']
-        }
     }
 }
 
@@ -51,10 +72,7 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
 
     // Official WireGuard Android tunnel library.
-    implementation 'com.wireguard.android:tunnel:1.0.20230706'
+    implementation 'com.wireguard.android:tunnel:1.0.20260102'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
-
-    // Unpacks Cisco's OpenH264 download (.bz2).
-    implementation 'org.apache.commons:commons-compress:1.27.1'
 }
