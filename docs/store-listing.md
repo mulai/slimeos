@@ -57,9 +57,9 @@ Before the first production release: the Via LA AVC licence must be signed
 >
 > ABOUT THE VPN
 > Slime OS uses Android's VPN service for one thing: a private, encrypted
-> WireGuard connection between this device and your Brain. Only Slime OS's own
-> traffic goes through it. Your other apps and your web browsing are not routed
-> through it, read or changed.
+> WireGuard connection between this device and your Brain. Only Slime OS's
+> connection to your Brain goes through it. Your web browsing and other apps'
+> internet traffic are not routed through it, read or changed.
 >
 > OPEN SOURCE
 > Slime OS is open source under the Apache 2.0 licence:
@@ -137,12 +137,14 @@ the user's Brain and aren't collected by us.
 > Slime OS is a remote-desktop client. Its core function is connecting the
 > user's device to the user's own cloud computer (a "Brain"), which only works
 > through our relay. VpnService creates one WireGuard tunnel from the device
-> to that relay. The tunnel routes only Slime OS's private network addresses;
-> no other app's traffic and no internet traffic goes through it. We don't
-> collect, inspect, redirect or monetise traffic through the tunnel, and show
-> no ads. All tunnel traffic is encrypted (WireGuard), and Remote Desktop
-> traffic inside it is encrypted again (TLS). The tunnel runs only while the
-> app is connected to a Brain.
+> to that relay. The tunnel routes only two private address ranges used by
+> Slime OS (10.10.0.0/24 and 10.11.0.0/24), which carry the connection to the
+> user's Brain; the device's internet traffic is not routed through it. We
+> don't collect, inspect, redirect or monetise traffic through the tunnel, and
+> show no ads. All tunnel traffic is encrypted (WireGuard), and Remote Desktop
+> traffic inside it is encrypted again (TLS). The tunnel starts when the user
+> opens Slime OS on a paired device. The user can end it at any time in
+> Android's VPN settings, or by removing the pairing in Slime OS.
 
 **Countries**: all where Mulai can trade; pricing Free.
 
