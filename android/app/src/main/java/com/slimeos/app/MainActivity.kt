@@ -94,6 +94,7 @@ import com.slimeos.app.ui.WorkingScreen
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
+import com.wireguard.config.Interface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -101,8 +102,13 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.InetAddress
 
 private const val TUNNEL_NAME = "slimeos0"
+
+// Lookups for the tunnel when the hub's config has none (it hands out `DNS = `). Literal
+// addresses, so getByName doesn't query anything.
+private val FALLBACK_DNS = listOf("1.1.1.1", "8.8.8.8").map { InetAddress.getByName(it) }
 
 // A session that got connected (so the password worked) and then died with no
 // reason from the server was a network drop or a TermService crash. Windows keeps
@@ -967,7 +973,7 @@ class MainActivity : ComponentActivity() {
             if (tunnelForPairing || connectAfterTunnel) setStage("Opening the secure tunnel…")
             try {
                 withContext(Dispatchers.IO) {
-                    backend.setState(tunnel, Tunnel.State.UP, config)
+                    backend.setState(tunnel, Tunnel.State.UP, scopedToThisApp(config))
                 }
                 ui.tunnel = TunnelUi.Up
                 onTunnelUp()
@@ -977,6 +983,23 @@ class MainActivity : ComponentActivity() {
                 tunnelStarting = false
             }
         }
+    }
+
+    // Only Slime OS goes through the tunnel, and the tunnel always has a DNS server. Without
+    // both, the VPN covered every app with no DNS server, and on a phone with Private DNS
+    // set to a hostname (Mate 30 Pro, dns.google) every lookup on the device failed,
+    // including our own of the hub (stuck "Connecting") and of slimeos.com.
+    private fun scopedToThisApp(config: Config): Config {
+        val iface = config.`interface`
+        val scoped = Interface.Builder()
+            .setKeyPair(iface.keyPair)
+            .addAddresses(iface.addresses)
+            .addDnsServers(iface.dnsServers.ifEmpty { FALLBACK_DNS })
+            .addDnsSearchDomains(iface.dnsSearchDomains)
+            .includeApplication(packageName)
+        iface.listenPort.ifPresent { scoped.setListenPort(it) }
+        iface.mtu.ifPresent { scoped.setMtu(it) }
+        return Config.Builder().setInterface(scoped.build()).addPeers(config.peers).build()
     }
 
     private fun onTunnelUp() {
