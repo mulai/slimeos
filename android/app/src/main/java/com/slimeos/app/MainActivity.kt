@@ -102,13 +102,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.InetAddress
 
 private const val TUNNEL_NAME = "slimeos0"
-
-// Lookups for the tunnel when the hub's config has none (it hands out `DNS = `). Literal
-// addresses, so getByName doesn't query anything.
-private val FALLBACK_DNS = listOf("1.1.1.1", "8.8.8.8").map { InetAddress.getByName(it) }
 
 // A session that got connected (so the password worked) and then died with no
 // reason from the server was a network drop or a TermService crash. Windows keeps
@@ -985,17 +980,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Only Slime OS goes through the tunnel, and the tunnel always has a DNS server. Without
-    // both, the VPN covered every app with no DNS server, and on a phone with Private DNS
-    // set to a hostname (Mate 30 Pro, dns.google) every lookup on the device failed,
-    // including our own of the hub (stuck "Connecting") and of slimeos.com.
+    // Only Slime OS goes through the tunnel, and the tunnel never has a DNS server: Brains
+    // are reached by IP, and a VPN without one leaves lookups on the phone's own network.
+    // With a DNS server on the tunnel and Private DNS set to a hostname (Mate 30 Pro,
+    // dns.google), Android can't validate Private DNS on the VPN, so every lookup failed:
+    // all apps' in 1.0.0 (the VPN covered them), ours in 1.0.1 (hub: stuck "Connecting",
+    // slimeos.com: empty Slime ID Brain list).
     private fun scopedToThisApp(config: Config): Config {
         val iface = config.`interface`
         val scoped = Interface.Builder()
             .setKeyPair(iface.keyPair)
             .addAddresses(iface.addresses)
-            .addDnsServers(iface.dnsServers.ifEmpty { FALLBACK_DNS })
-            .addDnsSearchDomains(iface.dnsSearchDomains)
             .includeApplication(packageName)
         iface.listenPort.ifPresent { scoped.setListenPort(it) }
         iface.mtu.ifPresent { scoped.setMtu(it) }
