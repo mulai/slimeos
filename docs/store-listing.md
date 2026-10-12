@@ -18,7 +18,7 @@ answers with what the app does.
 | Website | https://www.slimeos.com |
 | Support email (public) | hi@slimeos.com |
 | Privacy contact | privacy@slimeos.com |
-| Devices | arm64 Android 10 (API 29) and later, landscape; tablets first |
+| Devices | arm64 Android 10 (API 29) and later, landscape; phones and tablets |
 | Upload | Play: `android/app/build/outputs/bundle/release/app-release.aab`; AppGallery: `.../apk/release/app-release.apk` |
 | Signing | One key for both stores (kept outside the repo). Play App Signing: "use my own key"; AppGallery: sign it yourself or upload the same key |
 
@@ -29,26 +29,26 @@ Before the first production release: the Via LA AVC licence must be signed
 
 **Short description** (Play, 80 max; AppGallery "brief introduction"):
 
-> Your cloud computer on this tablet: full Windows, smooth video, camera and mic.
+> Your cloud computer on your phone or tablet: full Windows, video, camera, mic.
 
 **Full description** (Play 4000 max; AppGallery introduction):
 
-> Slime OS turns your tablet into a window to your Brain: a Windows computer in
+> Slime OS turns your phone or tablet into a window to your Brain: a Windows computer in
 > the cloud that does the heavy lifting.
 >
 > Sign in with your Slime ID, pick your Brain, and its desktop fills the screen.
 > Your apps, files and open windows stay on the Brain, so you can pick up where
-> you left off, on this tablet or on a Slime OS computer.
+> you left off, on this device or on a Slime OS computer.
 >
 > WHAT YOU GET
 > • Your Windows desktop, full screen, with touch and keyboard
 > • Smooth video and sound from your Brain
-> • Your tablet's camera and microphone in apps on your Brain, such as video
+> • Your device's camera and microphone in apps on your Brain, such as video
 >   calls, only after you allow them
 > • A dropped connection doesn't end your session: Slime OS reconnects and
 >   everything is still open
-> • A private, encrypted connection between this tablet and your Brain
-> • An optional app PIN for shared tablets
+> • A private, encrypted connection between this device and your Brain
+> • An optional app PIN for shared devices
 > • A Demo Brain, to try Slime OS before you add your own
 >
 > WHAT YOU NEED
@@ -57,7 +57,7 @@ Before the first production release: the Via LA AVC licence must be signed
 >
 > ABOUT THE VPN
 > Slime OS uses Android's VPN service for one thing: a private, encrypted
-> WireGuard connection between this tablet and your Brain. Only Slime OS's own
+> WireGuard connection between this device and your Brain. Only Slime OS's own
 > traffic goes through it. Your other apps and your web browsing are not routed
 > through it, read or changed.
 >
@@ -66,7 +66,7 @@ Before the first production release: the Via LA AVC licence must be signed
 > github.com/mulai/slimeos
 
 Keep claims to what ships ("Coming Soon or hide"). Not claimed on purpose:
-waking a sleeping Brain from the tablet (untested), phones, iOS.
+waking a sleeping Brain from the tablet (untested), iOS.
 
 ## Graphics
 
@@ -76,7 +76,9 @@ waking a sleeping Brain from the tablet (untested), phones, iOS.
   320–3840 px limits): welcome screen with the Demo Brain, Brain list, a
   session showing a clean Windows desktop, a video playing, Settings. Use a
   desktop with nothing personal on it. Play needs at least 2; give 4–8 for
-  7-inch and 10-inch tablets (and phones, if listed for phones).
+  7-inch and 10-inch tablets. Phone: portrait 1080×1920 frames (headline + the
+  landscape app in a sideways phone), made with `make_frames.py` in the store
+  assets folder from Mate 30 Pro screenshots.
 
 ## Play Console: App content
 
@@ -126,7 +128,7 @@ https://www.slimeos.com/delete-account. Independent security review: No.
 
 Camera and microphone only go to the user's own Brain over the encrypted
 connection; nothing is recorded or stored, hence "processed ephemerally".
-Screen, sound, touches and keys likewise only travel between the tablet and
+Screen, sound, touches and keys likewise only travel between the device and
 the user's Brain and aren't collected by us.
 
 **Sensitive permissions › VpnService** declaration. Use case: network tools
