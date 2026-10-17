@@ -9,4 +9,14 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!-- The session: FreeRDP's theme with see-through system bars, set here rather
+         than by SessionActivity's Window.setStatusBarColor/setNavigationBarColor
+         (deprecated, no-ops from Android 15; Play flags them; see
+         freerdp-patches/session-edge-to-edge.patch). -->
+    <style name="Theme.SlimeOS.Session" parent="@style/Theme.Main.Session">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

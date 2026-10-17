@@ -54,7 +54,7 @@
         <activity
             android:name=".SlimeSessionActivity"
             android:exported="false"
-            android:theme="@style/Theme.Main.Session"
+            android:theme="@style/Theme.SlimeOS.Session"
             android:configChanges="orientation|keyboard|keyboardHidden|screenSize|smallestScreenSize|density|screenLayout|navigation"
             android:windowSoftInputMode="adjustResize"
             android:taskAffinity="com.freerdp.session"

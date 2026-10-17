@@ -1,0 +1,15 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+@@ -170,8 +170,9 @@
+ 		controller.setAppearanceLightStatusBars(false);
+ 		controller.setAppearanceLightNavigationBars(false);
+ 
+-		getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
+-		getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
++		// Transparent bars come from the activity's theme (android:statusBarColor /
++		// navigationBarColor): Window.setStatusBarColor/setNavigationBarColor are
++		// deprecated and do nothing from Android 15, where edge-to-edge is enforced.
+ 		getWindow().setNavigationBarContrastEnforced(false);
+ 
+ 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
