@@ -1338,8 +1338,8 @@ class MainActivity : ComponentActivity() {
     // way gets started again by the next /wake.
     private suspend fun waitForBrainAwake(host: String, port: Int): Awake {
         // Covers a wake from deallocated and a frozen-Brain restart (up to ~5 min).
-        val deadlineMs = System.currentTimeMillis() + 8 * 60_000L
-        var attempt = 0
+        val startedMs = System.currentTimeMillis()
+        val deadlineMs = startedMs + 8 * 60_000L
         var sawRunning = false
         while (System.currentTimeMillis() < deadlineMs) {
             when (BrainPower.wake(host)) {
@@ -1369,9 +1369,13 @@ class MainActivity : ComponentActivity() {
                     withContext(Dispatchers.Main) { setStage("Finishing your last session…") }
                     delay(5_000)
                 }
+                // Elapsed time, not a poll count: "attempt 13" read as 13 failures.
                 BrainPower.WakeState.Starting, is BrainPower.WakeState.Error -> {
-                    attempt++
-                    withContext(Dispatchers.Main) { setStage("Waking up your Brain… (attempt $attempt)") }
+                    val s = (System.currentTimeMillis() - startedMs) / 1000
+                    val elapsed = "%d:%02d".format(s / 60, s % 60)
+                    withContext(Dispatchers.Main) {
+                        setStage("Waking up your Brain… This usually takes 1–2 minutes ($elapsed)")
+                    }
                     delay(5_000)
                 }
             }
