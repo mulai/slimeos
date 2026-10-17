@@ -103,8 +103,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val TUNNEL_NAME = "slimeos0"
-
 // A session that got connected (so the password worked) and then died with no
 // reason from the server was a network drop or a TermService crash. Windows keeps
 // the session waiting, so reconnect into it. Sessions shorter than MIN_SESSION_MS
@@ -135,15 +133,11 @@ private const val STATE_LOCKED = "locked"
  */
 class MainActivity : ComponentActivity() {
 
-    private lateinit var backend: GoBackend
     private lateinit var saved: SavedPairing
     private lateinit var appLock: AppLock
-    private val tunnel = object : Tunnel {
-        override fun getName() = TUNNEL_NAME
-        override fun onStateChange(newState: Tunnel.State) {
-            runOnUiThread {
-                ui.tunnel = if (newState == Tunnel.State.UP) TunnelUi.Up else TunnelUi.Down
-            }
+    private val onTunnelState: (Tunnel.State) -> Unit = { newState ->
+        runOnUiThread {
+            ui.tunnel = if (newState == Tunnel.State.UP) TunnelUi.Up else TunnelUi.Down
         }
     }
 
@@ -204,7 +198,10 @@ class MainActivity : ComponentActivity() {
         )
         Reporter.install(applicationContext)
         lifecycleScope.launch(Dispatchers.IO) { Reporter.sendPending(applicationContext) }
-        backend = GoBackend(applicationContext)
+        SlimeTunnel.init(applicationContext)
+        SlimeTunnel.onStateChange = onTunnelState
+        // Still up from an earlier activity: onResume then leaves it alone.
+        if (SlimeTunnel.isUp) ui.tunnel = TunnelUi.Up
         saved = SavedPairing(applicationContext)
         appLock = AppLock(applicationContext)
         ui.brains = saved.brains
@@ -246,6 +243,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        SlimeTunnel.cancelIdleClose()
         if (backgroundedAt != 0L && ui.pinSet &&
             SystemClock.elapsedRealtime() - backgroundedAt >= LOCK_AFTER_BACKGROUND_MS
         ) {
@@ -257,8 +255,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        if (!sessionRunning) backgroundedAt = SystemClock.elapsedRealtime()
+        if (!sessionRunning) {
+            backgroundedAt = SystemClock.elapsedRealtime()
+            if (!isChangingConfigurations) SlimeTunnel.closeWhenIdle()
+        }
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        if (SlimeTunnel.onStateChange === onTunnelState) SlimeTunnel.onStateChange = null
+        // Closed (Back, or swiped away from Recents): no reason to keep the VPN.
+        if (isFinishing) SlimeTunnel.close()
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -968,7 +976,7 @@ class MainActivity : ComponentActivity() {
             if (tunnelForPairing || connectAfterTunnel) setStage("Opening the secure tunnel…")
             try {
                 withContext(Dispatchers.IO) {
-                    backend.setState(tunnel, Tunnel.State.UP, scopedToThisApp(config))
+                    SlimeTunnel.up(scopedToThisApp(config))
                 }
                 ui.tunnel = TunnelUi.Up
                 onTunnelUp()
@@ -1037,7 +1045,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    backend.setState(tunnel, Tunnel.State.DOWN, null)
+                    SlimeTunnel.down()
                 } catch (e: Exception) {
                     // Already down.
                 }
