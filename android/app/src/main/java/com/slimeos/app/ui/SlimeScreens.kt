@@ -329,6 +329,7 @@ fun PickerScreen(
                     meta = when {
                         b.remote -> "Not paired on this device"
                         b.status == BrainPower.Status.Asleep -> "Wakes up when you connect"
+                        b.status == BrainPower.Status.NotAllowed -> "Asleep; this device can’t wake it"
                         b.status == BrainPower.Status.Offline -> "Not reachable right now"
                         else -> "Last connected ${relativeTime(b.lastConnected)}"
                     },
@@ -336,6 +337,7 @@ fun PickerScreen(
                     badge = when {
                         b.remote -> BadgeKind.SlimeId
                         b.status == BrainPower.Status.Asleep -> BadgeKind.Asleep
+                        b.status == BrainPower.Status.NotAllowed -> BadgeKind.Asleep
                         b.status == BrainPower.Status.Offline -> BadgeKind.Offline
                         else -> null
                     },

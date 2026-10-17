@@ -927,6 +927,15 @@ class MainActivity : ComponentActivity() {
                 askPairingFor(r)
                 return@launch
             }
+            // Try again probes this bookmark again (pendingBookmark stays set).
+            if (status == BrainPower.Status.NotAllowed) {
+                showError(
+                    "“${r.name}” is asleep.",
+                    "This tablet isn’t allowed to wake it yet. Wake it from another device, then try again.",
+                    "Hub refused /status for ${r.host} (403)"
+                )
+                return@launch
+            }
             pendingBookmark = null
             Log.i("MainActivity", "Slime ID Brain is reachable over this tablet's tunnel ($status); saving it here")
             val brain = SavedPairing.Brain(

@@ -114,12 +114,15 @@ object BrainPower {
         }
     }
 
-    enum class Status { Online, Asleep, Offline }
+    /** NotAllowed: asleep, and the hub won't wake it for this device (not on its POWER_VMS list). */
+    enum class Status { Online, Asleep, NotAllowed, Offline }
 
     /**
      * The picker's badge, same probe as coordinator.sh's brain_probes_start():
      * RDP answers -> online; else a Brain the hub manages is asleep (it wakes on
      * connect); else offline. Read-only: /status never starts a VM, /wake would.
+     * Only a managed Brain answers 403, so that's asleep too, not offline: this
+     * device reaches the hub fine, and pairing again wouldn't change the answer.
      */
     fun status(host: String, port: Int): Status {
         if (rdpListening(host, port)) return Status.Online
@@ -128,6 +131,10 @@ object BrainPower {
                 .openConnection() as HttpURLConnection
             conn.connectTimeout = 3_000
             conn.readTimeout = 3_000
+            if (conn.responseCode == HttpURLConnection.HTTP_FORBIDDEN) {
+                conn.disconnect()
+                return Status.NotAllowed
+            }
             val managed = conn.inputStream.bufferedReader().use {
                 JSONObject(it.readText()).optBoolean("managed", false)
             }
