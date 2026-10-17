@@ -113,11 +113,16 @@ fun SlimeBackground(content: @Composable BoxScope.() -> Unit) {
 enum class TunnelUi { Down, Connecting, Up }
 
 /** How the tunnel to the hub is doing, from the hub ping. Same thresholds as the kiosk's tunnelQuality(). */
-enum class TunnelQuality { Down, Connecting, Good, Slow, Weak }
+enum class TunnelQuality { Down, Connecting, Good, Slow, Weak, Offline }
 
-fun tunnelQuality(tunnel: TunnelUi, pingMs: Long?, pingFailed: Boolean): TunnelQuality = when {
+/**
+ * Offline: the tunnel is open but the tablet has no network under it. Its pings fail
+ * then too, and "Tunnel weak" sent people looking at the tunnel instead of their Wi-Fi.
+ */
+fun tunnelQuality(tunnel: TunnelUi, pingMs: Long?, pingFailed: Boolean, online: Boolean): TunnelQuality = when {
     tunnel == TunnelUi.Down -> TunnelQuality.Down
     tunnel == TunnelUi.Connecting -> TunnelQuality.Connecting
+    !online -> TunnelQuality.Offline
     pingFailed || (pingMs != null && pingMs >= 400) -> TunnelQuality.Weak
     pingMs != null && pingMs >= 200 -> TunnelQuality.Slow
     else -> TunnelQuality.Good
@@ -151,13 +156,13 @@ fun StatusStrip(
         Text("Slime OS", style = mono, color = Slime.TextMuted)
         Spacer(Modifier.weight(1f))
 
-        val quality = tunnelQuality(tunnel, pingMs, pingFailed)
+        val quality = tunnelQuality(tunnel, pingMs, pingFailed, online = device?.network != DeviceStatus.Network.None)
         val color = when (quality) {
             TunnelQuality.Good -> Slime.AuroraGreen
             TunnelQuality.Connecting -> Slime.Mint
             TunnelQuality.Slow -> Slime.Amber
             TunnelQuality.Weak -> Slime.Error
-            TunnelQuality.Down -> Slime.TextDim
+            TunnelQuality.Down, TunnelQuality.Offline -> Slime.TextDim
         }
         val label = when (quality) {
             TunnelQuality.Good -> "Secure tunnel"
@@ -165,6 +170,7 @@ fun StatusStrip(
             TunnelQuality.Slow -> "Tunnel slow"
             TunnelQuality.Weak -> "Tunnel weak"
             TunnelQuality.Down -> "Not connected"
+            TunnelQuality.Offline -> "No internet"
         }
         Row(
             Modifier.semantics(mergeDescendants = true) {
