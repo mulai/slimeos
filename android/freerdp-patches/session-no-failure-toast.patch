@@ -1,0 +1,18 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+@@ -1027,11 +1027,9 @@
+ 
+ 		dialogs.dismissProgress();
+ 
+-		// post error message on UI thread
+-		if (!connectCancelledByUser)
+-			uiHandler.sendMessage(Message.obtain(
+-			    null, DISPLAY_TOAST, getResources().getText(R.string.error_connection_failure)));
+-
++		// No toast: the app that started this session says what went wrong (from the
++		// result's errorInfo / wasConnected), and a failed reconnect after a Windows-side
++		// Disconnect isn't a failure worth a "Could not establish a connection" message.
+ 		closeSessionActivity(RESULT_CANCELED);
+ 	}
+ 
