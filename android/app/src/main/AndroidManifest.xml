@@ -31,13 +31,18 @@
         tools:replace="android:theme"
         android:supportsRtl="true">
 
+        <!-- Android 16 ignores sensorLandscape on large screens, so tablets can turn
+             it to portrait. configChanges: Compose redraws for the new size instead
+             of the activity being recreated, which dropped the screen state and
+             cancelled a connect in progress. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.SlimeOS.Starting"
             android:windowSoftInputMode="adjustResize"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
