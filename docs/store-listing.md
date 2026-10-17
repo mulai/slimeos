@@ -59,7 +59,8 @@ Before the first production release: the Via LA AVC licence must be signed
 > Slime OS uses Android's VPN service for one thing: a private, encrypted
 > WireGuard connection between this device and your Brain. Only Slime OS's
 > own connection to your Brain goes through it. Your web browsing and other
-> apps are not routed through it, read or changed.
+> apps are not routed through it, read or changed. It's only on while you use
+> Slime OS.
 >
 > OPEN SOURCE
 > Slime OS is open source under the Apache 2.0 licence:
@@ -144,8 +145,10 @@ the user's Brain and aren't collected by us.
 > don't collect, inspect, redirect or monetise traffic through the tunnel, and
 > show no ads. All tunnel traffic is encrypted (WireGuard), and Remote Desktop
 > traffic inside it is encrypted again (TLS). The tunnel starts when the user
-> opens Slime OS on a paired device. The user can end it at any time in
-> Android's VPN settings, or by removing the pairing in Slime OS.
+> opens Slime OS on a paired device and closes when they stop using it: a
+> minute after they leave the app (unless a remote-desktop session is still
+> running), or at once when they close it. The user can also end it at any
+> time in Android's VPN settings, or by removing the pairing in Slime OS.
 
 **Countries**: all where Mulai can trade; pricing Free.
 
