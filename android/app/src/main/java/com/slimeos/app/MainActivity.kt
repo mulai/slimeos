@@ -124,6 +124,8 @@ private const val ERRINFO_DISCONNECTED_BY_OTHERCONNECTION = 5
 // own RDP session doesn't count: Windows has its own lock.
 private const val LOCK_AFTER_BACKGROUND_MS = 5 * 60_000L
 private const val STATE_LOCKED = "locked"
+// Looking up the hub's address before the tunnel starts; past this, "Connecting" gives up.
+private const val DNS_TIMEOUT_MS = 10_000L
 
 /**
  * Pairing code -> WireGuard tunnel -> RDP session, with the Membrane kiosk's
@@ -984,6 +986,15 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             if (tunnelForPairing || connectAfterTunnel) setStage("Opening the secure tunnel…")
             try {
+                val unresolved = withContext(Dispatchers.IO) { SlimeTunnel.unresolvedHost(config, DNS_TIMEOUT_MS) }
+                if (unresolved != null) {
+                    tunnelFailed(
+                        "Couldn’t reach the Slime OS server.",
+                        "Check this tablet’s internet connection.",
+                        "$unresolved didn’t resolve within ${DNS_TIMEOUT_MS / 1000} s"
+                    )
+                    return@launch
+                }
                 withContext(Dispatchers.IO) {
                     SlimeTunnel.up(scopedToThisApp(config))
                 }

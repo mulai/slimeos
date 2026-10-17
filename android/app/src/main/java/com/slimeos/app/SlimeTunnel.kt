@@ -3,10 +3,14 @@ package com.slimeos.app
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -36,6 +40,7 @@ object SlimeTunnel {
     }
 
     private val main = Handler(Looper.getMainLooper())
+    private val resolver = Executors.newCachedThreadPool()
     private val idleClose = Runnable { close() }
 
     fun init(context: Context) {
@@ -56,6 +61,28 @@ object SlimeTunnel {
     @Synchronized
     fun down() {
         backend?.setState(tunnel, Tunnel.State.DOWN, null)
+    }
+
+    /**
+     * Looks up each peer's endpoint host within [timeoutMs] in all; the host that didn't
+     * resolve, or null. GoBackend's own lookup has no time limit (10 tries a second apart,
+     * each as long as the network's DNS takes), which left the app on "Connecting" for
+     * minutes. InetEndpoint keeps an answer for a minute, so GoBackend then reuses ours.
+     * Blocks: call off the main thread.
+     */
+    fun unresolvedHost(config: Config, timeoutMs: Long): String? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        for (peer in config.peers) {
+            val endpoint = peer.endpoint.orElse(null) ?: continue
+            val left = (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            val resolved = try {
+                resolver.submit(Callable { endpoint.resolved }).get(left, TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                null
+            }
+            if (resolved?.isPresent != true) return endpoint.host
+        }
+        return null
     }
 
     fun closeWhenIdle() {
