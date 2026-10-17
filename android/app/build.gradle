@@ -40,6 +40,19 @@ android {
             if (project.hasProperty('SLIMEOS_UPLOAD_STORE_FILE')) {
                 signingConfig signingConfigs.upload
             }
+            // R8: shrinks and obfuscates (Play asks for it). Keep each release's
+            // build/outputs/mapping/release/mapping.txt with its .aab: crash reports
+            // (Reporter.kt) arrive with obfuscated names. Play gets it inside the .aab.
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        // The release's R8 build signed with the debug key, so it installs over a debug
+        // build (keeping its pairing) to test R8 on a device: ./gradlew :app:assembleR8test
+        r8test {
+            initWith release
+            signingConfig signingConfigs.debug
+            matchingFallbacks = ['release']
         }
     }
 
