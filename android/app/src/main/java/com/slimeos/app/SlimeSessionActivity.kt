@@ -28,6 +28,8 @@ private const val TAP_ANSWER_MS = 2_000L
 private const val FREEZE_WINDOW_MS = 60_000L
 private const val FREEZE_MIN_TAPS = 5
 private const val FREEZE_MIN_SPAN_MS = 15_000L
+// Received nothing at all for this long: the tunnel is down, not the Brain frozen.
+private const val TUNNEL_QUIET_MS = 5_000L
 
 /**
  * freeRDPCore's SessionActivity only takes connection settings from its
@@ -112,8 +114,15 @@ class SlimeSessionActivity : SessionActivity() {
         }
         if (askedAboutFreeze || unansweredTaps.size < FREEZE_MIN_TAPS) return
         if (unansweredTaps.last() - unansweredTaps.first() < FREEZE_MIN_SPAN_MS) return
-        askedAboutFreeze = true
         unansweredTaps.clear()
+        // Nothing at all arriving is the tunnel, not the Brain: SlimeTunnel restarts it
+        // and the session reconnects. Restarting the Brain wouldn't help (2026-10-17).
+        if (SlimeTunnel.quietForMs() >= TUNNEL_QUIET_MS) {
+            Log.w("SlimeSession", "No screen updates, but nothing arrives over the tunnel either; not asking")
+            Toast.makeText(this, "Connection lost. Reconnecting…", Toast.LENGTH_LONG).show()
+            return
+        }
+        askedAboutFreeze = true
         Log.w("SlimeSession", "Brain looks frozen: $FREEZE_MIN_TAPS+ taps without a screen update")
         askToRestart()
     }
