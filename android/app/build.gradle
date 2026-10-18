@@ -10,8 +10,8 @@ android {
         applicationId "com.slimeos.app"
         minSdkVersion rootProject.ext.minApi
         targetSdkVersion rootProject.ext.targetApi
-        versionCode 5
-        versionName "1.0.3"
+        versionCode 6
+        versionName "1.0.4"
         // FreeRDP is only built for arm64 (release.properties ABI_FILTERS): keep the
         // other ABIs' WireGuard/SQLCipher libraries out, so the stores only offer
         // the app to devices that can run a session.
