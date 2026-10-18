@@ -214,22 +214,36 @@ playback_target() {
 #
 # Returns 0 → proceed to the xfreerdp attempt (including on wake failure/
 # timeout — xfreerdp then fails fast into the existing error screen);
-# 1 → user backed out (cancel/back). Note an issued ARM start can't be
-# cancelled: the VM boots anyway and the hub's idle watchdog reaps it.
+# 1 → user backed out (cancel/back); 2 → the Brain is asleep and the hub
+# won't wake it for this device (403: not on the Brain's POWER_VMS list).
+# Note an issued ARM start can't be cancelled: the VM boots anyway and the
+# hub's idle watchdog reaps it.
 wake_brain() {
     local vm_host="$1" vm_port="$2" brain_name="$3"
     # Overridable via /etc/slimeos/config for hubs on a different subnet
     # (and for the local test harness).
     local power_url="${SLIMEOS_POWER_URL:-http://10.10.0.1:7677}"
-    local body response managed state rc line ev_type
+    local body response managed state rc line ev_type http_code
     body=$(jq -nc --arg h "$vm_host" '{host:$h}')
 
     set +e
-    response=$(curl -fsS -m 3 -X POST -H 'Content-Type: application/json' \
-        -d "$body" "${power_url}/wake" 2>/dev/null)
+    response=$(curl -sS -m 3 -X POST -H 'Content-Type: application/json' \
+        -w '\n%{http_code}' -d "$body" "${power_url}/wake" 2>/dev/null)
     rc=$?
     set -e
     (( rc != 0 )) && return 0
+    http_code="${response##*$'\n'}"
+    response="${response%$'\n'*}"
+    # Only a managed Brain answers 403, and the refusal comes whatever the
+    # VM's state. If it's running anyway, connect as usual; if not, say it's
+    # asleep instead of letting xfreerdp fail into "Can't reach this Brain"
+    # (Android's NotAllowed, 54fdd4e).
+    if [[ "$http_code" == 403 ]]; then
+        log "Hub refused /wake for ${vm_host} (403) — this device isn't allowed to wake ${brain_name}"
+        timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$vm_host" "$vm_port" 2>/dev/null && return 0
+        return 2
+    fi
+    [[ "$http_code" == 2* ]] || return 0
     managed=$(jq -r '.managed // false' <<<"$response" 2>/dev/null || echo false)
     [[ "$managed" != "true" ]] && return 0
     state=$(jq -r '.state // "unknown"' <<<"$response" 2>/dev/null || echo unknown)
@@ -371,6 +385,24 @@ fetch_brain_credential() {
     fi
 }
 
+# The id Slime ID knows a paid Brain by. A Brain added from a bookmark gets
+# a fresh local id, so sending that to /device/brain-credential always 404ed
+# and the user was asked for a password they were never given. add_brain()
+# now stores the bookmark id as serverId; Brains added before 0.3.56 are
+# matched to their bookmark by host+port. Falls back to the local id.
+brain_server_id() {
+    local brain_json="$1" sid host port
+    sid=$(jq -r '.serverId // empty' <<<"$brain_json")
+    if [[ -z "$sid" ]]; then
+        host=$(jq -r '.host // empty' <<<"$brain_json")
+        port=$(jq -r '.port // "" | tostring | if . == "" then "3389" else . end' <<<"$brain_json")
+        sid=$(jq -r --arg h "$host" --arg p "$port" \
+            '[.[] | select(.host == $h and ((.port // "" | tostring | if . == "" then "3389" else . end) == $p))][0].id // empty' \
+            <<<"${REMOTE_BRAINS_JSON:-[]}" 2>/dev/null)
+    fi
+    echo "${sid:-$(jq -r '.id' <<<"$brain_json")}"
+}
+
 do_connect() {
     local brain_id="$1"
     local brain_json
@@ -427,7 +459,7 @@ do_connect() {
             # here avoids a pointless round-trip.
             if [[ "$brain_kind" == "paid" ]]; then
                 local cred_response
-                cred_response=$(fetch_brain_credential "$brain_id")
+                cred_response=$(fetch_brain_credential "$(brain_server_id "$brain_json")")
                 if jq -e '.ok == true' <<<"$cred_response" >/dev/null 2>&1; then
                     rdp_pass=$(jq -r '.password' <<<"$cred_response")
                     local server_username
@@ -505,9 +537,29 @@ do_connect() {
             # every attempt-loop iteration: error-screen retries and
             # post-drop reconnects wake the VM too (a drop *because* Azure
             # rebooted the VM heals itself here).
-            if ! wake_brain "$vm_host" "$vm_port" "$brain_name"; then
+            local wake_rc=0
+            wake_brain "$vm_host" "$vm_port" "$brain_name" || wake_rc=$?
+            if (( wake_rc == 1 )); then
                 log "Connect cancelled during Brain wake"
                 return 0
+            fi
+            if (( wake_rc == 2 )); then
+                emit_state error "$(jq -nc --arg n "$brain_name" \
+                    --arg m "This Brain is asleep, and this Membrane isn't allowed to wake it yet. Wake it from another device, then try again." \
+                    '{brainName:$n,message:$m,detail:"Hub refused /wake (403)",hideReenterPassword:true}')"
+                while true; do
+                    local line ev_type
+                    line=$(read_event) || return 0
+                    ev_type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
+                    case "$ev_type" in
+                        retry|reenterPassword) continue 2 ;;
+                        back|forceBack) return 0 ;;
+                        *)
+                            try_handle_power_event "$ev_type" || :
+                            try_handle_crash_report "$ev_type" "$line" || :
+                            ;;
+                    esac
+                done
             fi
 
             log "Connecting to ${brain_name} (${vm_host}:${vm_port}) as ${slime_username}"
@@ -932,15 +984,19 @@ do_connect() {
             # surfaced as a bogus "Can't reach this Brain" error instead
             # of a silent return to the picker. Per FreeRDP's error.h:
             #   0  ERRINFO_SUCCESS
-            #   1  ERRINFO_RPC_INITIATED_DISCONNECT
             #   2  ERRINFO_RPC_INITIATED_LOGOFF
             #   11 ERRINFO_RPC_INITIATED_DISCONNECT_BY_USER
             #   12 ERRINFO_LOGOFF_BY_USER
             # Deliberately NOT included: idle/logon timeout and
             # disconnected-by-other-connection -- those are worth
-            # surfacing to the user, not swallowing silently.
+            # surfacing to the user, not swallowing silently. Nor, since
+            # 0.3.56, 1 (ERRINFO_RPC_INITIATED_DISCONNECT): a TermService
+            # crash/restart on the Brain ends the session with it, and
+            # treating it as clean sent the user back to the picker and
+            # had the hub log off the session with their open windows. It
+            # now reconnects like a drop (same as the Android app).
             case "$exit_code" in
-                0|1|2|11|12)
+                0|2|11|12)
                     log "Clean disconnect (exit code $exit_code) — returning to Brain picker"
                     notify_session_ended "$vm_host"
                     return 0
@@ -1041,6 +1097,9 @@ do_connect() {
                 *)
                     message="Connection failed." ;;
             esac
+            if [[ -z "$err_hint" && "$exit_code" == 1 ]]; then
+                message="This Brain closed the connection. Your session is kept; try again when you're ready."
+            fi
             detail="${err_hint:-exit code $exit_code}"
 
             local hide_reenter=false

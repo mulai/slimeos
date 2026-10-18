@@ -513,7 +513,7 @@ SETTINGS_NEXT_TAB=""
 SETTINGS_LOCK_NOW=false
 
 add_brain() {
-    local name="$1" host="$2" port="$3" kind="${4:-free}"
+    local name="$1" host="$2" port="$3" kind="${4:-free}" server_id="${5:-}"
     local tmp
     # Sets the file-scope LAST_ADDED_BRAIN_ID (not `local`) so callers that
     # need the new id back (the `connect` case's bookmark-reachable fast
@@ -526,9 +526,14 @@ add_brain() {
     # `kind` lets connect.sh's phase=="credentials" block (see
     # membrane/freerdp/connect.sh) decide whether to try a server-delivered
     # RDP credential (kind='paid') before falling back to the manual
-    # prompt+local-cache flow every other brain still uses.
+    # prompt+local-cache flow every other brain still uses. `serverId` is
+    # the Slime ID bookmark's id, which is what the credential endpoint
+    # knows the Brain by (the local id is minted here); see
+    # brain_server_id() in connect.sh.
     jq --arg id "$LAST_ADDED_BRAIN_ID" --arg name "$name" --arg host "$host" --arg port "$port" --arg kind "$kind" \
-        '. += [{id:$id, name:$name, host:$host, port:$port, kind:$kind, username:"", lastConnected:null}]' \
+        --arg sid "$server_id" \
+        '. += [{id:$id, name:$name, host:$host, port:$port, kind:$kind, username:"", lastConnected:null}
+               + (if $sid == "" then {} else {serverId:$sid} end)]' \
         "$BRAINS_FILE" > "$tmp" && cat "$tmp" > "$BRAINS_FILE"
     rm -f "$tmp"
     log "Added brain '$name' ($host:$port, kind=$kind) id=$LAST_ADDED_BRAIN_ID"
@@ -833,8 +838,11 @@ show_picker_or_empty() {
     local rid rname rhost rport
     while IFS=$'\t' read -r rid rname rhost rport; do
         [[ -z "$rid" ]] && continue
-        if jq -e --arg h "$rhost" --arg p "$rport" \
-            'any(.[]; .host == $h and ((.port // "") == $p))' "$BRAINS_FILE" >/dev/null 2>&1; then
+        # A missing or empty port means 3389 on either side (a bookmark
+        # saved without one kept showing next to its own paired Brain).
+        if jq -e --arg h "$rhost" --arg p "${rport:-3389}" \
+            'any(.[]; .host == $h and ((.port // "" | tostring | if . == "" then "3389" else . end) == $p))' \
+            "$BRAINS_FILE" >/dev/null 2>&1; then
             continue
         fi
         entries+=("$(jq -nc --arg id "remote:$rid" --arg name "$rname" --arg host "$rhost" \
@@ -1029,16 +1037,24 @@ while true; do
                 if have_wg_tunnel && [[ -n "$rhost" ]]; then
                     if brain_reachable "$rhost" "$rport"; then
                         reachable=true
-                    elif wake_brain "$rhost" "$rport" "${rname:-a saved Brain}"; then
-                        brain_reachable "$rhost" "$rport" && reachable=true
                     else
-                        wake_cancelled=true
+                        wake_rc=0
+                        wake_brain "$rhost" "$rport" "${rname:-a saved Brain}" || wake_rc=$?
+                        case "$wake_rc" in
+                            0) brain_reachable "$rhost" "$rport" && reachable=true ;;
+                            1) wake_cancelled=true ;;
+                            # The hub manages this Brain but won't wake it
+                            # for this device: it's on this tunnel, so add
+                            # it, and do_connect shows the asleep screen
+                            # instead of sending the user off to pair.
+                            2) reachable=true ;;
+                        esac
                     fi
                 fi
 
                 if [[ "$reachable" == true ]]; then
                     log "Bookmarked brain '$rname' ($rhost:$rport) is reachable over this device's existing tunnel — adding locally, no pairing needed"
-                    add_brain "${rname:-Untitled Brain}" "$rhost" "$rport" "${rkind:-free}"
+                    add_brain "${rname:-Untitled Brain}" "$rhost" "$rport" "${rkind:-free}" "$rid"
                     stamp_last_connected "$LAST_ADDED_BRAIN_ID"
                     do_connect "$LAST_ADDED_BRAIN_ID"
                     session_ran=true

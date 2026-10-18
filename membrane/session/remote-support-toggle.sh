@@ -194,6 +194,39 @@ migrate_polkit_rules() {
     rm -f "$tmp"
 }
 
+# Tunnel watchdog (0.3.56): moves wg0 to a new UDP port when the hub stops
+# answering (see tunnel-watchdog.sh). Same reasoning as the migrations above:
+# /etc isn't OTA-delivered, so this boot-time root script writes the unit.
+# Keep in step with install.sh section 9c. --no-block: this runs inside a
+# boot unit, and waiting for another start job from here can stall boot.
+WATCHDOG="$INSTALL_DIR/tunnel-watchdog.sh"
+WATCHDOG_UNIT="/etc/systemd/system/slimeos-tunnel-watchdog.service"
+migrate_tunnel_watchdog() {
+    [[ -x "$WATCHDOG" ]] || return 0
+    local tmp
+    tmp=$(mktemp)
+    cat > "$tmp" <<SERVICE
+[Unit]
+Description=Slime OS — WireGuard tunnel watchdog
+After=network-online.target
+
+[Service]
+ExecStart=$WATCHDOG
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+    if ! cmp -s "$tmp" "$WATCHDOG_UNIT"; then
+        install -m 0644 -o root -g root "$tmp" "$WATCHDOG_UNIT"
+        systemctl daemon-reload || true
+    fi
+    rm -f "$tmp"
+    systemctl is-enabled --quiet slimeos-tunnel-watchdog.service || systemctl enable slimeos-tunnel-watchdog.service
+    systemctl start --no-block slimeos-tunnel-watchdog.service
+}
+
 case "$1" in
     on)
         # Repair first: on a half-loaded ufw, `ufw allow` below only writes
@@ -245,6 +278,7 @@ case "$1" in
         migrate_firewall_unit || echo "firewall unit migration failed" >&2
         migrate_wireguard_root || echo "wireguard root migration failed" >&2
         migrate_polkit_rules || echo "polkit rules migration failed" >&2
+        migrate_tunnel_watchdog || echo "tunnel watchdog migration failed" >&2
         if [[ -x "$FIREWALL_SETUP" ]]; then "$FIREWALL_SETUP" || true; fi
 
         rm -f "$ACTIVE_FLAG"

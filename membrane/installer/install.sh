@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-SLIMEOS_VERSION="0.3.55"
+SLIMEOS_VERSION="0.3.56"
 REPO_BASE="https://raw.githubusercontent.com/mulai/slimeos/main"
 INSTALL_DIR="/opt/slimeos"
 CONFIG_DIR="/etc/slimeos"
@@ -432,7 +432,9 @@ curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/ses
      -o "$INSTALL_DIR/update.sh"
 curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/wg-install-helper.sh" \
      -o "$INSTALL_DIR/wg-install-helper.sh"
-chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/firewall-setup.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh" "$INSTALL_DIR/wg-install-helper.sh"
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$REPO_BASE/membrane/session/tunnel-watchdog.sh" \
+     -o "$INSTALL_DIR/tunnel-watchdog.sh"
+chmod +x "$INSTALL_DIR/slimeos-session.sh" "$INSTALL_DIR/coordinator.sh" "$INSTALL_DIR/connect.sh" "$INSTALL_DIR/network-setup.sh" "$INSTALL_DIR/pair.sh" "$INSTALL_DIR/support.sh" "$INSTALL_DIR/timezone.sh" "$INSTALL_DIR/remote-support-toggle.sh" "$INSTALL_DIR/firewall-setup.sh" "$INSTALL_DIR/crash-reporting.sh" "$INSTALL_DIR/slime-id.sh" "$INSTALL_DIR/lock.sh" "$INSTALL_DIR/changelog.sh" "$INSTALL_DIR/hardware-test.sh" "$INSTALL_DIR/display-settings.sh" "$INSTALL_DIR/feedback.sh" "$INSTALL_DIR/update.sh" "$INSTALL_DIR/wg-install-helper.sh" "$INSTALL_DIR/tunnel-watchdog.sh"
 
 # Data-driven filename -> destination map apply-update-helper.sh reads at
 # apply time (see its own header for the 2026-08-16 incident this fixed) --
@@ -982,6 +984,26 @@ WantedBy=multi-user.target
 SERVICE
 systemctl enable slimeos-remote-support-reset.service
 ok "Remote Support reset-on-boot service installed"
+
+# ── 9c. Tunnel watchdog ───────────────────────────────────────────────────────
+# Moves wg0 to a new UDP port when the hub stops answering, for routers that
+# turn a NAT mapping one-way (see session/tunnel-watchdog.sh). Keep in step
+# with remote-support-toggle.sh's migrate_tunnel_watchdog.
+cat > "$SYSTEMD_DIR/slimeos-tunnel-watchdog.service" <<SERVICE
+[Unit]
+Description=Slime OS — WireGuard tunnel watchdog
+After=network-online.target
+
+[Service]
+ExecStart=${INSTALL_DIR}/tunnel-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl enable slimeos-tunnel-watchdog.service
+ok "Tunnel watchdog service installed"
 
 # ── 10. AppArmor ──────────────────────────────────────────────────────────────
 log "Enabling AppArmor..."
