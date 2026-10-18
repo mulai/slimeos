@@ -8,6 +8,7 @@ import UIKit
 final class SessionUIView: UIView, UIKeyInput {
     let session: RdpSession
     private var dragging = false
+    private let pointerLayer = CALayer()
 
     init(session: RdpSession) {
         self.session = session
@@ -15,6 +16,9 @@ final class SessionUIView: UIView, UIKeyInput {
         backgroundColor = .black
         layer.contentsGravity = .resizeAspect
         layer.magnificationFilter = .linear
+        pointerLayer.magnificationFilter = .linear
+        pointerLayer.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull()]
+        layer.addSublayer(pointerLayer)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(onTap(_:)))
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(onLongPress(_:)))
@@ -29,17 +33,39 @@ final class SessionUIView: UIView, UIKeyInput {
 
     func redraw() {
         layer.contents = session.snapshot()
+        drawPointer()
+    }
+
+    /// The server's pointer over the picture, at the same scale as the picture.
+    func drawPointer() {
+        guard let image = session.pointerImage, let pos = session.pointerPosition,
+              let fit = fit() else {
+            pointerLayer.isHidden = true
+            return
+        }
+        pointerLayer.isHidden = false
+        pointerLayer.contents = image
+        let hot = session.pointerHotspot
+        pointerLayer.frame = CGRect(x: fit.ox + (pos.x - hot.x) * fit.scale,
+                                    y: fit.oy + (pos.y - hot.y) * fit.scale,
+                                    width: CGFloat(image.width) * fit.scale,
+                                    height: CGFloat(image.height) * fit.scale)
+    }
+
+    /// The aspect fit of the desktop in this view.
+    private func fit() -> (scale: CGFloat, ox: CGFloat, oy: CGFloat)? {
+        let desk = session.desktopSize
+        guard desk.width > 0, desk.height > 0, bounds.width > 0, bounds.height > 0 else { return nil }
+        let scale = min(bounds.width / desk.width, bounds.height / desk.height)
+        return (scale, (bounds.width - desk.width * scale) / 2, (bounds.height - desk.height * scale) / 2)
     }
 
     /// View point -> desktop pixel, through the aspect fit.
     private func desktopPoint(_ p: CGPoint) -> CGPoint {
+        guard let fit = fit() else { return .zero }
         let desk = session.desktopSize
-        guard desk.width > 0, desk.height > 0, bounds.width > 0, bounds.height > 0 else { return .zero }
-        let scale = min(bounds.width / desk.width, bounds.height / desk.height)
-        let ox = (bounds.width - desk.width * scale) / 2
-        let oy = (bounds.height - desk.height * scale) / 2
-        return CGPoint(x: min(max((p.x - ox) / scale, 0), desk.width - 1),
-                       y: min(max((p.y - oy) / scale, 0), desk.height - 1))
+        return CGPoint(x: min(max((p.x - fit.ox) / fit.scale, 0), desk.width - 1),
+                       y: min(max((p.y - fit.oy) / fit.scale, 0), desk.height - 1))
     }
 
     @objc private func onTap(_ g: UITapGestureRecognizer) {
@@ -102,7 +128,9 @@ struct SessionView: UIViewRepresentable {
     func makeUIView(context: Context) -> SessionUIView { SessionUIView(session: session) }
 
     func updateUIView(_ view: SessionUIView, context: Context) {
-        _ = session.frameCount // redraw on every new picture
+        _ = session.frameCount // redraw on every new picture, pointer change or move
+        _ = session.pointerImage
+        _ = session.pointerPosition
         view.redraw()
         if keyboardShown && !view.isFirstResponder {
             view.becomeFirstResponder()

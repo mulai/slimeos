@@ -1,5 +1,5 @@
 diff --git a/channels/rdpsnd/client/ios/rdpsnd_ios.c b/channels/rdpsnd/client/ios/rdpsnd_ios.c
-index 7dfca83..3e91911 100644
+index 7dfca83..13facfb 100644
 --- a/channels/rdpsnd/client/ios/rdpsnd_ios.c
 +++ b/channels/rdpsnd/client/ios/rdpsnd_ios.c
 @@ -25,6 +25,10 @@
@@ -24,18 +24,19 @@ index 7dfca83..3e91911 100644
  
  typedef struct
  {
-@@ -41,6 +49,10 @@ typedef struct
+@@ -41,6 +49,11 @@ typedef struct
  	TPCircularBuffer buffer;
  	BOOL is_opened;
  	BOOL is_playing;
 +	UINT32 bytes_per_ms;
++	volatile UINT64 last_render; /* tick of the last render callback that had sound */
 +	/* stats for the periodic log line */
 +	UINT64 stats_since;
 +	UINT32 played, dropped, underruns, max_queued_ms;
  } rdpsndIOSPlugin;
  
  #define THIS(__ptr) ((rdpsndIOSPlugin*)__ptr)
-@@ -67,7 +79,11 @@ static OSStatus rdpsnd_ios_render_cb(void* inRefCon,
+@@ -67,14 +80,22 @@ static OSStatus rdpsnd_ios_render_cb(void* inRefCon,
  		{
  			const int bytes_to_copy = MIN((int32_t)target_buffer->mDataByteSize, available_bytes);
  			memcpy(target_buffer->mData, buffer, bytes_to_copy);
@@ -46,17 +47,31 @@ index 7dfca83..3e91911 100644
 +				memset((BYTE*)target_buffer->mData + bytes_to_copy, 0,
 +				       target_buffer->mDataByteSize - (UInt32)bytes_to_copy);
  			TPCircularBufferConsume(&p->buffer, bytes_to_copy);
++			p->last_render = GetTickCount64();
  		}
  		else
-@@ -75,6 +91,7 @@ static OSStatus rdpsnd_ios_render_cb(void* inRefCon,
- 			target_buffer->mDataByteSize = 0;
- 			AudioOutputUnitStop(p->audio_unit);
- 			p->is_playing = 0;
+ 		{
+-			target_buffer->mDataByteSize = 0;
+-			AudioOutputUnitStop(p->audio_unit);
+-			p->is_playing = 0;
++			/* Slime OS: play silence and keep running. Stopping the unit from
++			 * inside its own render callback (as before) could leave it stopped
++			 * while is_playing stayed set, silent for good (seen after a Wi-Fi
++			 * to 4G switch). */
++			memset(target_buffer->mData, 0, target_buffer->mDataByteSize);
 +			p->underruns++;
  		}
  	}
  
-@@ -134,13 +151,43 @@ static void rdpsnd_ios_stop(rdpsndDevicePlugin* __unused device)
+@@ -111,6 +132,7 @@ static void rdpsnd_ios_start(rdpsndDevicePlugin* device)
+ 		if (available_bytes > 0)
+ 		{
+ 			p->is_playing = 1;
++			p->last_render = GetTickCount64();
+ 			AudioOutputUnitStart(p->audio_unit);
+ 		}
+ 	}
+@@ -134,13 +156,55 @@ static void rdpsnd_ios_stop(rdpsndDevicePlugin* __unused device)
  static UINT rdpsnd_ios_play(rdpsndDevicePlugin* device, const BYTE* data, size_t size)
  {
  	rdpsndIOSPlugin* p = THIS(device);
@@ -87,7 +102,19 @@ index 7dfca83..3e91911 100644
 +	if (queued > 0 && (UINT32)queued + size > max_queued)
 +	{
 +		p->dropped++;
-+		return (UINT32)queued / per_ms;
++		/* Slime OS: full and nothing played for a second: the unit stalled
++		 * (an audio interruption or route change can stop it). Start over. */
++		if (p->is_playing && now - p->last_render > 1000)
++		{
++			WLog_WARN(SL_TAG, "audio output stalled for %" PRIu64 " ms; restarting it",
++			          now - p->last_render);
++			AudioOutputUnitStop(p->audio_unit);
++			TPCircularBufferClear(&p->buffer);
++			p->is_playing = 0;
++			queued = 0;
++		}
++		else
++			return (UINT32)queued / per_ms;
 +	}
 +	p->played++;
 +
@@ -102,7 +129,7 @@ index 7dfca83..3e91911 100644
  }
  
  static BOOL rdpsnd_ios_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* format,
-@@ -151,6 +198,11 @@ static BOOL rdpsnd_ios_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* form
+@@ -151,6 +215,11 @@ static BOOL rdpsnd_ios_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* form
  	if (p->is_opened)
  		return TRUE;
  

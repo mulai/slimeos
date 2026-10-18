@@ -64,12 +64,24 @@ struct TestConnectView: View {
         }
     }
 
+    /// The Brain's desktop size: the window's shape, landscape on a phone, at
+    /// about two pixels per point but no wider than 1920 (sharp enough, and
+    /// what the Brain's encoder handles well). Width a multiple of 4.
+    static func desktopSize() -> (UInt32, UInt32) {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        var size = scene?.coordinateSpace.bounds.size ?? CGSize(width: 1280, height: 800)
+        if UIDevice.current.userInterfaceIdiom == .phone && size.height > size.width {
+            size = CGSize(width: size.height, height: size.width)
+        }
+        let scale = min(2, 1920 / max(size.width, size.height))
+        let w = UInt32(size.width * scale) & ~3
+        let h = UInt32(size.height * scale) & ~1
+        return (max(w, 640), max(h, 480))
+    }
+
     private func connect() {
         let s = RdpSession()
-        // Twice the screen in points, landscape, width a multiple of 4.
-        let bounds = UIScreen.main.bounds
-        let w = UInt32(max(bounds.width, bounds.height) * 2) & ~3
-        let h = UInt32(min(bounds.width, bounds.height) * 2) & ~1
+        let (w, h) = Self.desktopSize()
         var user = username
         var domain = ""
         if let slash = username.firstIndex(of: "\\") {
@@ -104,7 +116,9 @@ struct SessionScreen: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onChange(of: session.state) { _, state in
-            if case .ended(0, _) = state { onClose() }
+            if case let .ended(error, info) = state, RdpSession.describe(error: error, errorInfo: info) == nil {
+                onClose()
+            }
         }
     }
 
@@ -112,8 +126,9 @@ struct SessionScreen: View {
         switch session.state {
         case .idle, .connecting: return "Connecting…"
         case .connected: return ""
+        case .reconnecting: return "Reconnecting…"
         case let .ended(error, info):
-            return String(format: "Ended (error 0x%08X, info %u)", error, info)
+            return RdpSession.describe(error: error, errorInfo: info) ?? ""
         }
     }
 }
