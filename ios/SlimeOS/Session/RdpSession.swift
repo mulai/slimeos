@@ -17,6 +17,8 @@ final class RdpSession: ObservableObject {
     @Published private(set) var state: State = .idle
     /// Bumped (on the main thread) when the picture changed.
     @Published private(set) var frameCount = 0
+    /// False while the previous session's picture is shown (see initialPicture).
+    @Published private(set) var hasLivePicture = true
     private(set) var desktopSize = CGSize.zero
 
     /// The server's pointer image (nil: hidden or not set yet) and its hotspot.
@@ -30,7 +32,19 @@ final class RdpSession: ObservableObject {
     private let lock = NSLock()
     private var canvas: CGContext?
     private var displayPending = false
+    /// The previous session's last picture, shown until this one draws something
+    /// real (Windows' first updates after a connect are plain black).
+    private var seed: CGImage?
+    private var holdUntil: Date?
     private var interruptionObserver: NSObjectProtocol?
+
+    init(initialPicture: CGImage? = nil) {
+        seed = initialPicture
+        if initialPicture != nil {
+            holdUntil = Date().addingTimeInterval(30)
+            hasLivePicture = false
+        }
+    }
 
     deinit {
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
@@ -111,7 +125,7 @@ final class RdpSession: ObservableObject {
     func snapshot() -> CGImage? {
         lock.lock()
         defer { lock.unlock() }
-        return canvas?.makeImage()
+        return canvas?.makeImage() ?? seed
     }
 
     // MARK: Input (desktop coordinates)
@@ -140,6 +154,24 @@ final class RdpSession: ObservableObject {
         guard let handle else { return }
         sl_send_scancode(handle, 0x0E, true)
         sl_send_scancode(handle, 0x0E, false)
+    }
+
+    /// True if the region looks plain black, sampled on a grid (BGRA bytes).
+    private static func looksBlack(_ src: UnsafePointer<UInt8>, _ stride: Int, _ x: Int, _ y: Int,
+                                   _ w: Int, _ h: Int, _ width: Int, _ height: Int) -> Bool {
+        let x0 = max(0, x), y0 = max(0, y)
+        let x1 = min(width, x + w), y1 = min(height, y + h)
+        guard x1 > x0, y1 > y0 else { return true }
+        let steps = 24
+        for i in 0..<steps {
+            let py = y0 + (y1 - 1 - y0) * i / (steps - 1)
+            for j in 0..<steps {
+                let px = x0 + (x1 - 1 - x0) * j / (steps - 1)
+                let p = src + py * stride + px * 4
+                if (p[0] | p[1] | p[2]) & 0xF0 != 0 { return false }
+            }
+        }
+        return true
     }
 
     // MARK: Bridge callbacks (FreeRDP's thread)
@@ -216,7 +248,19 @@ final class RdpSession: ObservableObject {
 
     private func copyFrame(_ src: UnsafePointer<UInt8>, _ width: Int, _ height: Int, _ stride: Int,
                            _ x: Int, _ y: Int, _ w: Int, _ h: Int) {
+        var (x, y, w, h) = (x, y, w, h)
         lock.lock()
+        if let until = holdUntil {
+            // Still showing the previous session's picture: skip black updates.
+            if Date() < until && Self.looksBlack(src, stride, x, y, w, h, width, height) {
+                lock.unlock()
+                return
+            }
+            holdUntil = nil
+            DispatchQueue.main.async { self.hasLivePicture = true }
+            // FreeRDP's buffer already holds whatever was skipped: copy all of it.
+            (x, y, w, h) = (0, 0, width, height)
+        }
         if canvas == nil || canvas!.width != width || canvas!.height != height {
             // BGRA bytes = 32-bit little-endian with the alpha byte unused.
             canvas = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -224,6 +268,11 @@ final class RdpSession: ObservableObject {
                                bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
                                    | CGBitmapInfo.byteOrder32Little.rawValue)
             desktopSize = CGSize(width: width, height: height)
+            // Start from the previous session's picture, scaled if the size changed.
+            if let seed, let canvas {
+                canvas.interpolationQuality = .medium
+                canvas.draw(seed, in: CGRect(x: 0, y: 0, width: width, height: height))
+            }
         }
         if let canvas, let dst = canvas.data?.assumingMemoryBound(to: UInt8.self) {
             let x0 = max(0, x), y0 = max(0, y)

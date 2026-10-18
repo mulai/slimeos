@@ -56,7 +56,6 @@ targets:
         CFBundleDisplayName: Slime OS
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
-        UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIRequiresFullScreen: true
@@ -69,6 +68,15 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
         NSLocalNetworkUsageDescription: Slime OS connects to Brains on your local network.
+        UIAppFonts:
+          - space_grotesk.ttf
+          - plus_jakarta_sans.ttf
+          - jetbrains_mono.ttf
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: SlimeMark
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.slimeos.app

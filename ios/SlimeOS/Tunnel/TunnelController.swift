@@ -57,10 +57,31 @@ final class TunnelController: ObservableObject {
             try await m.loadFromPreferences() // required before starting a just-saved config
             manager = m
             isPaired = true
+            status = m.connection.status
             start()
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Starts the tunnel if needed and waits until it's up; false if it didn't
+    /// come up in time (or there's no pairing).
+    func ensureUp(timeout: TimeInterval = 20) async -> Bool {
+        if manager == nil { await load() }
+        guard manager != nil else { return false }
+        if status == .connected { return true }
+        if status != .connecting && status != .reasserting { start() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if status == .connected { return true }
+            if status == .disconnected || status == .invalid {
+                // A start that failed straight away; one more try.
+                start()
+                try? await Task.sleep(nanoseconds: 750_000_000)
+            }
+        }
+        return status == .connected
     }
 
     func start() {
