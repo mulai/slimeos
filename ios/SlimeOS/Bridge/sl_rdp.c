@@ -5,6 +5,7 @@
 #include "sl_rdp.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +32,7 @@ struct SLSession
 	rdpContext* context;
 	pthread_t thread;
 	bool thread_started;
+	atomic_bool stop_requested; // the user closed it: not an error, no reconnect
 };
 
 typedef struct
@@ -142,17 +144,22 @@ static void* session_thread(void* arg)
 				break;
 			if (WaitForMultipleObjects(count, handles, FALSE, 250) == WAIT_FAILED)
 				break;
+			if (atomic_load(&s->stop_requested))
+				break;
 			if (!freerdp_check_event_handles(context))
 			{
-				if (client_auto_reconnect_ex(instance, NULL))
+				if (!atomic_load(&s->stop_requested) && client_auto_reconnect_ex(instance, NULL))
 					continue;
 				break;
 			}
 		}
 	}
 
-	const uint32_t error = freerdp_get_last_error(context);
-	const uint32_t error_info = freerdp_error_info(instance);
+	// After a stop the last error is just the abort (or whatever the abort
+	// interrupted, e.g. ERRCONNECT_ACTIVATION_TIMEOUT): report a clean end.
+	const bool stopped = atomic_load(&s->stop_requested);
+	const uint32_t error = stopped ? 0 : freerdp_get_last_error(context);
+	const uint32_t error_info = stopped ? 0 : freerdp_error_info(instance);
 	freerdp_disconnect(instance);
 	s->on_state(s->owner, SL_STATE_DISCONNECTED, error, error_info);
 	return NULL;
@@ -221,8 +228,10 @@ bool sl_session_start(SLSession* s, const SLConnectParams* p)
 
 void sl_session_stop(SLSession* s)
 {
-	if (s && s->context)
-		freerdp_abort_connect_context(s->context);
+	if (!s || !s->context)
+		return;
+	atomic_store(&s->stop_requested, true);
+	freerdp_abort_connect_context(s->context);
 }
 
 void sl_session_free(SLSession* s)
