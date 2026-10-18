@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 
@@ -28,6 +29,10 @@ final class RdpSession: ObservableObject {
     func connect(host: String, port: UInt16 = 3389, username: String, password: String,
                  domain: String = "", width: UInt32, height: UInt32) {
         guard handle == nil else { return }
+        // The Brain's sound plays like a video's: through the silent switch,
+        // alongside nothing else.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         let owner = Unmanaged.passUnretained(self).toOpaque()
         guard let h = sl_session_new(owner, RdpSession.frameCallback, RdpSession.stateCallback) else {
             state = .ended(error: 0, errorInfo: 0)

@@ -11,12 +11,19 @@ developer account signed in to Xcode. A real device is required for the
 tunnel (Network Extensions don't run in the simulator).
 
 1. FreeRDP for iOS, with FreeRDP's own super-build (from a checkout of the
-   same FreeRDP version as `android/third_party/FreeRDP`):
+   same FreeRDP version as `android/third_party/FreeRDP`, with
+   `git apply <repo>/ios/freerdp-patches/*.patch` first):
 
        cmake -S client/iOS -B <build> -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/ios.toolchain.cmake" \
          -DPLATFORM=OS64 -DDEPLOYMENT_TARGET=15.0 -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=<team> \
          -DWITH_FFMPEG=OFF -DWITH_OPUS=OFF -DWITH_PNG=OFF -DWITH_WEBP=OFF -DWITH_JPEG=OFF -G Xcode
        cmake --build <build>
+
+   Sound: the super-build doesn't pass FreeRDP's `WITH_IOSAUDIO` on, so turn
+   it on in the FreeRDP sub-build and rebuild just that:
+
+       cmake -DWITH_IOSAUDIO=ON <build>/freerdp-prefix/src/freerdp-build
+       cmake --build <build> --target freerdp
 
 2. `scripts/stage-freerdp.sh <build>/deps` copies the libraries into
    `Vendor/FreeRDP` (gitignored) and makes them load from the app.
@@ -29,7 +36,7 @@ tunnel (Network Extensions don't run in the simulator).
 
 ## Not yet
 
-Sound (FreeRDP needs `WITH_IOSAUDIO`), a drawn mouse pointer, certificate
+A drawn mouse pointer, certificate
 pinning (the test build accepts any certificate), Slime ID and the Brain
 list, our FreeRDP patches (UDP transport, keep-last-picture), and packaging
 the libraries as frameworks for the App Store.

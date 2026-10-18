@@ -1,0 +1,116 @@
+diff --git a/channels/rdpsnd/client/ios/rdpsnd_ios.c b/channels/rdpsnd/client/ios/rdpsnd_ios.c
+index 7dfca83..3e91911 100644
+--- a/channels/rdpsnd/client/ios/rdpsnd_ios.c
++++ b/channels/rdpsnd/client/ios/rdpsnd_ios.c
+@@ -25,6 +25,10 @@
+ 
+ #include <freerdp/types.h>
+ #include <freerdp/codec/dsp.h>
++#include <winpr/sysinfo.h>
++#include <winpr/wlog.h>
++
++#define SL_TAG CHANNELS_TAG("rdpsnd.client.ios")
+ 
+ #import <AudioToolbox/AudioToolbox.h>
+ 
+@@ -33,6 +37,10 @@
+ 
+ #define INPUT_BUFFER_SIZE 32768
+ #define CIRCULAR_BUFFER_SIZE (INPUT_BUFFER_SIZE * 4)
++/* Slime OS: a chunk that would queue sound beyond this, or beyond two chunks
++ * (Windows sends ~186 ms chunks), is dropped, so sound can't fall far behind the
++ * picture (the buffer above holds ~0.7 s at 48 kHz stereo). */
++#define MAX_QUEUED_MS 150
+ 
+ typedef struct
+ {
+@@ -41,6 +49,10 @@ typedef struct
+ 	TPCircularBuffer buffer;
+ 	BOOL is_opened;
+ 	BOOL is_playing;
++	UINT32 bytes_per_ms;
++	/* stats for the periodic log line */
++	UINT64 stats_since;
++	UINT32 played, dropped, underruns, max_queued_ms;
+ } rdpsndIOSPlugin;
+ 
+ #define THIS(__ptr) ((rdpsndIOSPlugin*)__ptr)
+@@ -67,7 +79,11 @@ static OSStatus rdpsnd_ios_render_cb(void* inRefCon,
+ 		{
+ 			const int bytes_to_copy = MIN((int32_t)target_buffer->mDataByteSize, available_bytes);
+ 			memcpy(target_buffer->mData, buffer, bytes_to_copy);
+-			target_buffer->mDataByteSize = bytes_to_copy;
++			/* Slime OS: pad a short read with silence; RemoteIO plays the whole
++			 * buffer either way. */
++			if ((UInt32)bytes_to_copy < target_buffer->mDataByteSize)
++				memset((BYTE*)target_buffer->mData + bytes_to_copy, 0,
++				       target_buffer->mDataByteSize - (UInt32)bytes_to_copy);
+ 			TPCircularBufferConsume(&p->buffer, bytes_to_copy);
+ 		}
+ 		else
+@@ -75,6 +91,7 @@ static OSStatus rdpsnd_ios_render_cb(void* inRefCon,
+ 			target_buffer->mDataByteSize = 0;
+ 			AudioOutputUnitStop(p->audio_unit);
+ 			p->is_playing = 0;
++			p->underruns++;
+ 		}
+ 	}
+ 
+@@ -134,13 +151,43 @@ static void rdpsnd_ios_stop(rdpsndDevicePlugin* __unused device)
+ static UINT rdpsnd_ios_play(rdpsndDevicePlugin* device, const BYTE* data, size_t size)
+ {
+ 	rdpsndIOSPlugin* p = THIS(device);
+-	const BOOL ok = TPCircularBufferProduceBytes(&p->buffer, data, size);
++	int32_t queued = 0;
++	TPCircularBufferTail(&p->buffer, &queued);
++
++	/* Slime OS: report how long this chunk waits before it's heard (FreeRDP
++	 * passes it to the server in the wave confirm), and drop it rather than
++	 * queue past MAX_QUEUED_MS. Only the render thread consumes, so the old
++	 * end of the queue can't be trimmed from here. */
++	const UINT32 per_ms = p->bytes_per_ms ? p->bytes_per_ms : 1;
++	const UINT64 now = GetTickCount64();
++	if (p->stats_since == 0)
++		p->stats_since = now;
++	if ((UINT32)queued / per_ms > p->max_queued_ms)
++		p->max_queued_ms = (UINT32)queued / per_ms;
++	if (now - p->stats_since >= 2000)
++	{
++		WLog_INFO(SL_TAG, "2 s: %" PRIu32 " chunks played, %" PRIu32 " dropped, %" PRIu32
++		          " underruns, queue now %" PRIu32 " ms (max %" PRIu32 " ms), chunk %" PRIuz " ms",
++		          p->played, p->dropped, p->underruns, (UINT32)queued / per_ms, p->max_queued_ms,
++		          size / per_ms);
++		p->stats_since = now;
++		p->played = p->dropped = p->underruns = p->max_queued_ms = 0;
++	}
++	const size_t max_queued = MAX((size_t)per_ms * MAX_QUEUED_MS, 2 * size);
++	if (queued > 0 && (UINT32)queued + size > max_queued)
++	{
++		p->dropped++;
++		return (UINT32)queued / per_ms;
++	}
++	p->played++;
++
++	const BOOL ok = TPCircularBufferProduceBytes(&p->buffer, data, (int32_t)size);
+ 
+ 	if (!ok)
+ 		return 0;
+ 
+ 	rdpsnd_ios_start(device);
+-	return 10; /* TODO: Get real latencry in [ms] */
++	return (UINT32)(((size_t)queued + size) / per_ms);
+ }
+ 
+ static BOOL rdpsnd_ios_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* format,
+@@ -151,6 +198,11 @@ static BOOL rdpsnd_ios_open(rdpsndDevicePlugin* device, const AUDIO_FORMAT* form
+ 	if (p->is_opened)
+ 		return TRUE;
+ 
++	p->bytes_per_ms = format->nSamplesPerSec * format->nChannels * format->wBitsPerSample / 8 / 1000;
++	WLog_INFO(SL_TAG, "open: tag %" PRIu16 ", %" PRIu32 " Hz, %" PRIu16 " ch, %" PRIu16 " bit, %" PRIu32 " bytes/ms",
++	          format->wFormatTag, format->nSamplesPerSec, format->nChannels, format->wBitsPerSample,
++	          p->bytes_per_ms);
++
+ 	/* Find the output audio unit. */
+ 	AudioComponentDescription desc;
+ 	desc.componentManufacturer = kAudioUnitManufacturer_Apple;
