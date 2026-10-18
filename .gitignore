@@ -45,3 +45,10 @@ authelia/secrets/
 # committed binaries live in membrane/bridge/bin/, which is deliberately
 # NOT ignored.
 membrane/bridge/dist/
+
+# iOS: staged FreeRDP (ios/scripts/stage-freerdp.sh) and the XcodeGen output
+ios/Vendor/
+ios/*.xcodeproj/
+ios/build/
+ios/Config/Local.xcconfig
+ios/[0-9]*-*/

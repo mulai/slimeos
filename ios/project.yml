@@ -1,0 +1,106 @@
+# XcodeGen spec: `xcodegen` in this folder writes SlimeOS.xcodeproj (gitignored).
+# FreeRDP comes from ios/scripts/stage-freerdp.sh (see README.md).
+name: SlimeOS
+options:
+  deploymentTarget:
+    iOS: "17.0"
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+packages:
+  WireGuardKit:
+    path: Vendor/wireguard-apple # ios/scripts/fetch-wireguard.sh
+targets:
+  # Builds wireguard-go (libwg-go.a) for WireGuardKit, as its README describes.
+  WireGuardGoBridgeiOS:
+    type: ""
+    platform: iOS
+    legacy:
+      toolPath: /usr/bin/make
+      arguments: $(ACTION)
+      workingDirectory: $(PROJECT_DIR)/Vendor/wireguard-apple/Sources/WireGuardKitGo
+      passSettings: true
+  SlimeTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SlimeTunnel
+    info:
+      path: SlimeTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: Slime OS Tunnel
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slimeos.app.tunnel
+        CODE_SIGN_ENTITLEMENTS: SlimeTunnel/SlimeTunnel.entitlements
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: WireGuardKit
+      - target: WireGuardGoBridgeiOS
+        link: false
+  SlimeOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: SlimeOS
+    info:
+      path: SlimeOS/Info.plist
+      properties:
+        CFBundleDisplayName: Slime OS
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+        NSLocalNetworkUsageDescription: Slime OS connects to Brains on your local network.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slimeos.app
+        CODE_SIGN_ENTITLEMENTS: SlimeOS/SlimeOS.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        GCC_C_LANGUAGE_STANDARD: gnu2x
+        SWIFT_OBJC_BRIDGING_HEADER: SlimeOS/Bridge/SlimeOS-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/Vendor/FreeRDP/include/freerdp3
+          - $(PROJECT_DIR)/Vendor/FreeRDP/include/winpr3
+        LIBRARY_SEARCH_PATHS:
+          - $(PROJECT_DIR)/Vendor/FreeRDP/lib
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+    dependencies:
+      - target: SlimeTunnel
+      - framework: Vendor/FreeRDP/lib/libfreerdp3.3.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libfreerdp-client3.3.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libwinpr3.3.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libssl.4.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libcrypto.4.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libopenh264.8.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/libcjson.1.dylib
+        embed: true
+      - framework: Vendor/FreeRDP/lib/liburiparser.1.dylib
+        embed: true
