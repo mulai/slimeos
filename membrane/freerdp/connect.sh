@@ -992,9 +992,12 @@ do_connect() {
             # surfacing to the user, not swallowing silently. Nor, since
             # 0.3.56, 1 (ERRINFO_RPC_INITIATED_DISCONNECT): a TermService
             # crash/restart on the Brain ends the session with it, and
-            # treating it as clean sent the user back to the picker and
-            # had the hub log off the session with their open windows. It
-            # now reconnects like a drop (same as the Android app).
+            # treating it as clean had the hub log off the session with the
+            # user's open windows. But Windows also sends 1 to the device
+            # whose session another device just took over (2026-10-18, AMD
+            # box -> iPhone), so 1 doesn't reconnect either (0.3.56 did, and
+            # took the session straight back): it gets the error screen
+            # below, session kept, same as the Android app.
             case "$exit_code" in
                 0|2|11|12)
                     log "Clean disconnect (exit code $exit_code) — returning to Brain picker"
@@ -1008,7 +1011,8 @@ do_connect() {
             # is a connect/auth failure and gets an error screen instead.
             # Blind retries on fast failures are dangerous: repeated failed
             # logons can lock a Windows account within a minute.
-            if (( runtime >= MIN_SESSION_SECONDS )) && [[ "${RECONNECT_DELAY:-5}" -ne 0 ]]; then
+            if (( runtime >= MIN_SESSION_SECONDS )) && [[ "${RECONNECT_DELAY:-5}" -ne 0 ]] \
+                && [[ "$exit_code" != 1 ]]; then
                 attempt=$((attempt + 1))
                 emit_state reconnecting "$(jq -nc --arg n "$brain_name" --argjson a "$attempt" \
                     '{brainName:$n,attempt:$a}')"
@@ -1098,7 +1102,7 @@ do_connect() {
                     message="Connection failed." ;;
             esac
             if [[ -z "$err_hint" && "$exit_code" == 1 ]]; then
-                message="This Brain closed the connection. Your session is kept; try again when you're ready."
+                message="This Brain closed the connection, maybe because it was opened on another device. Your session is kept; try again when you're ready."
             fi
             detail="${err_hint:-exit code $exit_code}"
 

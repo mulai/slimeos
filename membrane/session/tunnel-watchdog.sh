@@ -39,6 +39,7 @@ hub_endpoint_routable() {
 
 fails=0
 act_after=$FAILS_TO_ACT
+moved=false # moved the tunnel since the hub last answered
 while sleep "$CHECK_EVERY"; do
     if ! ip link show wg0 &>/dev/null || ! hub_endpoint_routable; then
         fails=0
@@ -46,7 +47,8 @@ while sleep "$CHECK_EVERY"; do
         continue
     fi
     if ping -c1 -W3 "$HUB_IP" &>/dev/null; then
-        (( fails >= FAILS_TO_ACT )) && log "hub answers again"
+        { $moved || (( fails >= FAILS_TO_ACT )); } && log "hub answers again"
+        moved=false
         fails=0
         act_after=$FAILS_TO_ACT
         continue
@@ -58,6 +60,7 @@ while sleep "$CHECK_EVERY"; do
     new_port=$(shuf -i 20000-60999 -n 1)
     log "no answer from the hub for $((fails * CHECK_EVERY)) s: moving the tunnel from port ${old_port:-?} to $new_port"
     wg set wg0 listen-port "$new_port" || log "wg set listen-port $new_port failed"
+    moved=true
     act_after=$(( act_after * 2 > MAX_BACKOFF ? MAX_BACKOFF : act_after * 2 ))
     fails=0
 done
