@@ -3,14 +3,21 @@ package com.slimeos.app
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import com.freerdp.freerdpcore.presentation.SessionActivity
@@ -47,10 +54,14 @@ class SlimeSessionActivity : SessionActivity() {
     private val unansweredTaps = ArrayDeque<Long>()
     private val answeredTaps = ArrayDeque<Long>()
     private var askedAboutFreeze = false // the question is on screen
+    // Over the picture kept from before a reconnect (showingOldFrame), until the
+    // Brain sends a new one, so a still screen doesn't pass for a live one.
+    private lateinit var reconnectBadge: TextView
 
     private val freezeCheck = object : Runnable {
         override fun run() {
             checkForFreeze()
+            updateReconnectBadge()
             handler.postDelayed(this, 1_000)
         }
     }
@@ -67,6 +78,36 @@ class SlimeSessionActivity : SessionActivity() {
         // dim and lock the tablet under it. Only for this window, so it ends
         // with the session.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        reconnectBadge = TextView(this).apply {
+            text = "Reconnecting…"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(0xCC000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        addContentView(
+            reconnectBadge,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            ).apply { topMargin = dp(24) }
+        )
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun updateReconnectBadge() {
+        val show = showingOldFrame
+        val visibility = if (show) View.VISIBLE else View.GONE
+        if (reconnectBadge.visibility != visibility) {
+            reconnectBadge.visibility = visibility
+            Log.i("SlimeSession", if (show) "Showing the last picture while reconnecting" else "New picture from the Brain")
+        }
     }
 
     override fun onResume() {
@@ -85,7 +126,9 @@ class SlimeSessionActivity : SessionActivity() {
 
     override fun OnGraphicsUpdate(x: Int, y: Int, width: Int, height: Int) {
         lastFrameAt = SystemClock.elapsedRealtime()
+        val hadOldFrame = showingOldFrame
         super.OnGraphicsUpdate(x, y, width, height)
+        if (hadOldFrame) handler.post { updateReconnectBadge() }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {

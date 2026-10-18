@@ -1,0 +1,236 @@
+diff --git a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+--- a/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
++++ b/client/Android/Studio/freeRDPCore/src/main/java/com/freerdp/freerdpcore/presentation/SessionActivity.java
+@@ -18,6 +18,8 @@
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
+ import android.graphics.Bitmap.Config;
++import android.graphics.Canvas;
++import android.graphics.Paint;
+ import android.graphics.Rect;
+ import android.graphics.drawable.BitmapDrawable;
+ import android.net.Uri;
+@@ -71,6 +73,30 @@
+ 	private static final String TAG = "FreeRDP.SessionActivity";
+ 	static volatile SessionActivity activeSession;
+ 	private Bitmap bitmap;
++	// The screen keeps its last picture while a session reconnects, instead of going
++	// black until the server's first full frame (slow on a weak connection). A GFX
++	// reconnect resets graphics, which arrives as OnGraphicsResize even at the same
++	// size; a new session after a drop starts from the previous one's last picture,
++	// if it was of the same server and recent.
++	private static final long LAST_FRAME_MAX_AGE_MS = 3 * 60_000L;
++	private static Bitmap lastFrame;
++	private static String lastFrameKey;
++	private static long lastFrameAt;
++	/** The screen shows a picture from before a reconnect; cleared by the next update. */
++	protected volatile boolean showingOldFrame;
++	// bitmap holds something the server drew (or the last session's picture), not
++	// just the blank it starts as: only then is there a picture worth keeping.
++	private boolean hasPicture;
++	// After a reset the server's first updates are often plain black (fresh GFX
++	// surfaces before the first video frame), which drew black over the kept picture
++	// after all. They go to `probe` instead until one isn't black, then everything
++	// held is copied to the screen at once; at most HOLD_BLACK_MAX_MS, so a desktop
++	// that really is black still shows.
++	private static final long HOLD_BLACK_MAX_MS = 10_000L;
++	private long holdingSince; // 0: not holding
++	private Rect heldRegion;
++	private int heldUpdates;
++	private Bitmap probe;
+ 	private SessionState session;
+ 	private SessionView sessionView;
+ 	private TouchPointerView touchPointerView;
+@@ -393,8 +419,92 @@
+ 		GlobalApp.freeSession(session.getInstance());
+ 
+ 		session = null;
++
++		if (bitmap != null)
++		{
++			synchronized (SessionActivity.class)
++			{
++				lastFrame = bitmap;
++				lastFrameKey = frameKey();
++				lastFrameAt = android.os.SystemClock.elapsedRealtime();
++			}
++		}
++	}
++
++	/** Forget the last session's picture: it ended for good (logoff, user disconnect). */
++	public static synchronized void forgetLastFrame()
++	{
++		lastFrame = null;
++		lastFrameKey = null;
++	}
++
++	private String frameKey()
++	{
++		Uri uri = getIntent() != null ? getIntent().getData() : null;
++		return uri != null ? uri.getHost() + ":" + uri.getPort() : null;
+ 	}
+ 
++	// The last session's picture, if it was of this server and recent; only once.
++	private Bitmap takeLastFrame()
++	{
++		synchronized (SessionActivity.class)
++		{
++			Bitmap old = null;
++			String key = frameKey();
++			if (lastFrame != null && key != null && key.equals(lastFrameKey) &&
++			    android.os.SystemClock.elapsedRealtime() - lastFrameAt < LAST_FRAME_MAX_AGE_MS)
++				old = lastFrame;
++			lastFrame = null;
++			lastFrameKey = null;
++			return old;
++		}
++	}
++
++	// On screen from the start of a connect, not only once it's up: on a weak
++	// connection the handshakes alone take seconds, black ones until now.
++	private void showLastFrame()
++	{
++		Bitmap old = takeLastFrame();
++		if (old == null)
++			return;
++		bitmap = old;
++		hasPicture = true;
++		showingOldFrame = true;
++		holdingSince = android.os.SystemClock.elapsedRealtime();
++		Log.i(TAG, "Showing the last session's picture while connecting");
++		session.setSurface(new BitmapDrawable(getResources(), bitmap));
++		sessionView.onSurfaceChange(session);
++	}
++
++	// A bitmap for a (re)sized session that starts with the picture already on screen,
++	// scaled if the size changed.
++	private Bitmap bitmapKeepingPicture(int width, int height, int bpp)
++	{
++		Config config = bpp > 16 ? Config.ARGB_8888 : Config.RGB_565;
++		Bitmap old = bitmap;
++		if (old == null || !hasPicture)
++		{
++			showingOldFrame = false;
++			holdingSince = 0;
++			return Bitmap.createBitmap(width, height, config);
++		}
++		Log.i(TAG, "Graphics reset to " + width + "x" + height + ": keeping the picture on screen");
++		showingOldFrame = true;
++		if (holdingSince == 0)
++		{
++			holdingSince = android.os.SystemClock.elapsedRealtime();
++			heldRegion = null;
++			heldUpdates = 0;
++		}
++		if (old.isMutable() && old.getWidth() == width && old.getHeight() == height &&
++		    old.getConfig() == config)
++			return old;
++		Bitmap fresh = Bitmap.createBitmap(width, height, config);
++		new Canvas(fresh).drawBitmap(old, null, new Rect(0, 0, width, height),
++		                             new Paint(Paint.FILTER_BITMAP_FLAG));
++		return fresh;
++	}
++
+ 	@Override public void onConfigurationChanged(Configuration newConfig)
+ 	{
+ 		super.onConfigurationChanged(newConfig);
+@@ -635,6 +745,7 @@
+ 	private void connectWithTitle(String title)
+ 	{
+ 		session.setUIEventListener(this);
++		showLastFrame();
+ 
+ 		sessionViewModel.register(session.getInstance());
+ 
+@@ -745,12 +856,8 @@
+ 	// LibFreeRDP UI event listener implementation
+ 	@Override public void OnSettingsChanged(int width, int height, int bpp)
+ 	{
++		bitmap = bitmapKeepingPicture(width, height, bpp);
+ 
+-		if (bpp > 16)
+-			bitmap = Bitmap.createBitmap(width, height, Config.ARGB_8888);
+-		else
+-			bitmap = Bitmap.createBitmap(width, height, Config.RGB_565);
+-
+ 		session.setSurface(new BitmapDrawable(getResources(), bitmap));
+ 
+ 		if (inputManager != null)
+@@ -771,10 +878,65 @@
+ 		    settings.getHeight() != height || settings.getColors() != bpp)
+ 			uiHandler.sendMessage(Message.obtain(
+ 			    null, DISPLAY_TOAST, getResources().getText(R.string.info_capabilities_changed)));
++	}
++
++	// True if the region of `b` looks plain black, sampled on a grid.
++	private static boolean looksBlack(Bitmap b, Rect r)
++	{
++		final int steps = 24;
++		for (int i = 0; i < steps; i++)
++		{
++			int py = r.top + (r.height() - 1) * i / (steps - 1);
++			for (int j = 0; j < steps; j++)
++			{
++				int px = r.left + (r.width() - 1) * j / (steps - 1);
++				if ((b.getPixel(px, py) & 0xF0F0F0) != 0)
++					return false;
++			}
++		}
++		return true;
+ 	}
+ 
+ 	@Override public void OnGraphicsUpdate(int x, int y, int width, int height)
+ 	{
++		if (holdingSince != 0)
++		{
++			Rect r = new Rect(x, y, x + width, y + height);
++			if (!r.intersect(0, 0, bitmap.getWidth(), bitmap.getHeight()))
++				r.setEmpty();
++			if (heldRegion == null)
++				heldRegion = new Rect(r);
++			else
++				heldRegion.union(r);
++			long heldMs = android.os.SystemClock.elapsedRealtime() - holdingSince;
++			if (heldMs < HOLD_BLACK_MAX_MS && !r.isEmpty())
++			{
++				if (probe == null || probe.getWidth() != bitmap.getWidth() ||
++				    probe.getHeight() != bitmap.getHeight() || probe.getConfig() != bitmap.getConfig())
++					probe = Bitmap.createBitmap(bitmap.getWidth(), bitmap.getHeight(),
++					                            bitmap.getConfig());
++				LibFreeRDP.updateGraphics(session.getInstance(), probe, r.left, r.top, r.width(),
++				                          r.height());
++				if (looksBlack(probe, r))
++				{
++					heldUpdates++;
++					return;
++				}
++			}
++			Log.i(TAG, "New picture after " + heldMs + " ms; held back " + heldUpdates +
++			               " black updates");
++			holdingSince = 0;
++			heldUpdates = 0;
++			x = heldRegion.left;
++			y = heldRegion.top;
++			width = heldRegion.width();
++			height = heldRegion.height();
++			heldRegion = null;
++			if (width <= 0 || height <= 0)
++				return;
++		}
++		showingOldFrame = false;
++		hasPicture = true;
+ 		LibFreeRDP.updateGraphics(session.getInstance(), bitmap, x, y, width, height);
+ 
+ 		sessionView.addInvalidRegion(new Rect(x, y, x + width, y + height));
+@@ -790,10 +952,7 @@
+ 	@Override public void OnGraphicsResize(int width, int height, int bpp)
+ 	{
+ 		// replace bitmap
+-		if (bpp > 16)
+-			bitmap = Bitmap.createBitmap(width, height, Config.ARGB_8888);
+-		else
+-			bitmap = Bitmap.createBitmap(width, height, Config.RGB_565);
++		bitmap = bitmapKeepingPicture(width, height, bpp);
+ 		session.setSurface(new BitmapDrawable(getResources(), bitmap));
+ 
+ 		if (inputManager != null)

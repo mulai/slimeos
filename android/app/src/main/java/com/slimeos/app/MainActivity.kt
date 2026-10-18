@@ -1161,6 +1161,7 @@ class MainActivity : ComponentActivity() {
             // that would throw away the user's open windows.
             reconnecting = false
             quickReconnects = 0
+            SessionActivity.forgetLastFrame()
             lifecycleScope.launch { withContext(Dispatchers.IO) { BrainPower.notifySessionEnded(host) } }
             showHome()
             return
@@ -1168,6 +1169,7 @@ class MainActivity : ComponentActivity() {
         if (endedByUser) {
             reconnecting = false
             quickReconnects = 0
+            SessionActivity.forgetLastFrame()
             showHome()
             return
         }
