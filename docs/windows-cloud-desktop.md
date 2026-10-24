@@ -35,7 +35,7 @@ az group create --name slimeos-windows --location southeastasia
 az vm create \
   --resource-group slimeos-windows \
   --name slimeos-windows \
-  --image MicrosoftWindowsDesktop:windows-11:win11-24h2-pro:latest \
+  --image MicrosoftWindowsDesktop:windows-11:win11-25h2-pro:latest \
   --size Standard_D2s_v3 \
   --admin-username slimeadmin \
   --admin-password "YourStrongPassword!Az" \
