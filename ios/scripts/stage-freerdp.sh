@@ -12,6 +12,11 @@
 # The simulator build has no OpenH264, so its openh264 slice is an empty
 # stub: nothing there links to it, it only satisfies the xcframework.
 #
+# Each xcframework is signed (we are the SDK's provider): the App Store
+# refuses a commonly used SDK such as OpenSSL without a signature (ITMS-91065).
+# The identity is the keychain's Apple Distribution certificate, or
+# SIGN_IDENTITY.
+#
 # Usage: ios/scripts/stage-freerdp.sh [work dir, default ~/Developer/slimeos-ios]
 set -euo pipefail
 
@@ -109,6 +114,10 @@ make_slice() {   # kind (device|simulator), out dir
     done
 }
 
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
+    | awk -F'"' '/Apple Distribution/ {print $2; exit}')}"
+[[ -n "$SIGN_IDENTITY" ]] || { echo "no Apple Distribution certificate in the keychain (or set SIGN_IDENTITY)" >&2; exit 1; }
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 make_slice device "$TMP/device"
@@ -121,6 +130,7 @@ for pair in "${LIBS[@]}"; do
     fw="${pair#*:}"
     xcodebuild -create-xcframework -framework "$TMP/device/$fw.framework" \
         -framework "$TMP/simulator/$fw.framework" -output "$OUT/$fw.xcframework" >/dev/null
+    codesign --timestamp -s "$SIGN_IDENTITY" "$OUT/$fw.xcframework"
 done
 
 echo "Staged ${#LIBS[@]} frameworks in $OUT"
