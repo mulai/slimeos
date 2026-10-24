@@ -29,8 +29,8 @@ targets:
       path: SlimeTunnel/Info.plist
       properties:
         CFBundleDisplayName: Slime OS Tunnel
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
@@ -54,8 +54,8 @@ targets:
       path: SlimeOS/Info.plist
       properties:
         CFBundleDisplayName: Slime OS
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIRequiresFullScreen: true
@@ -89,26 +89,24 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(PROJECT_DIR)/Vendor/FreeRDP/include/freerdp3
           - $(PROJECT_DIR)/Vendor/FreeRDP/include/winpr3
-        LIBRARY_SEARCH_PATHS:
-          - $(PROJECT_DIR)/Vendor/FreeRDP/lib
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/Frameworks"
     dependencies:
       - target: SlimeTunnel
-      - framework: Vendor/FreeRDP/lib/libfreerdp3.3.dylib
+      - framework: Vendor/FreeRDP/freerdp3.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libfreerdp-client3.3.dylib
+      - framework: Vendor/FreeRDP/freerdp-client3.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libwinpr3.3.dylib
+      - framework: Vendor/FreeRDP/winpr3.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libssl.4.dylib
+      - framework: Vendor/FreeRDP/ssl.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libcrypto.4.dylib
+      - framework: Vendor/FreeRDP/crypto.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libopenh264.8.dylib
+      - framework: Vendor/FreeRDP/openh264.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/libcjson.1.dylib
+      - framework: Vendor/FreeRDP/cjson.xcframework
         embed: true
-      - framework: Vendor/FreeRDP/lib/liburiparser.1.dylib
+      - framework: Vendor/FreeRDP/uriparser.xcframework
         embed: true

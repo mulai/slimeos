@@ -1,4 +1,9 @@
 // Shared build settings. Signing team and other per-machine values live in
 // Local.xcconfig next to this file (gitignored), e.g.:
 //   DEVELOPMENT_TEAM = ABCDE12345
+// App Store version and build number, shared by the app and its tunnel
+// extension (they must match). Raise CURRENT_PROJECT_VERSION for every upload.
+MARKETING_VERSION = 1.0.0
+CURRENT_PROJECT_VERSION = 1
+
 #include? "Local.xcconfig"

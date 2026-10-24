@@ -245,13 +245,14 @@ struct PulsingMark: View {
 }
 
 enum BadgeKind {
-    case online, asleep, offline, slimeId
+    case online, asleep, offline, slimeId, demo
     var label: String {
         switch self {
         case .online: return "Online"
         case .asleep: return "Asleep"
         case .offline: return "Offline"
         case .slimeId: return "Slime ID"
+        case .demo: return "Demo"
         }
     }
     var color: Color {
@@ -260,6 +261,7 @@ enum BadgeKind {
         case .asleep: return Slime.amber
         case .offline: return Slime.error
         case .slimeId: return Slime.auroraBlue
+        case .demo: return Slime.teal
         }
     }
 }

@@ -1,8 +1,8 @@
-# Slime OS for iOS (early)
+# Slime OS for iOS
 
 SwiftUI app + a WireGuard packet tunnel extension + FreeRDP 3, the iOS
-counterpart of `android/`. Today it has a test screen: pair with a hub
-pairing code, turn the tunnel on, connect to a Brain by address.
+counterpart of `android/`, for iPhone and iPad: app PIN, Slime ID, the Brain
+list, pairing, waking a Brain, sessions with sound, and the Demo Brain.
 
 ## Build
 
@@ -10,23 +10,21 @@ Needs Xcode 26+, Homebrew `cmake`, `xcodegen` and `go`, and an Apple
 developer account signed in to Xcode. A real device is required for the
 tunnel (Network Extensions don't run in the simulator).
 
-1. FreeRDP for iOS, with FreeRDP's own super-build (from a checkout of the
-   same FreeRDP version as `android/third_party/FreeRDP`, with
-   `git apply <repo>/ios/freerdp-patches/*.patch` first):
+1. FreeRDP for iOS (Release), with FreeRDP's own super-build: a checkout of
+   the same FreeRDP version as `android/third_party/FreeRDP` in
+   `~/Developer/slimeos-ios/FreeRDP`, with
+   `git apply <repo>/ios/freerdp-patches/*.patch` first, and the team id in
+   `~/Developer/slimeos-ios/.team`. Then, about 15 minutes each:
 
-       cmake -S client/iOS -B <build> -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/ios.toolchain.cmake" \
-         -DPLATFORM=OS64 -DDEPLOYMENT_TARGET=15.0 -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=<team> \
-         -DWITH_FFMPEG=OFF -DWITH_OPUS=OFF -DWITH_PNG=OFF -DWITH_WEBP=OFF -DWITH_JPEG=OFF -G Xcode
-       cmake --build <build>
+       scripts/build-freerdp.sh device
+       scripts/build-freerdp.sh simulator
 
-   Sound: the super-build doesn't pass FreeRDP's `WITH_IOSAUDIO` on, so turn
-   it on in the FreeRDP sub-build and rebuild just that:
+   The simulator build has no OpenH264; the simulator is for layout and the
+   Demo Brain (no tunnel there).
 
-       cmake -DWITH_IOSAUDIO=ON <build>/freerdp-prefix/src/freerdp-build
-       cmake --build <build> --target freerdp
-
-2. `scripts/stage-freerdp.sh <build>/deps` copies the libraries into
-   `Vendor/FreeRDP` (gitignored) and makes them load from the app.
+2. `scripts/stage-freerdp.sh` packages both into `Vendor/FreeRDP`
+   (gitignored): one `.xcframework` per library (the App Store refuses loose
+   dylibs) and the headers.
 3. `scripts/fetch-wireguard.sh` checks out WireGuardKit into
    `Vendor/wireguard-apple` (gitignored), with two small fixes for current
    Xcode.
@@ -36,7 +34,5 @@ tunnel (Network Extensions don't run in the simulator).
 
 ## Not yet
 
-A drawn mouse pointer, certificate
-pinning (the test build accepts any certificate), Slime ID and the Brain
-list, our FreeRDP patches (UDP transport, keep-last-picture), and packaging
-the libraries as frameworks for the App Store.
+Our other FreeRDP patches (UDP transport, keep-last-picture), camera and
+microphone, feedback and crash reports.

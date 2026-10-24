@@ -10,6 +10,8 @@ struct RootView: View {
                 PinSetupScreen()
             } else if model.locked {
                 PinUnlockScreen()
+            } else if model.demoBrainShown {
+                DemoBrainScreen()
             } else if case .session = model.screen, let session = model.session {
                 SessionScreen(session: session)
             } else {

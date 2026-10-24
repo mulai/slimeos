@@ -53,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published var modal: Modal?
     @Published var notice: String?
     @Published var settingsShown = false
+    /// The slimeos.com demo desktop, full screen (Session/DemoBrainScreen.swift).
+    @Published var demoBrainShown = false
 
     // PIN
     @Published private(set) var pinSet = AppLock.isSet

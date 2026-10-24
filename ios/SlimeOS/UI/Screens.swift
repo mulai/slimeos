@@ -11,12 +11,45 @@ struct WelcomeScreen: View {
             Muted(text: "Your Brain is a computer in the cloud that does the heavy lifting. Add one so this device can connect to it.",
                   center: true)
                 .frame(maxWidth: 420)
+            DemoBrainCard { model.demoBrainShown = true }
+                .frame(maxWidth: 360)
             VStack(spacing: 12) {
                 PrimaryButton(title: "Add a Brain") { model.addBrain() }
                 SlimeIdFooter()
             }
             .frame(maxWidth: 360)
         }
+    }
+}
+
+/// The welcome screen's Demo Brain (the kiosk's demoBrainCardHTML).
+private struct DemoBrainCard: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Text("D").font(Slime.display(20, 700)).foregroundStyle(Slime.onAccent)
+                        .frame(width: 42, height: 42)
+                        .background(Slime.teal, in: RoundedRectangle(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text("Demo Brain").font(Slime.display(17, 600)).foregroundStyle(Slime.title)
+                            Badge(kind: .demo)
+                        }
+                        Text("slimeos.com").font(Slime.mono(12)).foregroundStyle(Slime.textHost)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Text("See what a Brain feels like").font(Slime.body(13)).foregroundStyle(Slime.textMuted)
+                Text("Try it →").font(Slime.display(14, 600)).foregroundStyle(Slime.teal)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Slime.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Slime.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 }
 
