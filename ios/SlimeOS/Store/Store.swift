@@ -61,6 +61,16 @@ enum Store {
         Keychain.delete("applock")
     }
 
+    /// iOS keeps Keychain items after the app is deleted, so a new install would
+    /// start with the old PIN, Brains and sign-in. UserDefaults goes with the app:
+    /// no marker there means a new install, which starts clean (as on Android).
+    static func wipeIfReinstalled() {
+        let marker = "installed"
+        guard !UserDefaults.standard.bool(forKey: marker) else { return }
+        wipe()
+        UserDefaults.standard.set(true, forKey: marker)
+    }
+
     private static func read<T: Decodable>(_ key: String, as type: T.Type) -> T? {
         guard let data = Keychain.get(key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
