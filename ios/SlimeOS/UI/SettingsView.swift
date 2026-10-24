@@ -43,7 +43,8 @@ struct SettingsView: View {
                 }
                 Section("About") {
                     LabeledContent("Version", value: Self.version)
-                    Link("Slime OS website", destination: URL(string: "https://www.slimeos.com")!)
+                    // Not the homepage: it sells plans, which an App Store app may not link to.
+                    Link("Privacy policy", destination: URL(string: "https://www.slimeos.com/privacy")!)
                 }
             }
             .navigationTitle("Settings")

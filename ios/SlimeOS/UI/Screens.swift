@@ -109,6 +109,10 @@ struct PairScreen: View {
                 Muted(text: hint ?? "Enter the enrollment address and the code your admin gave you.")
                 SlimeField(label: "Enrollment host", text: $host, placeholder: "e.g. enroll.slimeos.com", keyboard: .URL)
                 SlimeField(label: "Pairing code", text: $code, placeholder: "8 characters", capitalization: .characters)
+                // App Review 5.4: say what the VPN does before iOS asks to add it.
+                Text("Pairing adds a VPN configuration: a private, encrypted connection from this device to your Brain, on only while you use Slime OS. Your other apps and browsing don't go through it, and Slime OS doesn't collect or look at your traffic.")
+                    .font(Slime.body(12.5)).foregroundStyle(Slime.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
                 PrimaryButton(title: "Pair", enabled: !host.trimmed.isEmpty && !code.trimmed.isEmpty) {
                     model.pair(host: host.trimmed, code: code.trimmed.uppercased())
                 }
