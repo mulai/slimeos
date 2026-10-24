@@ -138,6 +138,7 @@ services:
       - /lib/modules:/lib/modules:ro
       - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
       - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
+      - wake_clients:/wake-clients     # pair-peer.sh --wake, when run by hand here
       # Peer isolation (#41): run at every container start, and by
       # provision-peer.sh --brain after adding a Brain to /config/brain-peers.
       - ./wireguard/forward-rules.sh:/custom-cont-init.d/20-forward-rules.sh:ro
@@ -194,6 +195,10 @@ services:
       KV_READER_CLIENT_SECRET: "${KV_READER_CLIENT_SECRET:-}"
       POWER_VMS: "${POWER_VMS:-}"              # empty = service runs, manages nothing
       POWER_IDLE_MINUTES: "${POWER_IDLE_MINUTES:-20}"
+    volumes:
+      # Devices paired for a paid Brain (pair-peer.sh --wake): public keys
+      # and Brain IPs only. Read-only; see pairedClient in power/main.go.
+      - wake_clients:/wake-clients:ro
 
   # ── Pairgen — self-service pairing-code generation for purchased resources ────
   # slimeos.com's Cloudflare Worker cannot SSH into this host, so this gives
@@ -230,6 +235,7 @@ services:
       - wireguard_config:/config                 # same volume `wireguard` writes wg0.conf/peer files into
       - ./wireguard/provision-peer.sh:/config/provision-peer.sh:ro
       - ./wireguard/pair-peer.sh:/config/pair-peer.sh:ro
+      - wake_clients:/wake-clients               # pair-peer.sh --wake records (see power:)
 
   # ── Enroll — self-service WireGuard pairing endpoint ───────────────────────────
   # Serves the one-time codes pair-peer.sh stashes in Redis. Deliberately
@@ -301,4 +307,5 @@ volumes:
   redis_data:
   postgres_data:
   wireguard_config:
+  wake_clients:      # pair-peer.sh --wake writes, power reads: device key -> Brain it may wake
   desktop_home:

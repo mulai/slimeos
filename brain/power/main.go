@@ -22,8 +22,9 @@
 // that namespace — so only WireGuard peers can reach it, and WireGuard only
 // accepts a packet from a peer if its source address is one of that peer's
 // AllowedIPs. So the caller's IP names the peer, and each managed VM lists
-// the Membrane IPs allowed to act on it (POWER_VMS, see parseVMs); every
-// other caller gets 403 (#40: /session-ended logs off the VM's disconnected
+// the Membrane IPs allowed to act on it (POWER_VMS, see parseVMs), plus the
+// devices paired for it from the website (POWER_WAKE_CLIENTS, see
+// pairedClient); every other caller gets 403 (#40: /session-ended logs off the VM's disconnected
 // sessions, which a stranger must not be able to do). The hub itself
 // (the listen address) may always call, for debugging. It is deliberately
 // NOT behind Caddy: a publicly reachable start endpoint is cost-griefing
@@ -90,6 +91,11 @@ func main() {
 	// connected RDP session measures several KB/min. 4096 sits well clear
 	// of the floor and well under the quietest real session.
 	xferThreshold := int64(envInt("POWER_IDLE_XFER_BYTES", 4096))
+	// Written by pair-peer.sh --wake (pairgen's codes for a paid Brain).
+	wakeClients := os.Getenv("POWER_WAKE_CLIENTS")
+	if wakeClients == "" {
+		wakeClients = "/wake-clients/clients"
+	}
 
 	if *debugConntrack != "" {
 		debugDump(*debugConntrack, *debugHost, strconv.Itoa(rdpPort), staleGrace)
@@ -122,11 +128,12 @@ func main() {
 		staleGrace:    staleGrace,
 		idleTarget:    idleMinutes,
 		xferThreshold: xferThreshold,
+		wakeClients:   wakeClients,
 	}
 	for host, ref := range vms {
 		s.hosts[host] = &hostState{ref: ref}
 		if len(ref.clients) == 0 {
-			log.Printf("WARNING: %s has no allowed Membranes in POWER_VMS (host=sub/rg/vm@ip+ip); only the hub can wake it", host)
+			log.Printf("%s has no Membranes in POWER_VMS (host=sub/rg/vm@ip+ip); only devices paired for it in %s can wake it", host, wakeClients)
 		}
 	}
 
@@ -274,6 +281,7 @@ type server struct {
 	idleTarget                     int
 	maxEstablished                 int
 	xferThreshold                  int64
+	wakeClients                    string // "<peer public key> <Brain IP> ..." per line
 
 	mu     sync.Mutex
 	tok    string
@@ -301,10 +309,38 @@ func writeJSON(w http.ResponseWriter, status int, v powerResponse) {
 // allowed reports whether the caller may act on hs. Logs refusals.
 func (s *server) allowed(hs *hostState, host string, r *http.Request) bool {
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && (ip == s.hubIP || hs.ref.clients[ip]) {
+	if err == nil && (ip == s.hubIP || hs.ref.clients[ip] || s.pairedClient(ip, host)) {
 		return true
 	}
-	log.Printf("%s %s: refused caller %s (not in this VM's POWER_VMS list)", r.URL.Path, host, r.RemoteAddr)
+	log.Printf("%s %s: refused caller %s (not in this VM's POWER_VMS list, not paired for it)", r.URL.Path, host, r.RemoteAddr)
+	return false
+}
+
+// pairedClient reports whether the peer at ip was paired for host: a pairing
+// code made for a paid Brain records "<peer public key> <Brain IP>" in
+// s.wakeClients (pair-peer.sh --wake), so a re-paired device can wake its
+// Brain without a POWER_VMS edit. Matched by key, not IP: a removed peer's
+// address handed to another device later doesn't carry the old rights.
+// Read per call (callers poll every 5 s at most; the file is small), so new
+// pairings count at once.
+func (s *server) pairedClient(ip, host string) bool {
+	b, err := os.ReadFile(s.wakeClients)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("cannot read %s: %v", s.wakeClients, err)
+		}
+		return false
+	}
+	key, err := peerKeyFor(ip)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == key && f[1] == host {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1113,6 +1149,18 @@ func (s *server) wgPeerKey(host string, hs *hostState) (string, error) {
 	}
 	s.mu.Unlock()
 
+	key, err := peerKeyFor(host)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	hs.peerKey = key
+	s.mu.Unlock()
+	return key, nil
+}
+
+// peerKeyFor returns the public key of the live peer that owns ip/32.
+func peerKeyFor(ip string) (string, error) {
 	out, err := exec.Command("wg", "show", "wg0", "allowed-ips").Output()
 	if err != nil {
 		return "", fmt.Errorf("wg show allowed-ips: %w", err)
@@ -1122,16 +1170,13 @@ func (s *server) wgPeerKey(host string, hs *hostState) (string, error) {
 		if len(fields) < 2 {
 			continue
 		}
-		for _, ip := range fields[1:] {
-			if ip == host+"/32" {
-				s.mu.Lock()
-				hs.peerKey = fields[0]
-				s.mu.Unlock()
+		for _, a := range fields[1:] {
+			if a == ip+"/32" {
 				return fields[0], nil
 			}
 		}
 	}
-	return "", fmt.Errorf("no WireGuard peer owns %s/32", host)
+	return "", fmt.Errorf("no WireGuard peer owns %s/32", ip)
 }
 
 // peerTransferTotal returns rx+tx bytes for the host's peer.

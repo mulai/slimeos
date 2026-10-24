@@ -11,7 +11,13 @@
 # separate, not-yet-built "Sign in with Slime ID" managed path).
 #
 # Usage:
-#   docker exec slimeos-wireguard /config/pair-peer.sh <device-name>
+#   docker exec slimeos-wireguard /config/pair-peer.sh <device-name> [--wake <brain-ip>]
+#
+# --wake <brain-ip>: the device may wake that Brain and end its sessions
+# (brain/power). Records "<peer public key> <brain-ip> <device-name> <date>"
+# in /wake-clients/clients, which brain/power reads on every request, so a
+# re-paired device needs no POWER_VMS edit. pairgen passes it for the
+# website's codes for a paid Brain.
 #
 # The resulting code is meant to be relayed to the end user out-of-band
 # (voice/chat/etc) and typed into the Membrane's "Pair with a Brain" screen.
@@ -31,8 +37,18 @@ set -euo pipefail
 PEER_NAME="${1:-membrane-$(date +%s)}"
 PEER_DIR="/config/peer_${PEER_NAME}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAKE_CLIENTS="/wake-clients/clients"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+WAKE_BRAIN=""
+if [[ "${2:-}" == "--wake" ]]; then
+    WAKE_BRAIN="${3:-}"
+    [[ "$WAKE_BRAIN" =~ ^10\.10\.0\.[0-9]{1,3}$ ]] || die "--wake needs the Brain's 10.10.0.x address"
+    # Checked before minting: a code whose device then can't wake its Brain
+    # is the failure --wake exists to prevent.
+    [[ -d "${WAKE_CLIENTS%/*}" ]] || die "${WAKE_CLIENTS%/*} is not mounted (see docker-compose.yml's wake_clients volume)"
+fi
 
 [[ $EUID -eq 0 ]] || die "Run as root inside the WireGuard container"
 [[ -n "${REDIS_PASSWORD:-}" ]] || die "REDIS_PASSWORD env var not set — is this running inside the slimeos-wireguard container?"
@@ -111,6 +127,11 @@ CLIENT_PUB=$(awk '$1 == "PrivateKey" {print $3}' "$CONFIG_FILE" | wg pubkey)
 CLIENT_IP=$(awk '$1 == "Address" {split($3, a, "/"); print a[1]}' "$CONFIG_FILE")
 printf '%s %s %s' "$CLIENT_PUB" "$CLIENT_IP" "$(( $(date +%s) + CODE_TTL ))" \
     | redis -x SET "pairpending:${CODE}" >/dev/null
+# One short line per append (O_APPEND): concurrent runs can't interleave.
+# Lines of peers removed later stay behind harmlessly: keys aren't reused.
+if [[ -n "$WAKE_BRAIN" ]]; then
+    printf '%s %s %s %s\n' "$CLIENT_PUB" "$WAKE_BRAIN" "$PEER_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$WAKE_CLIENTS"
+fi
 
 echo ""
 echo "  ✓ Pairing code for '${PEER_NAME}': ${CODE_DISPLAY}"

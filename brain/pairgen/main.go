@@ -38,6 +38,7 @@ import (
 
 var codeRe = regexp.MustCompile(`Pairing code for '[^']*':\s*(\S+)`)
 var deviceNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+var brainIPRe = regexp.MustCompile(`^10\.10\.0\.[0-9]{1,3}$`)
 
 // Matches pair-peer.sh's own SET ... EX 900 -- reported back to the caller,
 // not enforced here (the code's real expiry lives in Redis).
@@ -75,6 +76,9 @@ type server struct {
 
 type generateRequest struct {
 	DeviceName string `json:"device_name"`
+	// Optional: the paid Brain's hub address. The device may then wake it
+	// (pair-peer.sh --wake; brain/power reads the record).
+	WakeBrain string `json:"wake_brain"`
 }
 
 type generateResponse struct {
@@ -123,11 +127,20 @@ func (s *server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	args := []string{req.DeviceName}
+	if req.WakeBrain != "" {
+		if !brainIPRe.MatchString(req.WakeBrain) {
+			writeJSON(w, http.StatusBadRequest, generateResponse{Error: "invalid_wake_brain"})
+			return
+		}
+		args = append(args, "--wake", req.WakeBrain)
+	}
+
 	// pair-peer.sh can wait up to 30 s for another provisioning's lock (#44).
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, s.scriptPath, req.DeviceName)
+	cmd := exec.CommandContext(ctx, s.scriptPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("pair-peer.sh %s failed: %v\n%s", req.DeviceName, err, snippet(out))
@@ -142,7 +155,7 @@ func (s *server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("generated pairing code for device_name=%s", req.DeviceName)
+	log.Printf("generated pairing code for device_name=%s wake_brain=%s", req.DeviceName, req.WakeBrain)
 	writeJSON(w, http.StatusOK, generateResponse{
 		Code:           string(m[1]),
 		EnrollmentHost: enrollmentHost,
