@@ -79,13 +79,17 @@ struct SlimeScreen<Content: View>: View {
     var body: some View {
         ZStack {
             SlimeBackground()
-            ScrollView {
-                VStack(spacing: 18) { content }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 28)
+            // Centred when it fits (as on Android), scrolling when it doesn't.
+            GeometryReader { geo in
+                ScrollView {
+                    VStack(spacing: 18) { content }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 28)
+                        .frame(minHeight: geo.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
     }
 }

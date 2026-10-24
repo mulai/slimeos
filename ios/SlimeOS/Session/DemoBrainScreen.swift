@@ -77,7 +77,9 @@ private struct DemoWebView: UIViewRepresentable {
             parent.failed = false
         }
 
-        func webView(_ web: WKWebView, didFinish navigation: WKNavigation!) {
+        // Shown once the page starts drawing: WebKit's "finished" can come late
+        // or not at all (a script still loading), long after the desktop is up.
+        func webView(_ web: WKWebView, didCommit navigation: WKNavigation!) {
             if !parent.failed { parent.loaded = true }
         }
 

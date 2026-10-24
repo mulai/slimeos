@@ -32,6 +32,11 @@ tunnel (Network Extensions don't run in the simulator).
 5. `xcodegen`, then open `SlimeOS.xcodeproj`, or build with `xcodebuild
    -scheme SlimeOS -allowProvisioningUpdates`.
 
+Screens in the simulator (layouts, store screenshots): a Debug build launched
+with `-preview welcome|demo|picker|settings|pair|addBrain|pin` opens that
+screen unlocked, with sample Brains, e.g.
+`xcrun simctl launch <simulator> com.slimeos.app -preview picker`.
+
 ## Not yet
 
 Our other FreeRDP patches (UDP transport, keep-last-picture), camera and

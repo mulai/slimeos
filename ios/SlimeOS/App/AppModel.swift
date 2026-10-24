@@ -100,7 +100,39 @@ final class AppModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.tunnel.stop() }
         }
+        #if DEBUG
+        applyPreview()
+        #endif
     }
+
+    #if DEBUG
+    /// Simulator checks and store screenshots, Debug builds only (ios/README.md):
+    /// `-preview welcome|demo|picker|settings|pair|addBrain|pin` opens that screen,
+    /// unlocked, with sample Brains. Rotate with the Simulator's Device menu.
+    private func applyPreview() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-preview"), i + 1 < args.count else { return }
+        pinSet = args[i + 1] != "pin"
+        locked = false
+        let hour: TimeInterval = 3600
+        let samples = [
+            SavedBrain(name: "My Brain", host: "10.10.0.28", lastConnected: Date().addingTimeInterval(-2 * hour)),
+            SavedBrain(name: "Design Studio", host: "10.10.0.31", lastConnected: Date().addingTimeInterval(-26 * hour)),
+            SavedBrain(name: "Office PC", host: "10.10.0.42"),
+        ]
+        switch args[i + 1] {
+        case "demo": demoBrainShown = true
+        case "picker", "settings":
+            brains = samples
+            brainStatus = [samples[1].id: .asleep, samples[2].id: .offline]
+            screen = .picker
+            settingsShown = args[i + 1] == "settings"
+        case "pair": screen = .pair(hint: nil)
+        case "addBrain": screen = .addBrain
+        default: screen = .welcome
+        }
+    }
+    #endif
 
     // MARK: - Lifecycle
 
