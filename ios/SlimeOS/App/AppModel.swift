@@ -90,6 +90,14 @@ final class AppModel: ObservableObject {
         showHome()
         refreshRemoteBrains()
         startPings()
+        // Swiped away from the app switcher: iOS skips .background and the
+        // extension would keep the VPN on (it also stops by itself, see
+        // TunnelController's heartbeat).
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tunnel.stop() }
+        }
     }
 
     // MARK: - Lifecycle

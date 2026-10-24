@@ -8,12 +8,21 @@ import NetworkExtension
 final class TunnelController: ObservableObject {
     static let extensionBundleId = "com.slimeos.app.tunnel"
 
-    @Published private(set) var status: NEVPNStatus = .invalid
+    @Published private(set) var status: NEVPNStatus = .invalid {
+        didSet { if status != oldValue { updateHeartbeat() } }
+    }
     @Published private(set) var isPaired = false
     @Published var lastError: String?
 
+    /// The extension turns the tunnel off after 60 s without a check-in
+    /// (SlimeTunnel/PacketTunnelProvider.swift), so a killed app doesn't leave
+    /// the VPN on. iOS suspends the app in the background, which stops these too;
+    /// the app turns the tunnel off itself then anyway.
+    private static let heartbeatInterval: UInt64 = 20_000_000_000
+
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
+    private var heartbeat: Task<Void, Never>?
 
     init() {
         observer = NotificationCenter.default.addObserver(
@@ -95,6 +104,23 @@ final class TunnelController: ObservableObject {
 
     func stop() {
         manager?.connection.stopVPNTunnel()
+    }
+
+    private func updateHeartbeat() {
+        guard status == .connected || status == .reasserting else {
+            heartbeat?.cancel()
+            heartbeat = nil
+            return
+        }
+        guard heartbeat == nil else { return }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                if let session = self?.manager?.connection as? NETunnelProviderSession {
+                    try? session.sendProviderMessage(Data())
+                }
+                try? await Task.sleep(nanoseconds: Self.heartbeatInterval)
+            }
+        }
     }
 
     func forget() async {
