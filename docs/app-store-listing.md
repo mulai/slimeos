@@ -15,7 +15,7 @@ compares these answers with what the app does. Android: `store-listing.md`.
 | Price | Free, no in-app purchases, no ads |
 | Version | 1.0.0 (build number from `ios/Config/Base.xcconfig`) |
 | Devices | iPhone (landscape) and iPad (any orientation), iOS 17+ |
-| Availability | All countries except France (export compliance, below) |
+| Availability | All countries except France (export compliance, below) and China mainland (VPN apps need a government licence there, as on AppGallery) |
 | Release | Manual, after the Via LA AVC licence (OpenH264 is in the app) |
 | Privacy policy URL | https://www.slimeos.com/privacy |
 | Support URL | https://www.slimeos.com/contact |
