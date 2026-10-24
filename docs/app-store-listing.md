@@ -15,6 +15,8 @@ compares these answers with what the app does. Android: `store-listing.md`.
 | Price | Free, no in-app purchases, no ads |
 | Version | 1.0.0 (build number from `ios/Config/Base.xcconfig`) |
 | Devices | iPhone (landscape) and iPad (any orientation), iOS 17+ |
+| Availability | All countries except France (export compliance, below) |
+| Release | Manual, after the Via LA AVC licence (OpenH264 is in the app) |
 | Privacy policy URL | https://www.slimeos.com/privacy |
 | Support URL | https://www.slimeos.com/contact |
 | Marketing URL | https://www.slimeos.com |
@@ -129,8 +131,13 @@ screen.)
 
 ## Export compliance
 
-Asked on the first build. The app uses encryption: WireGuard (ChaCha20,
-Curve25519) in the tunnel and TLS (OpenSSL) for the remote desktop, all
-standard algorithms. The answer is a legal decision for Mulai Pte. Ltd.;
-once made, set `ITSAppUsesNonExemptEncryption` in `ios/project.yml` so
-later builds don't ask again.
+The app uses encryption: WireGuard (ChaCha20-Poly1305, Curve25519, BLAKE2s)
+in the tunnel and TLS (OpenSSL) for the remote desktop, all standard
+algorithms, in addition to Apple's own.
+
+Decided 2026-10-25 (Mulai Pte. Ltd.): "Standard encryption algorithms
+instead of, or in addition to, Apple's", **not available in France**, so no
+documentation. `ITSAppUsesNonExemptEncryption = false` in `ios/project.yml`
+keeps later builds from asking. France needs the ANSSI encryption
+declaration first, uploaded as App Encryption Documentation; Apple then
+gives a key for Info.plist instead.

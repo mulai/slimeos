@@ -68,6 +68,10 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
         NSLocalNetworkUsageDescription: Slime OS connects to Brains on your local network.
+        # Export compliance (docs/app-store-listing.md): standard algorithms only
+        # (WireGuard, TLS), App Store outside France, so no documentation is needed
+        # and builds needn't ask. Revisit before adding France.
+        ITSAppUsesNonExemptEncryption: false
         UIAppFonts:
           - space_grotesk.ttf
           - plus_jakarta_sans.ttf
