@@ -119,15 +119,55 @@ the rating.
 > device paired with that Brain from its dashboard, which a review device
 > can't do on its own. This video shows a real session on an iPhone: <link>.
 >
-> About the VPN: Slime OS is a remote-desktop client. It adds one VPN
-> configuration (NEPacketTunnelProvider, WireGuard) from the device to our
-> relay, which reaches the user's own cloud computer. Only the app's own
-> connection to the user's Brain uses it (it routes two private address
-> ranges); other traffic isn't routed, read or collected. It's on only while
-> the app is in use. The pairing screen explains this before iOS asks.
+> About the VPN: see the answers below.
 
 (Record the video with the iPhone's screen recording; nothing personal on
 screen.)
+
+### VPN questions
+
+App Review's automated check (2026-10-30, 1.0.0 build 2) asked three
+questions about the VPN. The same text went in the reply and under Notes
+above. Keep it true: change it when the tunnel, the relay or the hosting
+changes.
+
+> Slime OS does include VPN functionality: one VPN configuration
+> (NEPacketTunnelProvider, WireGuard). It is not a general-purpose VPN
+> service. It doesn't change the user's location, protect their browsing or
+> carry other apps' traffic. Slime OS is a remote-desktop client, and the
+> tunnel is how the app reaches the user's own cloud computer (their
+> "Brain", a Windows PC we host for them or they host themselves). It routes
+> only two private address ranges (10.10.0.0/24 and 10.11.0.0/24) to our
+> relay server; all other traffic from the device goes its normal way and is
+> never routed, read or collected. It's on only while the app is in use, and
+> the pairing screen explains it before iOS asks for permission.
+>
+> 1. What user information is the app collecting using VPN?
+> None of the content. The only thing the tunnel carries is the
+> remote-desktop session between the device and the user's own Brain: the
+> Brain's screen and sound one way, the user's touches and key presses the
+> other. That session is encrypted between the app and the Brain (TLS inside
+> WireGuard); our relay forwards it but can't read it, and we don't record or
+> store it. To route packets, the relay works with the device's tunnel key
+> (created when the user pairs the device with a Brain), its private tunnel
+> address, the Brain it may reach, when it connects and how much data passes
+> (not what). It also sees the device's public IP address while connected,
+> as any server does, but doesn't log it.
+>
+> 2. For what purposes are you collecting this information?
+> Only to provide the app's function: deliver the user's remote-desktop
+> session to their Brain; check that the device is paired with that Brain
+> (being a paired tunnel peer is the authentication); wake a sleeping Brain
+> when the user connects, and let it sleep again once the connection goes
+> idle so the user doesn't pay for an idle cloud computer. Nothing is used
+> for advertising, analytics, tracking or profiling, or sold.
+>
+> 3. Will the data be shared with any third parties?
+> No. It is not shared with, sold or given to third parties. It stays on our
+> own infrastructure, run by service providers that process it only on our
+> behalf: the relay server on Google Cloud (Singapore) and the Slime ID
+> account and pairing records on Cloudflare. Privacy policy:
+> https://www.slimeos.com/privacy
 
 ## Export compliance
 
