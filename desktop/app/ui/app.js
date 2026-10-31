@@ -168,7 +168,8 @@ async function connect(brain, creds) {
   ui.stage = 'Opening the secure tunnel…';
   render();
   try {
-    await call('connect', { brainId: brain.id, ...creds });
+    const scale = Math.round((window.devicePixelRatio || 1) * 100);
+    await call('connect', { brainId: brain.id, scale, ...creds });
     showHome();
   } catch (e) {
     ui.inSession = false;

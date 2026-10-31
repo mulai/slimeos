@@ -3,7 +3,7 @@ package main
 // serve: the desktop app's backend. The window (desktop/app) runs this as a
 // sidecar and talks to it over stdin/stdout, one JSON object per line.
 //
-// In:  {"id":N,"cmd":"..."[,"code":".."][,"brainId":".."][,"username":"..","password":"..","remember":true]}
+// In:  {"id":N,"cmd":"..."[,"code":".."][,"brainId":".."][,"username":"..","password":"..","remember":true][,"scale":200]}
 // Out: {"id":N,"ok":true,"data":{..}} | {"id":N,"ok":false,"code":"..","error":".."}
 //      {"event":"stage","text":".."}                         progress while connecting
 //      {"event":"session","state":"open","name":".."} | {"event":"session","state":"closed"}
@@ -16,7 +16,7 @@ package main
 //   brains         the account's Brains (needs Slime ID)
 //   pair {code}    a pairing code from the dashboard; replaces this PC's tunnel
 //   forgetPairing
-//   connect {brainId[,username,password,remember]}
+//   connect {brainId[,username,password,remember][,scale]}
 //                  sign-in, tunnel, wake, then the RDP client; replies when it closes.
 //                  Without a username: Slime ID's (paid Brains) or a remembered one,
 //                  else needs_signin and the window asks.
@@ -63,6 +63,7 @@ type request struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Remember bool   `json:"remember"`
+	Scale    int    `json:"scale"` // the window's display scale, percent
 }
 
 type server struct {
@@ -466,7 +467,8 @@ func (s *server) connect(ctx context.Context, req request) error {
 	target := net.JoinHostPort(b.Host, strconv.Itoa(b.Port))
 	go t.forwardOn(fctx, ln, target)
 	s.event("session", map[string]any{"state": "open", "name": b.Name})
-	err = runClient(fctx, rdpLaunch{Addr: ln.Addr().String(), Name: b.Name, Username: cred.Username, Password: cred.Password})
+	err = runClient(fctx, rdpLaunch{Addr: ln.Addr().String(), Name: b.Name,
+		Username: cred.Username, Password: cred.Password, Scale: req.Scale})
 	stop()
 	s.event("session", map[string]any{"state": "closed"})
 	log.Printf("session with %s ended", b.Name)
@@ -485,6 +487,7 @@ type rdpLaunch struct {
 	Addr               string // the loopback forward
 	Name               string // the Brain's name, for the window title
 	Username, Password string
+	Scale              int // display scale in percent; 0: the client's default
 }
 
 // errSignInRejected: the RDP client says Windows refused the sign-in.

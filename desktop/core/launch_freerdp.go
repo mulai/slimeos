@@ -33,8 +33,6 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		"/cert:ignore",
 		"/title:" + l.Name,
 		"/f", // like mstsc; Right Shift + Return switches to a window
-		"/dynamic-resolution",
-		"/gfx:AVC444",
 		"/bpp:32",
 		"/network:auto",
 		"+auto-reconnect",
@@ -43,9 +41,27 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		"+clipboard",
 	}
 	if runtime.GOOS == "darwin" {
-		// Lets the bundled FreeRDP decode H.264 with VideoToolbox
-		// (WITH_FFMPEG_HWACCEL, .github/workflows/desktop.yml).
-		args = append(args, "/gdi:hw")
+		// The bundled FreeRDP decodes H.264 with VideoToolbox
+		// (WITH_FFMPEG_HWACCEL, .github/workflows/desktop.yml), which needs
+		// /gdi:hw. "AVC420" keeps AVC444v2 off (3.32.2 decodes it in hardware
+		// but never shows a frame); Windows still sends full-colour AVC444v1.
+		args = append(args, "/gfx:AVC420", "/gdi:hw")
+	} else {
+		args = append(args, "/gfx:AVC444")
+	}
+	if w, h, ok := screenPoints(); ok {
+		// The session at the screen's size in points, scaled up to the
+		// pixels: a quarter of the work of a full Retina desktop for
+		// FreeRDP's SDL renderer (smooth video, sound in step), at Windows'
+		// own 100%. Smart sizing also makes the window resizable, which
+		// macOS full screen needs.
+		args = append(args, fmt.Sprintf("/smart-sizing:%dx%d", w, h))
+	} else {
+		args = append(args, "/dynamic-resolution")
+		// Windows starts at 100% unless told; a Retina screen is 200%.
+		if l.Scale > 100 && l.Scale <= 500 {
+			args = append(args, fmt.Sprintf("/scale-desktop:%d", l.Scale))
+		}
 	}
 	if l.Username != "" {
 		args = append(args, "/u:"+l.Username)
