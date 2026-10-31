@@ -61,12 +61,14 @@ jobs:
           gh release upload "$tag" dist/Slime-OS-Setup-x64.exe --clobber
 
   # FreeRDP's own macOS bundle script (SDL3 client, universal arm64 + x86_64),
-  # minus fdk-aac. Cached: it only changes with FREERDP_VERSION or CACHE_REV.
+  # minus fdk-aac, and with H.264 decoded by the Mac's video hardware
+  # (FFmpeg + VideoToolbox) instead of OpenH264 on the CPU. Cached: it only
+  # changes with FREERDP_VERSION or CACHE_REV.
   freerdp-macos:
     runs-on: macos-15
     env:
       FREERDP_VERSION: 3.32.2
-      CACHE_REV: 1
+      CACHE_REV: 2
     steps:
       - id: cache
         uses: actions/cache@v4
@@ -80,8 +82,22 @@ jobs:
           git clone --depth 1 -b "$FREERDP_VERSION" https://github.com/FreeRDP/FreeRDP.git
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
+          # FreeRDP tries OpenH264 before FFmpeg, so OpenH264 goes. FFmpeg's
+          # software decoder stays as the fallback if VideoToolbox can't start.
+          sed -i '' \
+            -e 's/--enable-swscale /--enable-swscale --enable-avcodec --enable-decoder=h264 --enable-parser=h264 --enable-videotoolbox --enable-hwaccel=h264_videotoolbox /' \
+            -e 's/-DWITH_FFMPEG=OFF/-DWITH_FFMPEG=ON -DWITH_VIDEO_FFMPEG=ON -DWITH_DSP_FFMPEG=OFF -DWITH_VIDEOTOOLBOX=ON/' \
+            -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=OFF/' \
+            FreeRDP/scripts/bundle-mac-os.sh
+          grep -q 'h264_videotoolbox' FreeRDP/scripts/bundle-mac-os.sh
+          grep -q 'WITH_VIDEOTOOLBOX=ON' FreeRDP/scripts/bundle-mac-os.sh
+          grep -q 'WITH_OPENH264=OFF' FreeRDP/scripts/bundle-mac-os.sh
           mkdir work && cd work
           ../FreeRDP/scripts/bundle-mac-os.sh
+          fw=install/MacFreeRDP.app/Contents/Frameworks
+          otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q libavcodec
+          if otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q openh264; then exit 1; fi
+          rm -f $fw/libopenh264*
           tar czf ../freerdp-macos.tar.gz -C install/MacFreeRDP.app Contents
       - uses: actions/upload-artifact@v4
         with:
