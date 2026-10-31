@@ -21,10 +21,11 @@ build() { # goos goarch file
 
 case "$triple" in
     universal-apple-darwin)
-        build darwin arm64 "$out/core-arm64"
-        build darwin amd64 "$out/core-amd64"
-        lipo -create -output "$out/slimeos-desktop-core-$triple" "$out/core-arm64" "$out/core-amd64"
-        rm "$out/core-arm64" "$out/core-amd64"
+        # Tauri builds each architecture on its own first, so it wants all three.
+        build darwin arm64 "$out/slimeos-desktop-core-aarch64-apple-darwin"
+        build darwin amd64 "$out/slimeos-desktop-core-x86_64-apple-darwin"
+        lipo -create -output "$out/slimeos-desktop-core-$triple" \
+            "$out/slimeos-desktop-core-aarch64-apple-darwin" "$out/slimeos-desktop-core-x86_64-apple-darwin"
         ;;
     aarch64-apple-darwin)      build darwin arm64 "$out/slimeos-desktop-core-$triple" ;;
     x86_64-apple-darwin)       build darwin amd64 "$out/slimeos-desktop-core-$triple" ;;

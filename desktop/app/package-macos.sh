@@ -4,7 +4,8 @@
 #   ./package-macos.sh <freerdp-macos.tar.gz> [desktop-v<version>]
 #
 # The tarball is the freerdp-macos artifact of .github/workflows/desktop.yml.
-# With a tag, the .dmg is also added to that GitHub release.
+# With a tag, the .dmg is also added to that GitHub release. NOTARIZE=0 stops
+# after signing the app (a local test build: no .dmg, no Apple round trip).
 #
 # Needs, on the Mac that builds it: the Developer ID Application certificate
 # in the keychain, and notarytool credentials stored once as a profile:
@@ -34,6 +35,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 tar xzf "$tarball" -C "$work"
 cp -R "$work/Contents/Frameworks" "$helper/Contents/"
+# Only the client: no server, proxy or OpenSSL engines.
+rm -rf "$helper/Contents/Frameworks/"{freerdp3,engines-3} \
+    "$helper/Contents/Frameworks/"libfreerdp-server* "$helper/Contents/Frameworks/"libwinpr-tools*
 client="$work/Contents/MacOS/sdl-freerdp"
 [[ -f "$client" ]] || client="$(ls "$work"/Contents/MacOS/sdl*-freerdp* | head -1)"
 cp "$client" "$helper/Contents/MacOS/sdl-freerdp"
@@ -59,12 +63,20 @@ cat > "$helper/Contents/Info.plist" <<PLIST
 PLIST
 
 # Inside out: libraries, the helper, the core, then the app.
-sign() { codesign --force --timestamp --options runtime --sign "$identity" "$@"; }
+# IDENTITY=- signs ad hoc: enough to run on this Mac, with NOTARIZE=0. No
+# hardened runtime then: its library validation wants one Team ID throughout.
+opts=(--timestamp --options runtime)
+[[ "$identity" == - ]] && opts=(--timestamp=none)
+sign() { codesign --force "${opts[@]}" --sign "$identity" "$@"; }
 find "$helper/Contents/Frameworks" -type f \( -name '*.dylib' -o -perm -u+x \) -print0 | while IFS= read -r -d '' f; do sign "$f"; done
 sign --entitlements "$entitlements" "$helper"
 sign "$app/Contents/MacOS/slimeos-desktop-core"
 sign --entitlements "$entitlements" "$app"
 codesign --verify --deep --strict "$app"
+if [[ "${NOTARIZE:-1}" == 0 ]]; then
+    echo "signed $app ($version), not notarized"
+    exit 0
+fi
 
 mkdir -p dist
 dmg="$PWD/dist/Slime-OS.dmg"
