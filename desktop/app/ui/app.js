@@ -70,6 +70,7 @@ const ui = {
   pairFor: null,       // the Brain a pairing was asked for
   pairError: null,
   target: null,        // the Brain being connected
+  signIn: null,        // {error, username} while asking for the Brain's Windows sign-in
   stage: '',
   error: null,
   inSession: false,
@@ -156,16 +157,18 @@ async function submitPair(code) {
   else showHome();
 }
 
-async function connect(brain) {
+// creds: {username, password, remember} from the sign-in form, else the
+// core uses Slime ID's or a remembered one, or answers needs_signin.
+async function connect(brain, creds) {
   ui.target = brain;
   if (!ui.core.paired) {
-    return showPair(brain, `To reach “${brain.name}”, this PC needs a pairing code. Make one on your dashboard.`);
+    return showPair(brain, `To reach “${brain.name}”, this ${ui.core.platform === 'darwin' ? 'Mac' : 'PC'} needs a pairing code. Make one on your dashboard.`);
   }
   ui.screen = 'connecting';
   ui.stage = 'Opening the secure tunnel…';
   render();
   try {
-    await call('connect', { brainId: brain.id });
+    await call('connect', { brainId: brain.id, ...creds });
     showHome();
   } catch (e) {
     ui.inSession = false;
@@ -174,6 +177,10 @@ async function connect(brain) {
         return showHome();
       case 'not_paired':
         return showPair(brain, e.message);
+      case 'needs_signin':
+        return showSignIn(null, '');
+      case 'signin_rejected':
+        return showSignIn(e.message, creds?.username || '');
       case 'signed_out':
         ui.core.signedIn = null;
         return showHome();
@@ -187,6 +194,12 @@ async function connect(brain) {
         });
     }
   }
+}
+
+function showSignIn(error, username) {
+  ui.signIn = { error, username };
+  ui.screen = 'signIn';
+  render();
 }
 
 function cancel() {
@@ -302,6 +315,24 @@ const screens = {
       </form>
     </div></section>`,
 
+  signIn: () => `<section class="screen"><div class="card">
+      <h2 class="title">Sign in to ${esc(ui.target.name)}</h2>
+      <p class="muted">The username and password you use for Windows on this Brain.</p>
+      <form id="signInForm">
+        <label class="field-label" for="user">Username</label>
+        <input class="field plain" id="user" autocomplete="off" spellcheck="false" autocapitalize="off" value="${esc(ui.signIn.username)}">
+        <label class="field-label tight" for="pass">Password</label>
+        <input class="field plain" id="pass" type="password" autocomplete="off">
+        <label class="check"><input type="checkbox" id="remember" checked>
+          Remember on this ${ui.core.platform === 'darwin' ? 'Mac' : 'PC'}</label>
+        ${ui.signIn.error ? `<div class="field-error">${esc(ui.signIn.error)}</div>` : ''}
+        <div class="actions">
+          <button class="btn-primary" type="submit">Connect</button>
+          <button class="btn-secondary" type="button" data-act="home">Cancel</button>
+        </div>
+      </form>
+    </div></section>`,
+
   pairing: () => `<section class="screen">
       <div class="ring-wrap"><div class="ring"></div><div class="ring inner"></div><div class="ring-core"></div></div>
       <h2 class="title">Pairing</h2>
@@ -357,6 +388,20 @@ function render() {
         return render();
       }
       submitPair(code);
+    });
+  }
+  if (ui.screen === 'signIn') {
+    const user = document.getElementById('user');
+    const pass = document.getElementById('pass');
+    (user.value ? pass : user).focus();
+    document.getElementById('signInForm').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const username = user.value.trim();
+      if (!username || !pass.value) {
+        ui.signIn = { error: 'Enter the username and password.', username };
+        return render();
+      }
+      connect(ui.target, { username, password: pass.value, remember: document.getElementById('remember').checked });
     });
   }
 }

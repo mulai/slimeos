@@ -65,7 +65,7 @@ jobs:
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_VERSION: 3.31.1
+      FREERDP_VERSION: 3.32.2
       CACHE_REV: 1
     steps:
       - id: cache

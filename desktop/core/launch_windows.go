@@ -4,10 +4,9 @@ package main
 
 // Windows' own client, mstsc: the best RDP client on Windows (hardware
 // decode, multi-monitor, camera and mic redirection). It reads its settings
-// from a .rdp file, and a paid Brain's sign-in from Credential Manager
-// (TERMSRV/<host>, the entry mstsc's own "Remember me" writes), so the
-// password is never on a command line or in a file. Both are removed again
-// when mstsc exits.
+// from a .rdp file, and the sign-in from Credential Manager (TERMSRV/<host>,
+// the entry mstsc's own "Remember me" writes), so the password is never on a
+// command line or in a file. Both are removed again when mstsc exits.
 
 import (
 	"context"
@@ -33,7 +32,7 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 	}
 	if l.Password != "" {
 		target := "TERMSRV/" + host
-		if err := credWrite(target, l.Username, l.Password); err != nil {
+		if err := credWrite(credTypeDomainPassword, target, l.Username, l.Password, credPersistSession); err != nil {
 			log.Printf("Credential Manager: %v (mstsc will ask)", err)
 		} else {
 			defer credDelete(target)
@@ -111,11 +110,17 @@ var (
 	advapi32       = windows.NewLazySystemDLL("advapi32.dll")
 	procCredWriteW = advapi32.NewProc("CredWriteW")
 	procCredDelete = advapi32.NewProc("CredDeleteW")
+	procCredRead   = advapi32.NewProc("CredReadW")
+	procCredEnum   = advapi32.NewProc("CredEnumerateW")
+	procCredFree   = advapi32.NewProc("CredFree")
 )
 
 const (
+	credTypeGeneric        = 1
 	credTypeDomainPassword = 2
-	credPersistSession     = 1 // gone at sign-out even if we never delete it
+
+	credPersistSession      = 1 // gone at sign-out even if we never delete it
+	credPersistLocalMachine = 2
 )
 
 type credentialW struct {
@@ -133,7 +138,7 @@ type credentialW struct {
 	UserName           *uint16
 }
 
-func credWrite(target, user, password string) error {
+func credWrite(typ uint32, target, user, password string, persist uint32) error {
 	t, err := windows.UTF16PtrFromString(target)
 	if err != nil {
 		return err
@@ -147,11 +152,11 @@ func credWrite(target, user, password string) error {
 		return fmt.Errorf("empty password")
 	}
 	c := credentialW{
-		Type:               credTypeDomainPassword,
+		Type:               typ,
 		TargetName:         t,
 		CredentialBlobSize: uint32(len(blob) * 2),
 		CredentialBlob:     (*byte)(unsafe.Pointer(&blob[0])),
-		Persist:            credPersistSession,
+		Persist:            persist,
 		UserName:           u,
 	}
 	if r, _, err := procCredWriteW.Call(uintptr(unsafe.Pointer(&c)), 0); r == 0 {
@@ -160,10 +165,12 @@ func credWrite(target, user, password string) error {
 	return nil
 }
 
-func credDelete(target string) {
+func credDelete(target string) { credDeleteType(credTypeDomainPassword, target) }
+
+func credDeleteType(typ uint32, target string) {
 	t, err := windows.UTF16PtrFromString(target)
 	if err != nil {
 		return
 	}
-	procCredDelete.Call(uintptr(unsafe.Pointer(t)), credTypeDomainPassword, 0)
+	procCredDelete.Call(uintptr(unsafe.Pointer(t)), uintptr(typ), 0)
 }

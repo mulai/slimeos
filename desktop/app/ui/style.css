@@ -89,6 +89,10 @@ p.muted { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: var(--text-
 label.field-label { display: block; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mint); margin: 22px 0 8px; }
 input.field { width: 100%; background: var(--field); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; padding: 12px 14px; font-size: 16px; font-family: var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: var(--text); outline: none; user-select: text; }
 input.field:focus-visible { border-color: var(--teal); outline: 2px solid rgba(0, 194, 168, 0.35); outline-offset: 1px; }
+input.field.plain { font-family: inherit; letter-spacing: 0; text-transform: none; }
+label.field-label.tight { margin-top: 16px; }
+label.check { display: flex; align-items: center; gap: 10px; margin-top: 18px; font-size: 13.5px; color: var(--text-soft); cursor: pointer; }
+label.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--teal); }
 .field-error { margin-top: 10px; font-size: 13px; color: var(--error); }
 .hint { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: rgba(245, 185, 85, 0.08); color: var(--amber); font-size: 13px; line-height: 1.55; }
 

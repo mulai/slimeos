@@ -3,7 +3,7 @@ package main
 // serve: the desktop app's backend. The window (desktop/app) runs this as a
 // sidecar and talks to it over stdin/stdout, one JSON object per line.
 //
-// In:  {"id":N,"cmd":"..."[,"code":".."][,"brainId":".."]}
+// In:  {"id":N,"cmd":"..."[,"code":".."][,"brainId":".."][,"username":"..","password":"..","remember":true]}
 // Out: {"id":N,"ok":true,"data":{..}} | {"id":N,"ok":false,"code":"..","error":".."}
 //      {"event":"stage","text":".."}                         progress while connecting
 //      {"event":"session","state":"open","name":".."} | {"event":"session","state":"closed"}
@@ -16,11 +16,15 @@ package main
 //   brains         the account's Brains (needs Slime ID)
 //   pair {code}    a pairing code from the dashboard; replaces this PC's tunnel
 //   forgetPairing
-//   connect {brainId}  tunnel, sign-in, wake, then the RDP client; replies when it closes
+//   connect {brainId[,username,password,remember]}
+//                  sign-in, tunnel, wake, then the RDP client; replies when it closes.
+//                  Without a username: Slime ID's (paid Brains) or a remembered one,
+//                  else needs_signin and the window asks.
 //   cancel         ends the running slimeIdWait or connect (closes the RDP client)
 //
 // Error codes: not_paired, signed_out, expired, cancelled, hub, not_allowed,
-// unreachable, wake_failed, busy, pair, unknown_brain, client.
+// unreachable, wake_failed, busy, pair, unknown_brain, needs_signin,
+// signin_rejected, client.
 
 import (
 	"bufio"
@@ -55,6 +59,10 @@ type request struct {
 	Cmd     string `json:"cmd"`
 	Code    string `json:"code"`
 	BrainID string `json:"brainId"`
+
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Remember bool   `json:"remember"`
 }
 
 type server struct {
@@ -173,6 +181,7 @@ func (s *server) dispatch(req request) (any, error) {
 		if sess != nil {
 			slimeIDLogout(sess.Token)
 		}
+		forgetAllSignIns() // the next person on this computer starts clean
 		return nil, saveSession(nil)
 	case "brains":
 		return s.listBrains()
@@ -192,7 +201,7 @@ func (s *server) dispatch(req request) (any, error) {
 	case "connect":
 		ctx, done := s.startJob()
 		defer done()
-		return nil, s.connect(ctx, req.BrainID)
+		return nil, s.connect(ctx, req)
 	case "cancel":
 		s.cancelJob()
 		return nil, nil
@@ -382,12 +391,12 @@ func (s *server) ensureTunnel() (*tunnel, error) {
 	return t, nil
 }
 
-func (s *server) connect(ctx context.Context, brainID string) error {
+func (s *server) connect(ctx context.Context, req request) error {
 	s.mu.Lock()
 	sess := s.session
 	var b *remoteBrain
 	for i := range s.brains {
-		if s.brains[i].ID == brainID {
+		if s.brains[i].ID == req.BrainID {
 			b = &s.brains[i]
 		}
 	}
@@ -395,21 +404,42 @@ func (s *server) connect(ctx context.Context, brainID string) error {
 	if b == nil {
 		return fail("unknown_brain", "That Brain isn't on your account any more.")
 	}
+	// The Windows sign-in: what the person just typed; else a paid Brain's
+	// from Slime ID (fresh every time, never stored here); else one they
+	// asked us to remember (signin_*.go); else the window asks. Never the
+	// RDP client's own prompt (FreeRDP's draws badly on a Retina screen,
+	// and mstsc's would remember it for every Brain: they all share the
+	// loopback address).
+	var cred credential
+	switch {
+	case req.Username != "":
+		cred = credential{req.Username, req.Password}
+		if req.Remember {
+			if err := saveSignIn(b.ID, cred); err != nil {
+				log.Printf("remembering the sign-in: %v", err)
+			}
+		} else {
+			forgetSignIn(b.ID)
+		}
+	case b.Kind == "paid" && sess != nil:
+		s.stage("Getting your sign-in from Slime ID…")
+		if c, err := slimeIDCredential(sess.Token, b.ID); err != nil {
+			log.Print(err)
+		} else {
+			cred = *c
+		}
+	}
+	if cred.Username == "" {
+		c, ok := loadSignIn(b.ID)
+		if !ok {
+			return fail("needs_signin", "Sign in to Windows on “%s”.", b.Name)
+		}
+		cred = c
+	}
 	s.stage("Opening the secure tunnel…")
 	t, err := s.ensureTunnel()
 	if err != nil {
 		return err
-	}
-	// A paid Brain's Windows sign-in comes from Slime ID, fresh every time and
-	// never stored here. Anything else: the RDP client asks.
-	var cred credential
-	if b.Kind == "paid" && sess != nil {
-		s.stage("Getting your sign-in from Slime ID…")
-		if c, err := slimeIDCredential(sess.Token, b.ID); err != nil {
-			log.Printf("%v; the RDP client will ask", err)
-		} else {
-			cred = *c
-		}
 	}
 	s.stage("Waking up your Brain…")
 	start := time.Now()
@@ -440,6 +470,10 @@ func (s *server) connect(ctx context.Context, brainID string) error {
 	stop()
 	s.event("session", map[string]any{"state": "closed"})
 	log.Printf("session with %s ended", b.Name)
+	if errors.Is(err, errSignInRejected) {
+		forgetSignIn(b.ID)
+		return fail("signin_rejected", "Windows on “%s” didn't accept that username or password.", b.Name)
+	}
 	if err != nil {
 		return fail("client", "%v", err)
 	}
@@ -450,5 +484,8 @@ func (s *server) connect(ctx context.Context, brainID string) error {
 type rdpLaunch struct {
 	Addr               string // the loopback forward
 	Name               string // the Brain's name, for the window title
-	Username, Password string // empty: the client asks
+	Username, Password string
 }
+
+// errSignInRejected: the RDP client says Windows refused the sign-in.
+var errSignInRejected = errors.New("sign-in rejected")

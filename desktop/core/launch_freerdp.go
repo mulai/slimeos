@@ -64,6 +64,8 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 			switch exit.ExitCode() {
 			case 0, 1, 2, 3, 4, 5, 12:
 				return nil
+			case 132, 134, 154, 159: // auth / logon failure, wrong password, no credentials
+				return errSignInRejected
 			}
 			return &clientExit{exit.ExitCode()}
 		}
