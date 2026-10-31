@@ -71,7 +71,7 @@ jobs:
     runs-on: macos-15
     env:
       FREERDP_REF: dae0390a42ab271fa07a35979dfcd5671f83a949 # master, 2026-10-31
-      CACHE_REV: 1
+      CACHE_REV: 2
     steps:
       - id: cache
         uses: actions/cache@v4
@@ -85,6 +85,12 @@ jobs:
           git init -q FreeRDP
           git -C FreeRDP fetch -q --depth 1 https://github.com/FreeRDP/FreeRDP.git "$FREERDP_REF"
           git -C FreeRDP checkout -q FETCH_HEAD
+          # d5d230dd (10-30) made this a reference to the element pop() frees
+          # on the next line: any SDL dialog then gets a garbage title and
+          # AppKit aborts. Copy it again.
+          dlg=FreeRDP/client/SDL/SDL3/dialogs/sdl_connection_dialog_wrapper.cpp
+          sed -i '' 's/auto& arg = _queue.front();/auto arg = std::move(_queue.front());/' $dlg
+          grep -q 'auto arg = std::move(_queue.front());' $dlg
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
