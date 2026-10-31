@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slime OS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <div class="status-strip">
+    <div class="brand">
+      <svg viewBox="0 0 120 104" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" fill="#ffffff" d="M60,8 C84.3,8 104,27.7 104,52 C104,76.3 84.3,96 60,96 C35.7,96 16,76.3 16,52 C16,27.7 35.7,8 60,8 Z M60,30 C72.15,30 82,39.85 82,52 C82,64.15 72.15,74 60,74 C47.85,74 38,64.15 38,52 C38,39.85 47.85,30 60,30 Z"></path></svg>
+      <span>Slime OS</span>
+    </div>
+    <div class="right">
+      <span class="tunnel" id="tunnel"></span>
+      <button class="settings-gear" id="gear" title="Settings" aria-label="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+  <main id="root"></main>
+  <div id="modal"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

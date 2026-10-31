@@ -1,14 +1,16 @@
 // slimeos-desktop-core — the backend of the Slime OS desktop app (#18).
 //
-// Spike stage: pairing, the userspace tunnel, wake and a loopback port
-// forward to a Brain, driven from the command line. The desktop app will
-// run it as a sidecar speaking coordinator.sh's JSON-lines protocol.
+// Pairing, the userspace tunnel, wake and a loopback port forward to a
+// Brain. The desktop app runs it as a sidecar (serve); pair and connect
+// drive the same pieces from the command line.
 //
+//	slimeos-desktop-core serve
 //	slimeos-desktop-core pair [-host enroll.slimeos.com] <code>
 //	slimeos-desktop-core connect [-listen ADDR] [-port 3389] <brain-ip>
 //
-// connect brings the tunnel up, wakes the Brain, then forwards ADDR to the
-// Brain's RDP port until Ctrl+C; point a remote-desktop client at ADDR.
+// serve is the desktop app's backend (serve.go). connect brings the tunnel
+// up, wakes the Brain, then forwards ADDR to the Brain's RDP port until
+// Ctrl+C; point a remote-desktop client at ADDR.
 package main
 
 import (
@@ -26,7 +28,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "serve":
+		err = cmdServe(os.Args[2:])
 	case "pair":
 		err = cmdPair(os.Args[2:])
 	case "connect":
@@ -52,7 +55,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: slimeos-desktop-core pair [-host H] <code> | connect [-listen ADDR] [-port N] <brain-ip>")
+	fmt.Fprintln(os.Stderr, "usage: slimeos-desktop-core serve | pair [-host H] <code> | connect [-listen ADDR] [-port N] <brain-ip>")
 	os.Exit(2)
 }
 
@@ -124,14 +127,7 @@ func fetchPairing(host, code string) (string, error) {
 
 func cmdConnect(args []string) error {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
-	// mstsc refuses 127.0.0.1/localhost ("already have a console session");
-	// any other 127.x address works on Windows and Linux. macOS only has
-	// 127.0.0.1 on lo0.
-	def := "127.0.0.2:33890"
-	if runtime.GOOS == "darwin" {
-		def = "127.0.0.1:33890"
-	}
-	listen := fs.String("listen", def, "loopback address the RDP client connects to")
+	listen := fs.String("listen", defaultListen, "loopback address the RDP client connects to")
 	port := fs.Int("port", 3389, "the Brain's RDP port")
 	verbose := fs.Bool("v", false, "verbose WireGuard log")
 	fs.Parse(args)
@@ -171,7 +167,7 @@ func cmdConnect(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	start := time.Now()
-	if err := t.wakeAndWait(ctx, brain.String(), *port); err != nil {
+	if err := t.wakeAndWait(ctx, brain.String(), *port, func(s string) { log.Print(s) }); err != nil {
 		return err
 	}
 	log.Printf("Brain ready after %s", time.Since(start).Round(time.Second))

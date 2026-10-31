@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -106,11 +107,17 @@ func (t *tunnel) forward(ctx context.Context, listen, target string) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("forwarding %s -> %s through the tunnel", ln.Addr(), target)
+	return t.forwardOn(ctx, ln, target)
+}
+
+// forwardOn serves an already-bound listener, so a caller can start the
+// remote-desktop client only once the port is there. It closes ln.
+func (t *tunnel) forwardOn(ctx context.Context, ln net.Listener, target string) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	log.Printf("forwarding %s -> %s through the tunnel", ln.Addr(), target)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -133,11 +140,16 @@ func (t *tunnel) pipe(ctx context.Context, local net.Conn, target string) {
 		return
 	}
 	defer remote.Close()
+	go func() {
+		<-ctx.Done()
+		local.Close()
+		remote.Close()
+	}()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
-		if _, err := io.Copy(dst, src); err != nil && !errors.Is(err, net.ErrClosed) {
+		if _, err := io.Copy(dst, src); err != nil && !closedOrReset(err) {
 			log.Printf("%s: %v", target, err)
 		}
 		// Half-close so the other direction can finish, then unblock it.
@@ -151,6 +163,17 @@ func (t *tunnel) pipe(ctx context.Context, local net.Conn, target string) {
 	go cp(local, remote)
 	wg.Wait()
 	log.Printf("%s: connection closed", target)
+}
+
+// closedOrReset: the normal ends of an RDP connection. mstsc resets the
+// connections it opens around its sign-in and identity prompts, and the
+// Brain resets in turn ("forcibly closed" is Windows' WSAECONNRESET text).
+func closedOrReset(err error) bool {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "connection reset") || strings.Contains(s, "forcibly closed")
 }
 
 // waitForHandshake blocks until the hub answers or timeout passes.

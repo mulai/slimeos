@@ -51,35 +51,74 @@ func (t *tunnel) wakeOnce(host string) (string, error) {
 	return r.State, nil
 }
 
-// wakeAndWait wakes host and waits until its RDP port answers. Azure reports
-// a VM "running" well before Windows listens, so the port probe comes last.
-func (t *tunnel) wakeAndWait(ctx context.Context, host string, port int) error {
+var errUnreachable = errors.New("this PC's pairing doesn't reach that Brain")
+
+// wakeAndWait wakes host and waits until its RDP port answers, reporting each
+// step to progress (Android's waitForBrainAwake). Azure reports a VM
+// "running" well before Windows listens, so the port probe comes last.
+func (t *tunnel) wakeAndWait(ctx context.Context, host string, port int, progress func(string)) error {
 	target := host + ":" + strconv.Itoa(port)
-	for {
+	listening := func() bool {
+		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		c, err := t.dial(dctx, target)
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	}
+	// Covers a wake from deallocated and a frozen-Brain restart (up to ~5 min).
+	start := time.Now()
+	deadline := start.Add(8 * time.Minute)
+	sawRunning := false
+	unanswered := 0
+	for time.Now().Before(deadline) {
 		state, err := t.wakeOnce(host)
+		wait := 5 * time.Second
 		switch {
 		case errors.Is(err, errNotAllowed):
-			return err
-		case err != nil:
-			log.Printf("wake %s: %v (retrying)", host, err)
-		case state == "failed":
-			return errors.New("the Brain failed to start")
-		case state == "running" || state == "unmanaged":
-			dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			c, err := t.dial(dctx, target)
-			cancel()
-			if err == nil {
-				c.Close()
+			// Only waking is refused: an awake Brain still connects.
+			if listening() {
 				return nil
 			}
-			log.Printf("wake %s: %s, RDP not answering yet", host, state)
+			return err
+		case err == nil && state == "failed":
+			return errors.New("the Brain failed to start")
+		case err == nil && (state == "running" || state == "unmanaged"):
+			if listening() {
+				return nil
+			}
+			if state == "unmanaged" {
+				// Nothing on the hub will start it: it's off, or not on this tunnel.
+				if unanswered++; unanswered >= 3 {
+					return errUnreachable
+				}
+			} else {
+				sawRunning = true
+				progress("Brain is up. Starting the desktop…")
+			}
+			wait = 3 * time.Second
+		case err == nil && state == "restarting":
+			progress("Restarting your Brain… (about 2 minutes)")
+		case err == nil && state == "cleaning":
+			progress("Finishing your last session…")
 		default:
-			log.Printf("wake %s: %s", host, state)
+			if err != nil {
+				log.Printf("wake %s: %v (retrying)", host, err)
+			}
+			// Elapsed time, not a poll count: "attempt 13" read as 13 failures.
+			s := int(time.Since(start).Seconds())
+			progress(fmt.Sprintf("Waking up your Brain… This usually takes 1–2 minutes (%d:%02d)", s/60, s%60))
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-time.After(wait):
 		}
 	}
+	// Running all along but never listening: connect anyway and let the client say why.
+	if sawRunning {
+		return nil
+	}
+	return errors.New("the Brain didn't wake up within 8 minutes")
 }
