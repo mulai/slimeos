@@ -167,6 +167,7 @@ async function connect(brain, creds) {
   ui.screen = 'connecting';
   ui.stage = 'Opening the secure tunnel…';
   render();
+  const wasFullscreen = await leaveFullscreen();
   try {
     const scale = Math.round((window.devicePixelRatio || 1) * 100);
     await call('connect', { brainId: brain.id, scale, ...creds });
@@ -194,6 +195,26 @@ async function connect(brain, creds) {
           retry: () => connect(brain), back: true,
         });
     }
+  } finally {
+    if (wasFullscreen && !quitting) tauri.window.getCurrentWindow().setFullscreen(true).catch(() => {});
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// On macOS the session takes a full-screen Space of its own: step out of
+// this window's first, so the two don't stack. True if it was full screen.
+async function leaveFullscreen() {
+  if (ui.core.platform !== 'darwin') return false;
+  const win = tauri.window.getCurrentWindow();
+  try {
+    if (!(await win.isFullscreen())) return false;
+    await win.setFullscreen(false);
+    for (let i = 0; i < 20 && (await win.isFullscreen()); i++) await sleep(100);
+    await sleep(800); // the Space's slide-out animation
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -463,7 +484,7 @@ const actions = {
   quit: async () => {
     quitting = true;
     cancel();
-    await tauri.window.getCurrentWindow().destroy();
+    await tauri.window.getCurrentWindow().close();
   },
 };
 

@@ -5,7 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
     "core:window:allow-destroy",
+    "core:window:allow-set-fullscreen",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/slimeos-desktop-core", "sidecar": true, "args": ["serve"] }]
