@@ -349,8 +349,10 @@ const screens = {
   session: () => `<section class="screen">
       <div class="ring-wrap"><div class="ring-core still"></div></div>
       <h2 class="title">Connected to ${esc(ui.target.name)}</h2>
-      <p class="subtitle">Your Brain is open in its own window. Close that window, or sign out of
-        Windows there, to end the session.</p>
+      <p class="subtitle">Your Brain is open full screen. ${ui.core.platform === 'darwin'
+        ? 'Press <b>Right Shift + Return</b> to switch it to a window and back.'
+        : 'Use the bar at the top of the screen to make it a window.'}
+        Close it, or sign out of Windows there, to end the session.</p>
       <div class="actions" style="width:220px"><button class="btn-secondary" data-act="cancel">Disconnect</button></div>
     </section>`,
 

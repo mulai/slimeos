@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,7 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		// self-signed and names the Brain, not the loopback address.
 		"/cert:ignore",
 		"/title:" + l.Name,
-		"/size:85%",
+		"/f", // like mstsc; Right Shift + Return switches to a window
 		"/dynamic-resolution",
 		"/gfx:AVC444",
 		"/bpp:32",
@@ -40,6 +41,11 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		"/sound",
 		"/microphone",
 		"+clipboard",
+	}
+	if runtime.GOOS == "darwin" {
+		// Lets the bundled FreeRDP decode H.264 with VideoToolbox
+		// (WITH_FFMPEG_HWACCEL, .github/workflows/desktop.yml).
+		args = append(args, "/gdi:hw")
 	}
 	if l.Username != "" {
 		args = append(args, "/u:"+l.Username)
@@ -54,8 +60,14 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 	}
 	cmd := exec.CommandContext(ctx, bin, "/args-from:stdin")
 	cmd.Stdin = strings.NewReader(strings.Join(args, "\n") + "\n")
-	cmd.Stdout = os.Stderr // our stdout is the app's protocol
-	cmd.Stderr = os.Stderr
+	// Into desktop.log too (our stdout is the app's protocol). INFO says
+	// which H.264 decoder runs; FreeRDP never logs the password.
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = log.Writer()
+	cmd.Env = os.Environ()
+	if os.Getenv("WLOG_LEVEL") == "" {
+		cmd.Env = append(cmd.Env, "WLOG_LEVEL=INFO")
+	}
 	if err := cmd.Run(); err != nil && ctx.Err() == nil {
 		var exit *exec.ExitError
 		// FreeRDP exits non-zero for a plain disconnect or sign-out too

@@ -68,7 +68,7 @@ jobs:
     runs-on: macos-15
     env:
       FREERDP_VERSION: 3.32.2
-      CACHE_REV: 2
+      CACHE_REV: 3
     steps:
       - id: cache
         uses: actions/cache@v4
@@ -86,14 +86,16 @@ jobs:
           # software decoder stays as the fallback if VideoToolbox can't start.
           sed -i '' \
             -e 's/--enable-swscale /--enable-swscale --enable-avcodec --enable-decoder=h264 --enable-parser=h264 --enable-videotoolbox --enable-hwaccel=h264_videotoolbox /' \
-            -e 's/-DWITH_FFMPEG=OFF/-DWITH_FFMPEG=ON -DWITH_VIDEO_FFMPEG=ON -DWITH_DSP_FFMPEG=OFF -DWITH_VIDEOTOOLBOX=ON/' \
+            -e 's/-DWITH_FFMPEG=OFF/-DWITH_FFMPEG=ON -DWITH_VIDEO_FFMPEG=ON -DWITH_DSP_FFMPEG=OFF -DWITH_FFMPEG_HWACCEL=ON/' \
             -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=OFF/' \
             FreeRDP/scripts/bundle-mac-os.sh
           grep -q 'h264_videotoolbox' FreeRDP/scripts/bundle-mac-os.sh
-          grep -q 'WITH_VIDEOTOOLBOX=ON' FreeRDP/scripts/bundle-mac-os.sh
+          grep -q 'WITH_FFMPEG_HWACCEL=ON' FreeRDP/scripts/bundle-mac-os.sh
           grep -q 'WITH_OPENH264=OFF' FreeRDP/scripts/bundle-mac-os.sh
           mkdir work && cd work
           ../FreeRDP/scripts/bundle-mac-os.sh
+          # (3.32's deprecated WITH_VIDEOTOOLBOX silently leaves this off.)
+          grep -q 'WITH_FFMPEG_HWACCEL:BOOL=ON' build/freerdp/CMakeCache.txt
           fw=install/MacFreeRDP.app/Contents/Frameworks
           otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q libavcodec
           if otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q openh264; then exit 1; fi
