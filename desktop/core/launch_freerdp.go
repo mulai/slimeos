@@ -41,11 +41,11 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		"+clipboard",
 	}
 	if runtime.GOOS == "darwin" {
-		// The bundled FreeRDP decodes H.264 with VideoToolbox
-		// (WITH_FFMPEG_HWACCEL, .github/workflows/desktop.yml), which needs
-		// /gdi:hw. "AVC420" keeps AVC444v2 off (3.32.2 decodes it in hardware
-		// but never shows a frame); Windows still sends full-colour AVC444v1.
-		args = append(args, "/gfx:AVC420", "/gdi:hw")
+		// The bundled FreeRDP decodes H.264 with VideoToolbox and passes the
+		// camera through AVFoundation (.github/workflows/desktop.yml).
+		// "AVC420" keeps AVC444v2 off (3.32.2's FFmpeg path decoded it but
+		// never showed a frame); Windows still sends full-colour AVC444v1.
+		args = append(args, "/gfx:AVC420", "/dvc:rdpecam")
 	} else {
 		args = append(args, "/gfx:AVC444")
 	}

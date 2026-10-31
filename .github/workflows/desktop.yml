@@ -61,46 +61,40 @@ jobs:
           gh release upload "$tag" dist/Slime-OS-Setup-x64.exe --clobber
 
   # FreeRDP's own macOS bundle script (SDL3 client, universal arm64 + x86_64),
-  # minus fdk-aac, and with H.264 decoded by the Mac's video hardware
-  # (FFmpeg + VideoToolbox) instead of OpenH264 on the CPU. Cached: it only
-  # changes with FREERDP_VERSION or CACHE_REV.
+  # minus fdk-aac, at a pinned development commit until 3.33 ships with:
+  #   - the AVFoundation camera backend (rdpecam, off by default for clients)
+  #   - the native VideoToolbox H.264 decoder (WITH_APPLE_VIDEOTOOLBOX, on by
+  #     default on macOS; replaces 3.32's experimental FFmpeg hwaccel path)
+  # OpenH264 stays: it encodes the camera for Windows. Cached: it only
+  # changes with FREERDP_REF or CACHE_REV.
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_VERSION: 3.32.2
-      CACHE_REV: 3
+      FREERDP_REF: dae0390a42ab271fa07a35979dfcd5671f83a949 # master, 2026-10-31
+      CACHE_REV: 1
     steps:
       - id: cache
         uses: actions/cache@v4
         with:
           path: freerdp-macos.tar.gz
-          key: freerdp-macos-${{ env.FREERDP_VERSION }}-${{ env.CACHE_REV }}
+          key: freerdp-macos-${{ env.FREERDP_REF }}-${{ env.CACHE_REV }}
       - name: Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           brew install ninja meson nasm autoconf automake libtool
-          git clone --depth 1 -b "$FREERDP_VERSION" https://github.com/FreeRDP/FreeRDP.git
+          git init -q FreeRDP
+          git -C FreeRDP fetch -q --depth 1 https://github.com/FreeRDP/FreeRDP.git "$FREERDP_REF"
+          git -C FreeRDP checkout -q FETCH_HEAD
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
-          # FreeRDP tries OpenH264 before FFmpeg, so OpenH264 goes. FFmpeg's
-          # software decoder stays as the fallback if VideoToolbox can't start.
-          sed -i '' \
-            -e 's/--enable-swscale /--enable-swscale --enable-avcodec --enable-decoder=h264 --enable-parser=h264 --enable-videotoolbox --enable-hwaccel=h264_videotoolbox /' \
-            -e 's/-DWITH_FFMPEG=OFF/-DWITH_FFMPEG=ON -DWITH_VIDEO_FFMPEG=ON -DWITH_DSP_FFMPEG=OFF -DWITH_FFMPEG_HWACCEL=ON/' \
-            -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=OFF/' \
+          sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
             FreeRDP/scripts/bundle-mac-os.sh
-          grep -q 'h264_videotoolbox' FreeRDP/scripts/bundle-mac-os.sh
-          grep -q 'WITH_FFMPEG_HWACCEL=ON' FreeRDP/scripts/bundle-mac-os.sh
-          grep -q 'WITH_OPENH264=OFF' FreeRDP/scripts/bundle-mac-os.sh
-          mkdir work && cd work
-          ../FreeRDP/scripts/bundle-mac-os.sh
-          # (3.32's deprecated WITH_VIDEOTOOLBOX silently leaves this off.)
-          grep -q 'WITH_FFMPEG_HWACCEL:BOOL=ON' build/freerdp/CMakeCache.txt
-          fw=install/MacFreeRDP.app/Contents/Frameworks
-          otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q libavcodec
-          if otool -L $fw/libfreerdp3.*.*.*.dylib | grep -q openh264; then exit 1; fi
-          rm -f $fw/libopenh264*
-          tar czf ../freerdp-macos.tar.gz -C install/MacFreeRDP.app Contents
+          grep -q 'CHANNEL_RDPECAM_CLIENT=ON' FreeRDP/scripts/bundle-mac-os.sh
+          FreeRDP/scripts/bundle-mac-os.sh
+          out=FreeRDP/build-macos
+          grep -q 'WITH_APPLE_VIDEOTOOLBOX:BOOL=ON' $out/build/freerdp/CMakeCache.txt
+          grep -q 'CHANNEL_RDPECAM_CLIENT:BOOL=ON' $out/build/freerdp/CMakeCache.txt
+          tar czf freerdp-macos.tar.gz -C $out/install/MacFreeRDP.app Contents
       - uses: actions/upload-artifact@v4
         with:
           name: freerdp-macos
