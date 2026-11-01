@@ -66,18 +66,19 @@ jobs:
   #   - the native VideoToolbox H.264 decoder (WITH_APPLE_VIDEOTOOLBOX, on by
   #     default on macOS; replaces 3.32's experimental FFmpeg hwaccel path)
   # OpenH264 stays: it encodes the camera for Windows. Cached: it only
-  # changes with FREERDP_REF or CACHE_REV.
+  # changes with FREERDP_REF, CACHE_REV or desktop/freerdp-patches.
   freerdp-macos:
     runs-on: macos-15
     env:
       FREERDP_REF: dae0390a42ab271fa07a35979dfcd5671f83a949 # master, 2026-10-31
       CACHE_REV: 2
     steps:
+      - uses: actions/checkout@v4
       - id: cache
         uses: actions/cache@v4
         with:
           path: freerdp-macos.tar.gz
-          key: freerdp-macos-${{ env.FREERDP_REF }}-${{ env.CACHE_REV }}
+          key: freerdp-macos-${{ env.FREERDP_REF }}-${{ env.CACHE_REV }}-${{ hashFiles('desktop/freerdp-patches/**') }}
       - name: Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -91,6 +92,9 @@ jobs:
           dlg=FreeRDP/client/SDL/SDL3/dialogs/sdl_connection_dialog_wrapper.cpp
           sed -i '' 's/auto& arg = _queue.front();/auto arg = std::move(_queue.front());/' $dlg
           grep -q 'auto arg = std::move(_queue.front());' $dlg
+          # macOS full screen: the session window lost its Space to the screen-size
+          # probe's, and every window event then waited up to 2 s (5 s per click).
+          git -C FreeRDP apply ../desktop/freerdp-patches/sdl-macos-fullscreen.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \

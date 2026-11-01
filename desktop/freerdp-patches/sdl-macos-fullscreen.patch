@@ -1,0 +1,50 @@
+diff --git a/client/SDL/SDL3/sdl_window.cpp b/client/SDL/SDL3/sdl_window.cpp
+--- a/client/SDL/SDL3/sdl_window.cpp
++++ b/client/SDL/SDL3/sdl_window.cpp
+@@ -206,7 +206,8 @@ void SdlWindow::setBordered(bool bordered)
+ {
+ 	if (_window)
+ 		SDL_SetWindowBordered(_window, bordered);
+-	std::ignore = SDL_SyncWindow(_window);
++	/* No SDL_SyncWindow: this runs for every window event, and on macOS each one waited up to 2 s
++	 * while a full screen change was pending. SDL ignores an unchanged border anyway. */
+ }
+ 
+ void SdlWindow::raise()
+@@ -818,12 +819,26 @@ static SDL_Window* createDummy(SDL_DisplayID id)
+ 	return window;
+ }
+ 
++/* On macOS a full screen window leaves its Space with an animation, and a window that asks for
++ * full screen before that ends never gets one (its request stays pending). Let the dummy leave
++ * first, so the session window created next gets its Space. */
++static void destroyDummy(SDL_Window* window)
++{
++	if (!window)
++		return;
++#if defined(__APPLE__)
++	std::ignore = SDL_SetWindowFullscreen(window, false);
++	std::ignore = SDL_SyncWindow(window);
++#endif
++	SDL_DestroyWindow(window);
++}
++
+ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
+ {
+ 	if (sdl::utils::isWaylandDriver() || sdl::utils::isX11Driver())
+ 		return queryDisplay(id, forceAsPrimary);
+ 
+-	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), SDL_DestroyWindow);
++	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), destroyDummy);
+ 	if (!window)
+ 		return {};
+ 
+@@ -842,7 +857,7 @@ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
+ 
+ SDL_Rect SdlWindow::rect(SDL_DisplayID id, bool forceAsPrimary)
+ {
+-	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), SDL_DestroyWindow);
++	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), destroyDummy);
+ 	if (!window)
+ 		return {};
+ 
