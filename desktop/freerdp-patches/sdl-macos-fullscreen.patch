@@ -1,7 +1,144 @@
+diff --git a/client/SDL/SDL3/CMakeLists.txt b/client/SDL/SDL3/CMakeLists.txt
+index 8fd6a98..7adde56 100644
+--- a/client/SDL/SDL3/CMakeLists.txt
++++ b/client/SDL/SDL3/CMakeLists.txt
+@@ -62,6 +62,11 @@ set(SRCS
+     sdl_x11.cpp
+ )
+ 
++# Native macOS display helpers (AppKit screen geometry for window-free monitor queries).
++if(APPLE)
++  list(APPEND SRCS sdl_macos.hpp sdl_macos.mm)
++endif()
++
+ # Native X11 helpers for RAIL (_NET_WM_MOVERESIZE, compositor detection); no-op stubs without libX11.
+ set(SDL_X11_NATIVE OFF)
+ if(NOT WIN32 AND NOT APPLE)
+@@ -133,6 +138,12 @@ list(
+   sdl-common-prefs
+ )
+ 
++if(APPLE)
++  find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
++  find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
++  list(APPEND LIBS ${APPKIT_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK})
++endif()
++
+ if(NOT WITH_SDL_LINK_SHARED)
+   list(APPEND LIBS SDL3::SDL3-static)
+ else()
+diff --git a/client/SDL/SDL3/sdl_macos.hpp b/client/SDL/SDL3/sdl_macos.hpp
+new file mode 100644
+index 0000000..f626bce
+--- /dev/null
++++ b/client/SDL/SDL3/sdl_macos.hpp
+@@ -0,0 +1,26 @@
++/**
++ * FreeRDP: A Remote Desktop Protocol Implementation
++ * SDL3 Client - native macOS display helpers
++ *
++ * Copyright 2026 Ocean <25319668+oceanzhang88@users.noreply.github.com>
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++#pragma once
++
++#include <SDL3/SDL.h>
++
++/* Points AppKit keeps free at the top of the display with the given SDL bounds when a window
++ * goes full screen in its own Space: the menu bar strip on a display with a camera housing
++ * (notch), 0 on any other display or before macOS 12. */
++[[nodiscard]] int sdl_macos_fullscreen_space_top_inset(const SDL_Rect& bounds);
+diff --git a/client/SDL/SDL3/sdl_macos.mm b/client/SDL/SDL3/sdl_macos.mm
+new file mode 100644
+index 0000000..f75babf
+--- /dev/null
++++ b/client/SDL/SDL3/sdl_macos.mm
+@@ -0,0 +1,58 @@
++/**
++ * FreeRDP: A Remote Desktop Protocol Implementation
++ * SDL3 Client - native macOS display helpers
++ *
++ * Copyright 2026 Ocean <25319668+oceanzhang88@users.noreply.github.com>
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++#include "sdl_macos.hpp"
++
++#include <cmath>
++
++#import <AppKit/AppKit.h>
++
++int sdl_macos_fullscreen_space_top_inset(const SDL_Rect &bounds)
++{
++	@autoreleasepool
++	{
++		if (@available(macOS 12.0, *))
++		{
++			for (NSScreen *screen in [NSScreen screens])
++			{
++				NSNumber *number = [screen deviceDescription][@"NSScreenNumber"];
++				if (!number)
++					continue;
++
++				/* SDL's cocoa backend reports CGDisplayBounds() as the display bounds. */
++				const CGRect cg = CGDisplayBounds([number unsignedIntValue]);
++				if ((static_cast<int>(cg.origin.x) != bounds.x) ||
++				    (static_cast<int>(cg.origin.y) != bounds.y) ||
++				    (static_cast<int>(cg.size.width) != bounds.w) ||
++				    (static_cast<int>(cg.size.height) != bounds.h))
++					continue;
++
++				/* No camera housing: a full-screen Space covers the whole display. */
++				const CGFloat housing = [screen safeAreaInsets].top;
++				if (housing <= 0)
++					return 0;
++
++				/* With a camera housing AppKit lays the full-screen window out below the menu
++				 * bar, which is at least as tall as the housing. */
++				const CGFloat menuBar = NSMaxY([screen frame]) - NSMaxY([screen visibleFrame]);
++				return static_cast<int>(std::lround(std::fmax(housing, menuBar)));
++			}
++		}
++		return 0;
++	}
++}
 diff --git a/client/SDL/SDL3/sdl_window.cpp b/client/SDL/SDL3/sdl_window.cpp
+index 1b1dd85..ed4fab4 100644
 --- a/client/SDL/SDL3/sdl_window.cpp
 +++ b/client/SDL/SDL3/sdl_window.cpp
-@@ -206,7 +206,8 @@ void SdlWindow::setBordered(bool bordered)
+@@ -24,6 +24,10 @@
+ #include "sdl_window.hpp"
+ #include "sdl_utils.hpp"
+ 
++#if defined(__APPLE__)
++#include "sdl_macos.hpp"
++#endif
++
+ #include <freerdp/utils/string.h>
+ 
+ SdlWindow::SdlWindow(SDL_DisplayID id, const std::string& title, const SDL_Rect& rect,
+@@ -206,7 +210,8 @@ void SdlWindow::setBordered(bool bordered)
  {
  	if (_window)
  		SDL_SetWindowBordered(_window, bordered);
@@ -11,7 +148,67 @@ diff --git a/client/SDL/SDL3/sdl_window.cpp b/client/SDL/SDL3/sdl_window.cpp
  }
  
  void SdlWindow::raise()
-@@ -818,12 +819,26 @@ static SDL_Window* createDummy(SDL_DisplayID id)
+@@ -781,6 +786,59 @@ SdlWindow SdlWindow::createPopup(SDL_Window* parent, const SDL_Rect& rect, bool
+ 	return SdlWindow{ parent, rect, transparent, tooltip };
+ }
+ 
++/* What a full-screen window on display `id` would report to query()/rect(), read from the
++ * display APIs so no window is shown.
++ *
++ * Only on SDL's cocoa backend, where the values are known without a window:
++ * - A full-screen window is framed to SDL_GetDisplayBounds() (points). In its own Space (the
++ *   default) AppKit keeps the menu bar strip free on a display with a camera housing.
++ * - Its pixel size is its point size times the backing scale, which is the desktop mode's
++ *   pixel_density.
++ * - Its SDL_GetWindowDisplayScale() is pixel density times the display content scale, as cocoa
++ *   has no per-window content scale.
++ * Other backends (Wayland: per-surface scale; wlroots: compositor-placed windows) keep the
++ * probe window. */
++[[nodiscard]] static bool queryWithoutWindow([[maybe_unused]] SDL_DisplayID id,
++                                             [[maybe_unused]] bool forceAsPrimary,
++                                             [[maybe_unused]] SDL_Rect& rect,
++                                             [[maybe_unused]] float& factor)
++{
++#if defined(__APPLE__)
++	const auto driver = SDL_GetCurrentVideoDriver();
++	if ((driver == nullptr) || (strcmp(driver, "cocoa") != 0))
++		return false;
++
++	SDL_Rect bounds = {};
++	if (!SDL_GetDisplayBounds(id, &bounds))
++		return false;
++
++	const auto mode = SDL_GetDesktopDisplayMode(id);
++	if (!mode || (mode->pixel_density <= 0.0f))
++		return false;
++
++	const auto contentScale = SDL_GetDisplayContentScale(id);
++	if (contentScale <= 0.0f)
++		return false;
++
++	/* Same default SDL uses to decide whether full screen gets its own Space. */
++	if (SDL_GetHintBoolean(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, true))
++	{
++		const int inset = sdl_macos_fullscreen_space_top_inset(bounds);
++		bounds.y += inset;
++		bounds.h -= inset;
++	}
++
++	rect.x = forceAsPrimary ? 0 : bounds.x;
++	rect.y = forceAsPrimary ? 0 : bounds.y;
++	rect.w = static_cast<int>(std::ceil(static_cast<float>(bounds.w) * mode->pixel_density));
++	rect.h = static_cast<int>(std::ceil(static_cast<float>(bounds.h) * mode->pixel_density));
++	factor = mode->pixel_density * contentScale;
++	return (rect.w > 0) && (rect.h > 0);
++#else
++	return false;
++#endif
++}
++
+ static SDL_Window* createDummy(SDL_DisplayID id)
+ {
+ 	const auto x = SDL_WINDOWPOS_CENTERED_DISPLAY(id);
+@@ -818,12 +876,31 @@ static SDL_Window* createDummy(SDL_DisplayID id)
  	return window;
  }
  
@@ -35,15 +232,25 @@ diff --git a/client/SDL/SDL3/sdl_window.cpp b/client/SDL/SDL3/sdl_window.cpp
  		return queryDisplay(id, forceAsPrimary);
  
 -	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), SDL_DestroyWindow);
++	SDL_Rect r = {};
++	float factor = 0.0f;
++	if (queryWithoutWindow(id, forceAsPrimary, r, factor))
++		return makeMonitor(id, r, factor, forceAsPrimary);
++
 +	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), destroyDummy);
  	if (!window)
  		return {};
  
-@@ -842,7 +857,7 @@ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
+@@ -842,7 +919,12 @@ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
  
  SDL_Rect SdlWindow::rect(SDL_DisplayID id, bool forceAsPrimary)
  {
 -	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), SDL_DestroyWindow);
++	SDL_Rect r = {};
++	float factor = 0.0f;
++	if (queryWithoutWindow(id, forceAsPrimary, r, factor))
++		return r;
++
 +	std::unique_ptr<SDL_Window, void (*)(SDL_Window*)> window(createDummy(id), destroyDummy);
  	if (!window)
  		return {};
