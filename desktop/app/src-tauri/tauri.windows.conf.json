@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/slimeos-desktop-core", "binaries/slimeos-rdp"]
+  }
+}

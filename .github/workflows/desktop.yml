@@ -36,6 +36,14 @@ jobs:
       - name: Core
         shell: bash
         run: desktop/app/build-core.sh x86_64-pc-windows-msvc
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Remote desktop helper
+        working-directory: desktop/rdp-windows
+        run: |
+          rc /nologo /fo slimeos-rdp.res slimeos-rdp.rc
+          cl /nologo /std:c++17 /utf-8 /EHsc /O2 /MT /W3 /DUNICODE /D_UNICODE slimeos-rdp.cpp slimeos-rdp.res `
+            /link /SUBSYSTEM:WINDOWS user32.lib ole32.lib oleaut32.lib `
+            /OUT:..\app\src-tauri\binaries\slimeos-rdp-x86_64-pc-windows-msvc.exe
       - name: App
         working-directory: desktop/app/src-tauri
         run: npx --yes @tauri-apps/cli@2 build --bundles nsis

@@ -4,8 +4,9 @@ Windows and macOS first, then Linux (#18): sign in with Slime ID, pick a
 Brain, and its desktop opens in a window, without replacing the PC's OS.
 
 - `core/` (Go): pairing, the userspace tunnel, Slime ID, wake, and a
-  loopback forward the PC's remote-desktop client connects to. mstsc on
-  Windows; FreeRDP's SDL client on macOS (bundled) and Linux (the system's).
+  loopback forward the PC's remote-desktop client connects to. On Windows,
+  `rdp-windows/` (Windows' own Remote Desktop control in a window, no .rdp
+  file); FreeRDP's SDL client on macOS (bundled) and Linux (the system's).
 - `app/` (Tauri 2): one window showing `app/ui/` (plain HTML/JS in the
   Membrane kiosk's look), which runs the core as a sidecar and talks to it
   over stdin/stdout (`core/serve.go` has the protocol).
@@ -18,8 +19,7 @@ Slime ID session and `desktop.log` live in the user's config folder under
 `SlimeOS/` (`%APPDATA%` on Windows, `~/Library/Application Support` on macOS).
 
 A paid Brain's Windows sign-in comes from Slime ID before every connect and
-is never stored: on Windows it sits in Credential Manager (`TERMSRV/…`) only
-while mstsc runs; FreeRDP gets it over stdin.
+is never stored: the Windows helper and FreeRDP both get it over stdin.
 
 ## Building
 
@@ -31,7 +31,8 @@ cd desktop/app
 (cd src-tauri && cargo tauri build --debug --bundles app)
 ```
 
-- Windows installer: `.github/workflows/desktop.yml` (artifact `windows-installer`).
+- Windows installer: `.github/workflows/desktop.yml` (artifact `windows-installer`),
+  which also builds `rdp-windows/slimeos-rdp.exe` with MSVC (needs the ATL component).
 - macOS: the same workflow builds FreeRDP (artifact `freerdp-macos`); then on
   the Mac with the Developer ID certificate, `./package-macos.sh freerdp-macos.tar.gz`
   makes a signed, notarized `dist/Slime-OS.dmg`.

@@ -2,108 +2,94 @@
 
 package main
 
-// Windows' own client, mstsc: the best RDP client on Windows (hardware
-// decode, multi-monitor, camera and mic redirection). It reads its settings
-// from a .rdp file, and the sign-in from Credential Manager (TERMSRV/<host>,
-// the entry mstsc's own "Remember me" writes), so the password is never on a
-// command line or in a file. Both are removed again when mstsc exits.
+// Windows' own Remote Desktop control, the engine inside mstsc (hardware
+// decode, camera and mic redirection), in a window of our own: slimeos-rdp.exe
+// (desktop/rdp-windows), installed next to this core. Opening mstsc with a
+// .rdp file brings up Windows' "Unknown remote connection" warning on every
+// launch, and mstsc won't send a saved password to an NTLM-only server. The
+// helper gets its settings, password included, over stdin.
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-const defaultListen = "127.0.0.2:33890" // mstsc refuses 127.0.0.1 ("console session")
+const defaultListen = "127.0.0.2:33890" // the control, like mstsc, refuses 127.0.0.1 ("console session")
 
 func runClient(ctx context.Context, l rdpLaunch) error {
-	host, _, err := net.SplitHostPort(l.Addr)
+	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	if l.Password != "" {
-		target := "TERMSRV/" + host
-		if err := credWrite(credTypeDomainPassword, target, l.Username, l.Password, credPersistSession); err != nil {
-			log.Printf("Credential Manager: %v (mstsc will ask)", err)
-		} else {
-			defer credDelete(target)
+	settings := []string{
+		"addr=" + l.Addr,
+		"name=" + l.Name,
+		"username=" + l.Username,
+		"password=" + l.Password,
+	}
+	for _, s := range settings {
+		if strings.ContainsAny(s, "\r\n") {
+			return errors.New("invalid character in a connection setting")
 		}
 	}
-	dir := filepath.Join(os.TempDir(), "SlimeOS")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	cmd := exec.CommandContext(ctx, filepath.Join(filepath.Dir(exe), "slimeos-rdp.exe"))
+	cmd.Stdin = strings.NewReader(strings.Join(settings, "\n") + "\n")
+	stderr := &lastLine{w: log.Writer()}
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = stderr
+	err = cmd.Run()
+	if err == nil || ctx.Err() != nil {
+		return nil
 	}
-	// mstsc puts the file name in its title bar.
-	path := filepath.Join(dir, fileSafe(l.Name)+".rdp")
-	if err := os.WriteFile(path, rdpFile(l), 0o600); err != nil {
-		return err
-	}
-	defer os.Remove(path)
-	mstsc := filepath.Join(os.Getenv("SystemRoot"), "System32", "mstsc.exe")
-	cmd := exec.CommandContext(ctx, mstsc, path)
-	if err := cmd.Run(); err != nil && ctx.Err() == nil {
-		return fmt.Errorf("mstsc: %w", err)
-	}
-	return nil
-}
-
-// rdpFile is UTF-16LE with a BOM, as mstsc itself saves them.
-func rdpFile(l rdpLaunch) []byte {
-	lines := []string{
-		"full address:s:" + l.Addr,
-		"prompt for credentials:i:0",
-		// The tunnel already proves which Brain this is; its certificate is
-		// self-signed and names the Brain, not the loopback address.
-		"authentication level:i:0",
-		"enablecredsspsupport:i:1",
-		"screen mode id:i:2",
-		"smart sizing:i:1",
-		"dynamic resolution:i:1",
-		"connection type:i:7",
-		"networkautodetect:i:1",
-		"bandwidthautodetect:i:1",
-		"autoreconnection enabled:i:1",
-		"videoplaybackmode:i:1",
-		"audiomode:i:0",
-		"audiocapturemode:i:1",
-		"camerastoredirect:s:*",
-		"redirectclipboard:i:1",
-		"redirectprinters:i:0",
-	}
-	if l.Username != "" {
-		lines = append(lines, "username:s:"+l.Username)
-	}
-	u := utf16.Encode([]rune(strings.Join(lines, "\r\n") + "\r\n"))
-	b := []byte{0xFF, 0xFE}
-	for _, c := range u {
-		b = append(b, byte(c), byte(c>>8))
-	}
-	return b
-}
-
-func fileSafe(name string) string {
-	s := strings.Map(func(r rune) rune {
-		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
-			return '-'
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		switch exit.ExitCode() {
+		case 2:
+			return errSignInRejected
+		case 1:
+			if m := stderr.String(); m != "" {
+				return errors.New(m)
+			}
 		}
-		return r
-	}, strings.TrimSpace(name))
-	if s == "" {
-		s = "Brain"
 	}
-	if len(s) > 60 {
-		s = s[:60]
+	return fmt.Errorf("remote desktop: %w", err)
+}
+
+// lastLine passes output on to w and keeps its last line: the helper's
+// reason for failing.
+type lastLine struct {
+	w    io.Writer
+	mu   sync.Mutex
+	last string
+}
+
+func (l *lastLine) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	for _, line := range strings.Split(string(p), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			l.last = line
+		}
 	}
-	return s
+	l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func (l *lastLine) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.TrimPrefix(l.last, "rdp: ")
 }
 
 var (
@@ -116,10 +102,7 @@ var (
 )
 
 const (
-	credTypeGeneric        = 1
-	credTypeDomainPassword = 2
-
-	credPersistSession      = 1 // gone at sign-out even if we never delete it
+	credTypeGeneric         = 1
 	credPersistLocalMachine = 2
 )
 
@@ -164,8 +147,6 @@ func credWrite(typ uint32, target, user, password string, persist uint32) error 
 	}
 	return nil
 }
-
-func credDelete(target string) { credDeleteType(credTypeDomainPassword, target) }
 
 func credDeleteType(typ uint32, target string) {
 	t, err := windows.UTF16PtrFromString(target)
