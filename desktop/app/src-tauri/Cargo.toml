@@ -1,6 +1,6 @@
 [package]
 name = "slimeos-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Slime OS: your Brain's desktop on this PC"
 authors = ["Mulai Pte. Ltd."]
 license = "Proprietary"
