@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 )
@@ -43,7 +42,7 @@ func startTunnel(cfg *wgConfig, verbose bool) (*tunnel, error) {
 	if verbose {
 		level = device.LogLevelVerbose
 	}
-	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(level, "wireguard: "))
+	dev := device.NewDevice(tdev, newDialBind(), device.NewLogger(level, "wireguard: "))
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()
 		return nil, err
