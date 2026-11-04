@@ -78,7 +78,7 @@ jobs:
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_REF: dae0390a42ab271fa07a35979dfcd5671f83a949 # master, 2026-10-31
+      FREERDP_REF: e67595f48b4a98bf2cb9ac50db44531e0c2d4b45 # master, 2026-11-03
       CACHE_REV: 2
     steps:
       - uses: actions/checkout@v4
@@ -94,14 +94,8 @@ jobs:
           git init -q FreeRDP
           git -C FreeRDP fetch -q --depth 1 https://github.com/FreeRDP/FreeRDP.git "$FREERDP_REF"
           git -C FreeRDP checkout -q FETCH_HEAD
-          # d5d230dd (10-30) made this a reference to the element pop() frees
-          # on the next line: any SDL dialog then gets a garbage title and
-          # AppKit aborts. Copy it again.
-          dlg=FreeRDP/client/SDL/SDL3/dialogs/sdl_connection_dialog_wrapper.cpp
-          sed -i '' 's/auto& arg = _queue.front();/auto arg = std::move(_queue.front());/' $dlg
-          grep -q 'auto arg = std::move(_queue.front());' $dlg
           # macOS full screen: the session window lost its Space to the screen-size
-          # probe's, and every window event then waited up to 2 s (5 s per click).
+          # probe's. FreeRDP#13841 until it lands (#13979, the other half, is in).
           git -C FreeRDP apply ../desktop/freerdp-patches/sdl-macos-fullscreen.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh

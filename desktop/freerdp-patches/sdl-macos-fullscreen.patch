@@ -124,7 +124,7 @@ index 0000000..f75babf
 +	}
 +}
 diff --git a/client/SDL/SDL3/sdl_window.cpp b/client/SDL/SDL3/sdl_window.cpp
-index 1b1dd85..ed4fab4 100644
+index 906ac77..440ecad 100644
 --- a/client/SDL/SDL3/sdl_window.cpp
 +++ b/client/SDL/SDL3/sdl_window.cpp
 @@ -24,6 +24,10 @@
@@ -138,17 +138,7 @@ index 1b1dd85..ed4fab4 100644
  #include <freerdp/utils/string.h>
  
  SdlWindow::SdlWindow(SDL_DisplayID id, const std::string& title, const SDL_Rect& rect,
-@@ -206,7 +210,8 @@ void SdlWindow::setBordered(bool bordered)
- {
- 	if (_window)
- 		SDL_SetWindowBordered(_window, bordered);
--	std::ignore = SDL_SyncWindow(_window);
-+	/* No SDL_SyncWindow: this runs for every window event, and on macOS each one waited up to 2 s
-+	 * while a full screen change was pending. SDL ignores an unchanged border anyway. */
- }
- 
- void SdlWindow::raise()
-@@ -781,6 +786,59 @@ SdlWindow SdlWindow::createPopup(SDL_Window* parent, const SDL_Rect& rect, bool
+@@ -786,6 +790,59 @@ SdlWindow SdlWindow::createPopup(SDL_Window* parent, const SDL_Rect& rect, bool
  	return SdlWindow{ parent, rect, transparent, tooltip };
  }
  
@@ -208,7 +198,7 @@ index 1b1dd85..ed4fab4 100644
  static SDL_Window* createDummy(SDL_DisplayID id)
  {
  	const auto x = SDL_WINDOWPOS_CENTERED_DISPLAY(id);
-@@ -818,12 +876,31 @@ static SDL_Window* createDummy(SDL_DisplayID id)
+@@ -823,12 +880,31 @@ static SDL_Window* createDummy(SDL_DisplayID id)
  	return window;
  }
  
@@ -241,7 +231,7 @@ index 1b1dd85..ed4fab4 100644
  	if (!window)
  		return {};
  
-@@ -842,7 +919,12 @@ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
+@@ -847,7 +923,12 @@ rdpMonitor SdlWindow::query(SDL_DisplayID id, bool forceAsPrimary)
  
  SDL_Rect SdlWindow::rect(SDL_DisplayID id, bool forceAsPrimary)
  {
