@@ -346,7 +346,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     readSettings();
     MUST(OleInitialize(nullptr));
     _Module.Init(nullptr, inst);
-    AtlAxWinInit();
+    if (!AtlAxWinInit()) fail(L"AtlAxWinInit", HRESULT_FROM_WIN32(GetLastError()));
 
     std::wstring title = settings[L"name"].empty() ? L"Slime OS" : settings[L"name"] + L" – Slime OS";
     WNDCLASSEXW wc{sizeof wc};
@@ -372,8 +372,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (!frame) fail(L"CreateWindow", HRESULT_FROM_WIN32(GetLastError()));
     RECT client;
     GetClientRect(frame, &client);
-    host = CreateWindowExW(0, L"AtlAxWin", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, client.right,
-                           client.bottom, frame, nullptr, inst, nullptr);
+    // ATL's host class carries its version ("AtlAxWin140"), so ask ATL for it.
+    host = CreateWindowExW(0, CAxWindow::GetWndClassName(), nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
+                           client.right, client.bottom, frame, nullptr, inst, nullptr);
     if (!host) fail(L"CreateWindow(AtlAxWin)", HRESULT_FROM_WIN32(GetLastError()));
 
     CComPtr<IUnknown> control;
