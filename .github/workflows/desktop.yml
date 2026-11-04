@@ -113,6 +113,9 @@ jobs:
           # macOS full screen: the session window lost its Space to the screen-size
           # probe's. FreeRDP#13841 until it lands (#13979, the other half, is in).
           git -C FreeRDP apply ../desktop/freerdp-patches/sdl-macos-fullscreen.patch
+          # The camera: OpenH264, not 95b13d53's VideoToolbox encoder (no frame
+          # ever showed on Windows). VideoToolbox still decodes the session.
+          git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
