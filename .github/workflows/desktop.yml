@@ -56,6 +56,22 @@ jobs:
         with:
           name: windows-installer
           path: dist/Slime-OS-Setup-x64.exe
+      # The Microsoft Store package (unsigned; the Store signs it), plus a
+      # test-signed copy to install on a test PC. Identity from Partner
+      # Center, in repository variables.
+      - name: Store package
+        working-directory: desktop/app
+        env:
+          MSIX_NAME: ${{ vars.MSIX_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY: ${{ vars.MSIX_PUBLISHER_DISPLAY }}
+        run: |
+          $version = (Get-Content -Raw src-tauri\tauri.conf.json | ConvertFrom-Json).version
+          ./package-msix.ps1 -Version $version -Out ..\..\msix -TestSign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msix
+          path: msix/
       - name: Release
         if: startsWith(github.ref, 'refs/tags/desktop-v')
         shell: bash
