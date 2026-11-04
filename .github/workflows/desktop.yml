@@ -116,6 +116,9 @@ jobs:
           # The camera: OpenH264, not 95b13d53's VideoToolbox encoder (no frame
           # ever showed on Windows). VideoToolbox still decodes the session.
           git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
+          # cfb77bd0 clears the TLS BIO's retry flag outside its lock: a write on
+          # one thread can wipe a read's "try again", and the session drops.
+          git -C FreeRDP apply ../desktop/freerdp-patches/tls-retry-race.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
