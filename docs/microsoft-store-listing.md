@@ -21,6 +21,7 @@ certification compares these answers with what the app does. iOS:
 | Support | https://www.slimeos.com/contact |
 | Website | https://www.slimeos.com |
 | Copyright | © 2026 Mulai Pte. Ltd. |
+| Store ID | `9MTCL44GP30H` (PFN `Mulai.SlimeOS_06egmm8qhh2e6`); link once live: https://apps.microsoft.com/detail/9MTCL44GP30H |
 
 ## Listing text
 
@@ -63,12 +64,24 @@ yet tested on Windows 11), the microphone and the clipboard (both on in the
 session, not tested on Windows yet).
 Add them when they're tested. No prices or plans in the listing.
 
+**What's new in this version** (1500 max; Windows changes only, user words):
+
+> First release on the Microsoft Store. Your Brain opens full screen in Windows' own Remote Desktop, with no extra sign-in box or security warnings, and the Store keeps Slime OS up to date.
+
+(0.2.0, 2026-11-04.)
+
 **Features** (up to 20, short): full-screen Brain desktop · smooth video
 and sound · wakes a sleeping Brain · encrypted connection, no driver or
 VPN adapter.
 
 **Search terms** (up to 7): remote desktop, cloud pc, windows, virtual
-desktop, rdp, cloud computer, remote access.
+desktop, rdp, cloud computer, remote access. Partner Center calls them
+Keywords (40 characters each, 21 words in all: these are 12).
+
+**Supplemental fields**: short title and voice title empty (Xbox only;
+"Slime OS" is short already). Short description: the one above.
+Copyright and trademark info: the Copyright line. Additional license
+terms: empty (standard terms). Developed by: Mulai.
 
 ## Screenshots
 
@@ -77,6 +90,12 @@ shows in search. From BRCTA3T (or any PC): the Brain list, a session full
 screen with a clean Windows desktop, a video playing. Nothing personal on
 screen. Store logos are optional (the package's own logos show otherwise);
 if wanted, scale `desktop/app/src-tauri/icons/icon.png` (512×512).
+
+Made 11-04 in `~/Downloads/Slime OS Store Assets/microsoft-store/`:
+store logos 300/150/71 (from the app icons) and 16:9 super hero art
+1920×1080 + 3840×2160 (no title text, as required; `app-store/make_header.py
+3840x2160 <out> screenshots/02-windows-desktop.png <slime-mark-color-1024.png>`).
+Hero art is optional unless a trailer should play at the top.
 
 ## Age rating (IARC questionnaire)
 
@@ -106,6 +125,11 @@ the rating.
   Screen, sound and input travel only between the PC and the user's Brain
   and aren't collected.
 
+## Publishing hold
+
+First submission: "Don't publish this submission until I select Publish
+now", so slimeos.com/download gets the Store link the same day.
+
 ## Notes for certification
 
 A tester needs a Slime ID with a Brain and this PC paired to it; the app
@@ -113,8 +137,20 @@ has no demo mode. Before submitting, decide what to give them: a test Slime
 ID (email + password) with a Brain they may use, and a pairing code that is
 still valid when they test, or a short video of a real session instead.
 
-> Slime OS connects to the user's own cloud computer ("Brain"). Sign in
-> with the Slime ID below; when the app asks to pair this PC, enter the
-> pairing code below. Then choose the Brain and its Windows desktop opens.
-> Slime ID: <email> / <password>. Pairing code: <code>.
-> A video of a real session: <link>.
+> Slime OS connects to the user's own cloud computer ("Brain"). Test
+> account (Slime ID): <email> / <password>.
+> 1. Open Slime OS and sign in with the Slime ID above. "Test Brain" is listed.
+> 2. Click it. The app asks for a pairing code for this PC.
+> 3. In a browser, sign in at https://www.slimeos.com/login with the same
+>    Slime ID, click "Get pairing code" next to Test Brain, and type the
+>    code into the app (only the code is needed; it lasts 15 minutes, and a
+>    new one can be made every 5 minutes).
+> 4. The Brain's Windows desktop opens. If it was asleep, waking it takes
+>    about a minute.
+
+Reviewer account (11-04): Slime ID `msstore-review@mulai.com`, Brain row
+"Test Brain" on the Azure Brain (`10.10.0.28`), Windows standard user
+`storereview` (not admin; your `slimeadmin` profile stays private). Win11
+Pro allows one session at a time: stay off the Brain while certification
+runs. After certification: revoke the Brain row, disable `storereview`,
+remove its hub peer.
