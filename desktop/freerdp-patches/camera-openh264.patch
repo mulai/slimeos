@@ -1,8 +1,8 @@
-diff --git a/libfreerdp/codec/h264_videotoolbox.c b/libfreerdp/codec/h264_videotoolbox.c
-index 60ba907..236c0cb 100644
---- a/libfreerdp/codec/h264_videotoolbox.c
-+++ b/libfreerdp/codec/h264_videotoolbox.c
-@@ -1158,8 +1158,16 @@ static BOOL videotoolbox_init(H264_CONTEXT* h264)
+diff --git a/libfreerdp/codec/h264_videotoolbox.m b/libfreerdp/codec/h264_videotoolbox.m
+index 8d75a88..979ba2a 100644
+--- a/libfreerdp/codec/h264_videotoolbox.m
++++ b/libfreerdp/codec/h264_videotoolbox.m
+@@ -1204,8 +1204,16 @@ static BOOL videotoolbox_init(H264_CONTEXT *h264)
  {
  	WINPR_ASSERT(h264);
  
@@ -17,5 +17,5 @@ index 60ba907..236c0cb 100644
  		return videotoolbox_encoder_init(h264);
 +	}
  
- 	H264_CONTEXT_VIDEOTOOLBOX* sys = calloc(1, sizeof(*sys));
+ 	H264_CONTEXT_VIDEOTOOLBOX *sys = calloc(1, sizeof(*sys));
  	if (!sys)
