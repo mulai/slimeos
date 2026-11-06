@@ -119,10 +119,9 @@ jobs:
           git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
           # TEST: #14067's NSError osstatus2str doesn't build yet (28f4f30e): plain C.
           git -C FreeRDP apply ../desktop/freerdp-patches/vt-osstatus2str.patch
-          # TEST: VideoToolbox's SPS has no VUI, so Windows' decoder may hold frames
-          # back (it got 5, showed none): add max_num_reorder_frames 0, as OpenH264 has,
-          # and send Constrained Baseline (Windows took 1 frame with the VUI alone).
-          git -C FreeRDP apply ../desktop/freerdp-patches/vt-sps-vui.patch
+          # TEST: Constrained Baseline alone (211e37c's VUI rewrite + it works); is the
+          # VUI needed? vt-sps-vui.patch has both.
+          git -C FreeRDP apply ../desktop/freerdp-patches/vt-constrained-baseline.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \

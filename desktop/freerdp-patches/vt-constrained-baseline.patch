@@ -1,0 +1,18 @@
+diff --git a/libfreerdp/codec/h264_videotoolbox.m b/libfreerdp/codec/h264_videotoolbox.m
+index d076953..dc2dc67 100644
+--- a/libfreerdp/codec/h264_videotoolbox.m
++++ b/libfreerdp/codec/h264_videotoolbox.m
+@@ -896,9 +896,11 @@ static BOOL videotoolbox_encoder_create(H264_CONTEXT *h264, H264_CONTEXT_VT_ENCO
+ 	if (!videotoolbox_encoder_set(enc, kVTCompressionPropertyKey_AllowFrameReordering,
+ 	                              kCFBooleanFalse, "AllowFrameReordering"))
+ 		goto fail;
+-	/* Baseline, as OpenH264 sends: every RDP client decodes it */
++	/* Constrained Baseline, as OpenH264 sends: plain Baseline (constraint_set1 0) is a profile
++	 * Windows' hardware decoders don't take, and the camera got no picture from it */
+ 	(void)videotoolbox_encoder_set(enc, kVTCompressionPropertyKey_ProfileLevel,
+-	                               kVTProfileLevel_H264_Baseline_AutoLevel, "ProfileLevel");
++	                               kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel,
++	                               "ProfileLevel");
+ 	(void)videotoolbox_encoder_set_int(enc, kVTCompressionPropertyKey_MaxKeyFrameInterval, 30,
+ 	                                   "MaxKeyFrameInterval");
+ 	(void)videotoolbox_encoder_set_int(enc, kVTCompressionPropertyKey_ExpectedFrameRate,
