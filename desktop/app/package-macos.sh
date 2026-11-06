@@ -11,6 +11,7 @@
 # in the keychain, and notarytool credentials stored once as a profile:
 #   xcrun notarytool store-credentials slimeos-notary --apple-id <id> --team-id <team>
 set -euo pipefail
+[[ -f "${1:-}" ]] || { echo "usage: $0 <freerdp-macos.tar.gz> [desktop-v<version>] (no such file: ${1:-})" >&2; exit 1; }
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
 tarball="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
