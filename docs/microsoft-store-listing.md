@@ -21,7 +21,7 @@ certification compares these answers with what the app does. iOS:
 | Support | https://www.slimeos.com/contact |
 | Website | https://www.slimeos.com |
 | Copyright | © 2026 Mulai Pte. Ltd. |
-| Store ID | `9MTCL44GP30H` (PFN `Mulai.SlimeOS_06egmm8qhh2e6`); link once live: https://apps.microsoft.com/detail/9MTCL44GP30H |
+| Store ID | `9MTCL44GP30H` (PFN `Mulai.SlimeOS_06egmm8qhh2e6`); live since 2026-11-06: https://apps.microsoft.com/detail/9MTCL44GP30H, deep link `ms-windows-store://pdp/?productid=9MTCL44GP30H` |
 
 ## Listing text
 
