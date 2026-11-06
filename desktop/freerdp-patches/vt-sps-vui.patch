@@ -1,0 +1,224 @@
+diff --git a/libfreerdp/codec/h264_videotoolbox.m b/libfreerdp/codec/h264_videotoolbox.m
+index d076953..7e9ec9b 100644
+--- a/libfreerdp/codec/h264_videotoolbox.m
++++ b/libfreerdp/codec/h264_videotoolbox.m
+@@ -566,6 +566,204 @@ static int videotoolbox_decompress(H264_CONTEXT *WINPR_RESTRICT h264,
+ 	return result;
+ }
+ 
++/* Slime OS: VideoToolbox writes pic_order_cnt_type 0 and no VUI, so a decoder can't know
++ * the stream never reorders frames and may hold up to a full DPB (4 frames at 1080p level 4.0)
++ * before it outputs one. Windows' camera pipeline then waits for a frame that never comes
++ * (0x80070102, FreeRDP#14030). Add VUI bitstream_restriction with max_num_reorder_frames 0, as
++ * OpenH264 sends and WebRTC's SpsVuiRewriter does for VideoToolbox. */
++typedef struct
++{
++	const BYTE *data;
++	size_t size;
++	size_t bit;
++	BOOL error;
++} VT_BITREADER;
++
++static UINT32 vt_read_bit(VT_BITREADER *r)
++{
++	if (r->bit >= r->size * 8)
++	{
++		r->error = TRUE;
++		return 0;
++	}
++	const UINT32 v = (r->data[r->bit / 8] >> (7 - (r->bit % 8))) & 1;
++	r->bit++;
++	return v;
++}
++
++static UINT32 vt_read_bits(VT_BITREADER *r, size_t n)
++{
++	UINT32 v = 0;
++	for (size_t x = 0; x < n; x++)
++		v = (v << 1) | vt_read_bit(r);
++	return v;
++}
++
++static UINT32 vt_read_ue(VT_BITREADER *r)
++{
++	size_t zeros = 0;
++	while (!r->error && (vt_read_bit(r) == 0))
++	{
++		if (++zeros > 31)
++		{
++			r->error = TRUE;
++			return 0;
++		}
++	}
++	return (UINT32)((1ull << zeros) - 1 + vt_read_bits(r, zeros));
++}
++
++typedef struct
++{
++	BYTE *data;
++	size_t size;
++	size_t bit;
++} VT_BITWRITER;
++
++static void vt_write_bit(VT_BITWRITER *w, UINT32 v)
++{
++	if (w->bit >= w->size * 8)
++		return;
++	if (v)
++		w->data[w->bit / 8] |= (BYTE)(0x80 >> (w->bit % 8));
++	w->bit++;
++}
++
++static void vt_write_ue(VT_BITWRITER *w, UINT32 v)
++{
++	const uint64_t x = (uint64_t)v + 1;
++	size_t bits = 0;
++	while ((x >> bits) > 1)
++		bits++;
++	for (size_t i = 0; i < bits; i++)
++		vt_write_bit(w, 0);
++	for (size_t i = bits + 1; i > 0; i--)
++		vt_write_bit(w, (UINT32)((x >> (i - 1)) & 1));
++}
++
++/* sps: one SPS NAL unit with its header byte, no start code. On success *out (free it) holds the
++ * rewritten NAL unit; FALSE leaves the SPS as it was (already has a VUI, or a profile this
++ * doesn't parse). */
++WINPR_ATTR_NODISCARD
++static BOOL videotoolbox_sps_add_vui(const BYTE *sps, size_t size, BYTE **out, size_t *outSize)
++{
++	BOOL rc = FALSE;
++	BYTE *rbsp = nullptr;
++	BYTE *bits = nullptr;
++	*out = nullptr;
++	*outSize = 0;
++	if ((size < 4) || ((sps[0] & 0x1f) != 7))
++		return FALSE;
++
++	/* RBSP: without the emulation prevention bytes */
++	rbsp = calloc(size, 1);
++	if (!rbsp)
++		goto fail;
++	size_t rbspSize = 0;
++	for (size_t x = 1, zeros = 0; x < size; x++)
++	{
++		if ((zeros >= 2) && (sps[x] == 0x03))
++		{
++			zeros = 0;
++			continue;
++		}
++		zeros = (sps[x] == 0) ? zeros + 1 : 0;
++		rbsp[rbspSize++] = sps[x];
++	}
++
++	VT_BITREADER r = { rbsp, rbspSize, 0, FALSE };
++	const UINT32 profile = vt_read_bits(&r, 8);
++	(void)vt_read_bits(&r, 16); /* constraint flags, level */
++	(void)vt_read_ue(&r);       /* seq_parameter_set_id */
++	switch (profile)
++	{
++		case 66: /* Baseline */
++		case 77: /* Main */
++		case 88: /* Extended */
++			break;
++		default: /* High profiles carry chroma and scaling matrix fields first */
++			goto fail;
++	}
++	(void)vt_read_ue(&r); /* log2_max_frame_num_minus4 */
++	const UINT32 pocType = vt_read_ue(&r);
++	if (pocType == 0)
++		(void)vt_read_ue(&r); /* log2_max_pic_order_cnt_lsb_minus4 */
++	else if (pocType == 1)
++		goto fail;
++	const UINT32 maxRefFrames = vt_read_ue(&r);
++	(void)vt_read_bit(&r); /* gaps_in_frame_num_value_allowed_flag */
++	(void)vt_read_ue(&r);  /* pic_width_in_mbs_minus1 */
++	(void)vt_read_ue(&r);  /* pic_height_in_map_units_minus1 */
++	if (!vt_read_bit(&r))  /* frame_mbs_only_flag */
++		(void)vt_read_bit(&r);
++	(void)vt_read_bit(&r); /* direct_8x8_inference_flag */
++	if (vt_read_bit(&r))   /* frame_cropping_flag */
++	{
++		for (size_t x = 0; x < 4; x++)
++			(void)vt_read_ue(&r);
++	}
++	const size_t vuiFlag = r.bit;
++	if (r.error || (vt_read_bit(&r) != 0) || r.error)
++		goto fail;
++
++	/* the bits up to the VUI flag, then a VUI with only bitstream_restriction */
++	const size_t bitsSize = rbspSize + 16;
++	bits = calloc(bitsSize, 1);
++	if (!bits)
++		goto fail;
++	VT_BITWRITER w = { bits, bitsSize, 0 };
++	VT_BITREADER copy = { rbsp, rbspSize, 0, FALSE };
++	for (size_t x = 0; x < vuiFlag; x++)
++		vt_write_bit(&w, vt_read_bit(&copy));
++	vt_write_bit(&w, 1); /* vui_parameters_present_flag */
++	for (size_t x = 0; x < 5; x++)
++		vt_write_bit(&w, 0); /* aspect ratio, overscan, video signal, chroma location, timing */
++	vt_write_bit(&w, 0);     /* nal_hrd_parameters_present_flag */
++	vt_write_bit(&w, 0);     /* vcl_hrd_parameters_present_flag */
++	vt_write_bit(&w, 0);     /* pic_struct_present_flag */
++	vt_write_bit(&w, 1);     /* bitstream_restriction_flag */
++	vt_write_bit(&w, 1);     /* motion_vectors_over_pic_boundaries_flag */
++	vt_write_ue(&w, 0);      /* max_bytes_per_pic_denom */
++	vt_write_ue(&w, 0);      /* max_bits_per_mb_denom */
++	vt_write_ue(&w, 16);     /* log2_max_mv_length_horizontal */
++	vt_write_ue(&w, 16);     /* log2_max_mv_length_vertical */
++	vt_write_ue(&w, 0);      /* max_num_reorder_frames */
++	vt_write_ue(&w, MAX(maxRefFrames, 1)); /* max_dec_frame_buffering */
++	vt_write_bit(&w, 1);                   /* rbsp_stop_one_bit, then zeros to the byte */
++	const size_t bitsLength = (w.bit + 7) / 8;
++	if (w.bit > bitsSize * 8)
++		goto fail;
++
++	/* back to a NAL unit: header byte, emulation prevention */
++	*out = calloc(1 + bitsLength * 3 / 2 + 1, 1);
++	if (!*out)
++		goto fail;
++	size_t pos = 0;
++	(*out)[pos++] = sps[0];
++	for (size_t x = 0, zeros = 0; x < bitsLength; x++)
++	{
++		if ((zeros >= 2) && (bits[x] <= 0x03))
++		{
++			(*out)[pos++] = 0x03;
++			zeros = 0;
++		}
++		zeros = (bits[x] == 0) ? zeros + 1 : 0;
++		(*out)[pos++] = bits[x];
++	}
++	*outSize = pos;
++	rc = TRUE;
++
++fail:
++	free(rbsp);
++	free(bits);
++	if (!rc)
++	{
++		free(*out);
++		*out = nullptr;
++	}
++	return rc;
++}
++
+ /* The encoder: VideoToolbox compresses NV12 into AVCC (length-prefixed NAL units, the
+  * parameter sets kept in the format description); RDP's AVC420 carries an Annex B stream, so
+  * the lengths become start codes and SPS/PPS go in front of every keyframe. */
+@@ -705,7 +903,13 @@ static void videotoolbox_encoder_output(void *refcon, WINPR_ATTR_UNUSED void *fr
+ 					videotoolbox_encoder_fail(enc, rc, "reading a parameter set");
+ 					return;
+ 				}
+-				if (!videotoolbox_encoder_append_nal(enc, set, setSize))
++				BYTE *vui = nullptr;
++				size_t vuiSize = 0;
++				const BOOL rewritten = videotoolbox_sps_add_vui(set, setSize, &vui, &vuiSize);
++				const BOOL appended = rewritten ? videotoolbox_encoder_append_nal(enc, vui, vuiSize)
++				                                : videotoolbox_encoder_append_nal(enc, set, setSize);
++				free(vui);
++				if (!appended)
+ 				{
+ 					videotoolbox_encoder_fail(enc, kVTAllocationFailedErr,
+ 					                          "copying a parameter set");
