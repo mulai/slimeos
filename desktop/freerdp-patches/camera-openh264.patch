@@ -1,16 +1,21 @@
 diff --git a/libfreerdp/codec/h264_videotoolbox.c b/libfreerdp/codec/h264_videotoolbox.c
-index 3efea4e..1f7cc28 100644
+index 60ba907..236c0cb 100644
 --- a/libfreerdp/codec/h264_videotoolbox.c
 +++ b/libfreerdp/codec/h264_videotoolbox.c
-@@ -1135,8 +1135,10 @@ static BOOL videotoolbox_init(H264_CONTEXT* h264)
+@@ -1158,8 +1158,16 @@ static BOOL videotoolbox_init(H264_CONTEXT* h264)
  {
  	WINPR_ASSERT(h264);
  
 +	/* Slime OS: OpenH264 encodes the camera. Windows never showed a frame from this
-+	 * encoder (Camera app: 0x80070102, waiting for one), so pass to the next subsystem. */
++	 * encoder (Camera app: 0x80070102, waiting for one; FreeRDP#14030), so pass to the next
++	 * subsystem. SLIMEOS_VT_CAMERA=1 tries it anyway, to test upstream's fixes. */
  	if (h264->Compressor)
--		return videotoolbox_encoder_init(h264);
-+		return (void)videotoolbox_encoder_init, FALSE;
++	{
++		const char* vt = getenv("SLIMEOS_VT_CAMERA");
++		if (!vt || (strcmp(vt, "1") != 0))
++			return FALSE;
+ 		return videotoolbox_encoder_init(h264);
++	}
  
  	H264_CONTEXT_VIDEOTOOLBOX* sys = calloc(1, sizeof(*sys));
  	if (!sys)

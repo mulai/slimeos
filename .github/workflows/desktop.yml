@@ -94,7 +94,7 @@ jobs:
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_REF: e67595f48b4a98bf2cb9ac50db44531e0c2d4b45 # master, 2026-11-03
+      FREERDP_REF: 9e9f2148e8512295ada764757ed5030b77b77817 # master, 2026-11-05
       CACHE_REV: 2
     steps:
       - uses: actions/checkout@v4
@@ -114,11 +114,12 @@ jobs:
           # probe's. FreeRDP#13841 until it lands (#13979, the other half, is in).
           git -C FreeRDP apply ../desktop/freerdp-patches/sdl-macos-fullscreen.patch
           # The camera: OpenH264, not 95b13d53's VideoToolbox encoder (no frame
-          # ever showed on Windows). VideoToolbox still decodes the session.
+          # ever showed on Windows, FreeRDP#14030). VideoToolbox still decodes the
+          # session. SLIMEOS_VT_CAMERA=1 in the environment tries VideoToolbox.
           git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
-          # cfb77bd0 clears the TLS BIO's retry flag outside its lock: a write on
-          # one thread can wipe a read's "try again", and the session drops.
-          git -C FreeRDP apply ../desktop/freerdp-patches/tls-retry-race.patch
+          # Smart sizing: upload all dirty rects before drawing them scaled, or
+          # their edges sample stale texels and leave faint lines behind.
+          git -C FreeRDP apply ../desktop/freerdp-patches/sdl-scaled-rects.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
