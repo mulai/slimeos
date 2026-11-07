@@ -54,11 +54,9 @@ func runClient(ctx context.Context, l rdpLaunch) error {
 		// pixels: a quarter of the work of a full Retina desktop for
 		// FreeRDP's SDL renderer (smooth video, sound in step), at Windows'
 		// own 100%. Smart sizing also makes the window resizable, which
-		// macOS full screen needs.
-		// Windows at 100% said out loud: since FreeRDP 45870d1e the SDL
-		// client sends the display's own scale (200% on Retina) unless told,
-		// and on a session already at the size in points that doubles it.
-		args = append(args, fmt.Sprintf("/smart-sizing:%dx%d", w, h), "/scale-desktop:100")
+		// macOS full screen needs. With smart sizing FreeRDP (653550d8)
+		// leaves the display's scale out of the core data, so no 200%.
+		args = append(args, fmt.Sprintf("/smart-sizing:%dx%d", w, h))
 	} else {
 		args = append(args, "/dynamic-resolution")
 		// Windows starts at 100% unless told; a Retina screen is 200%.
