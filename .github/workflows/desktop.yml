@@ -94,7 +94,7 @@ jobs:
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_REF: 9e9f2148e8512295ada764757ed5030b77b77817 # master, 2026-11-05
+      FREERDP_REF: 8a312188d093d71fe6c54352eb2162a5bfceb929 # master, 2026-11-06
       CACHE_REV: 2
     steps:
       - uses: actions/checkout@v4
@@ -117,9 +117,6 @@ jobs:
           # ever showed on Windows, FreeRDP#14030). VideoToolbox still decodes the
           # session. SLIMEOS_VT_CAMERA=1 in the environment tries VideoToolbox.
           git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
-          # Smart sizing: upload all dirty rects before drawing them scaled, or
-          # their edges sample stale texels and leave faint lines behind.
-          git -C FreeRDP apply ../desktop/freerdp-patches/sdl-scaled-rects.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \
