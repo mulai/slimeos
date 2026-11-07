@@ -39,3 +39,5 @@ that license.
 
 Open a GitHub issue with steps to reproduce, expected vs. actual behavior,
 and which layer it affects (Membrane, Brain, or Android).
+
+Security problems go privately instead: see [SECURITY.md](SECURITY.md).
