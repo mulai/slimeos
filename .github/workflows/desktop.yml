@@ -117,6 +117,10 @@ jobs:
           # ever showed on Windows, FreeRDP#14030). VideoToolbox still decodes the
           # session. SLIMEOS_VT_CAMERA=1 in the environment tries VideoToolbox.
           git -C FreeRDP apply ../desktop/freerdp-patches/camera-openh264.patch
+          # The camera on a slow or bloated uplink (hotel Wi-Fi): keep the device open
+          # 10 s without a request, not 2 s (light on/off), offer 720p at most, and
+          # make frames smaller (higher QP) while Windows waits long for them.
+          git -C FreeRDP apply ../desktop/freerdp-patches/camera-slow-network.patch
           # fdk-aac's licence is awkward to ship, and RDP audio doesn't need it.
           sed -i '' -e '/fdk-aac/d' -e 's/-DWITH_FDK_AAC=ON/-DWITH_FDK_AAC=OFF/' FreeRDP/scripts/bundle-mac-os.sh
           sed -i '' -e 's/-DWITH_OPENH264=ON/-DWITH_OPENH264=ON -DWITH_APPLE_VIDEOTOOLBOX=ON -DCHANNEL_RDPECAM_CLIENT=ON/' \

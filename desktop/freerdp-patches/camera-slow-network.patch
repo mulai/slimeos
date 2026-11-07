@@ -1,0 +1,271 @@
+diff --git a/channels/rdpecam/client/camera.h b/channels/rdpecam/client/camera.h
+index 1d17e23..ff9d4dd 100644
+--- a/channels/rdpecam/client/camera.h
++++ b/channels/rdpecam/client/camera.h
+@@ -101,15 +101,38 @@ typedef struct
+ 	wStream* sampleRespBuffer;
+ 
+ 	FREERDP_VIDEO_CONTEXT* video;
++
++	/* Slime OS: the H.264 quality follows the link. The time from a Sample Response to the
++	 * next Sample Request is how long Windows waited for the frame; a slow or bloated uplink
++	 * makes it grow, and smaller frames (a higher QP) bring it down again. */
++	UINT64 lastSampleResponseTime;
++	UINT64 lastQpChangeTime;
++	UINT32 sampleWaitAvgMs;
++	UINT32 qp;
+ } CameraDeviceStream;
+ 
++/* QP range of the camera's H.264 stream: 26 is upstream's fixed value (best quality) */
++#define ECAM_H264_QP_BEST 26u
++#define ECAM_H264_QP_WORST 42u
++/* Average wait (ms) above which frames get smaller, and below which they get better again */
++#define ECAM_SAMPLE_WAIT_SLOW_MS 300u
++#define ECAM_SAMPLE_WAIT_FAST_MS 120u
++/* At most one step to smaller frames per this many ms (four times as long back up) */
++#define ECAM_QP_STEP_INTERVAL_MS 1000u
++/* Highest camera resolution offered to Windows, in lines (SLIMEOS_CAMERA_MAX_HEIGHT overrides,
++ * 0 = no cap): Windows takes the largest, and 1080p frames are too big for a hotel uplink. */
++#define ECAM_DEFAULT_MAX_HEIGHT 720u
++
+ /* Internal callback result asking a request-driven HAL to release the capture device. */
+ #define ECAM_SAMPLE_CAPTURE_DRAINED 0x00010000u
+ 
+ /* Release the capture device once the server stopped requesting samples for this long (ms).
+  * Windows requests samples one at a time, so a zero request count between two requests is
+  * normal and must not close the device. */
+-#define ECAM_CAPTURE_IDLE_TIMEOUT_MS 2000ULL
++/* Slime OS: 10 s, not 2 s. On a slow or bloated uplink one frame can take more than 2 s to reach
++ * Windows, so the device was released and reopened every few seconds (camera light on/off).
++ * Windows sends Stop Streams when an application closes the camera properly. */
++#define ECAM_CAPTURE_IDLE_TIMEOUT_MS 10000ULL
+ 
+ WINPR_ATTR_NODISCARD
+ static inline CAM_MEDIA_FORMAT streamInputFormat(CameraDeviceStream* stream)
+diff --git a/channels/rdpecam/client/camera_device_main.c b/channels/rdpecam/client/camera_device_main.c
+index 4b4e18c..9159855 100644
+--- a/channels/rdpecam/client/camera_device_main.c
++++ b/channels/rdpecam/client/camera_device_main.c
+@@ -232,8 +232,55 @@ static UINT ecam_dev_send_pending(CameraDevice* dev, size_t streamIndex, CameraD
+ 	stream->haveSample = FALSE;
+ 
+ 	/* channel write is protected by critical section in dvcman_write_channel */
+-	return ecam_channel_write(dev->ecam, stream->hSampleReqChannel, CAM_MSG_ID_SampleResponse,
+-	                          output, FALSE /* don't free stream */);
++	const UINT rc = ecam_channel_write(dev->ecam, stream->hSampleReqChannel,
++	                                   CAM_MSG_ID_SampleResponse, output, FALSE /* don't free stream */);
++	if (rc == CHANNEL_RC_OK)
++		stream->lastSampleResponseTime = GetTickCount64();
++	return rc;
++}
++
++/* Slime OS: called with stream->lock held, on each Sample Request */
++static void ecam_dev_adapt_quality(CameraDeviceStream* stream, UINT64 now)
++{
++	if (stream->qp == 0)
++		stream->qp = ECAM_H264_QP_BEST;
++
++	if (stream->lastSampleResponseTime == 0)
++		return;
++
++	UINT64 wait = now - stream->lastSampleResponseTime;
++	stream->lastSampleResponseTime = 0;
++	if (wait > 60000)
++		wait = 60000;
++
++	/* average over about four frames: one big frame alone doesn't change the quality */
++	stream->sampleWaitAvgMs = (UINT32)((3ull * stream->sampleWaitAvgMs + wait) / 4ull);
++
++	/* A new QP makes OpenH264 start again with a key frame, so step rarely: down fast, back up
++	 * slowly. */
++	const UINT64 sinceChange = now - stream->lastQpChangeTime;
++	const UINT32 old = stream->qp;
++	if ((stream->sampleWaitAvgMs > ECAM_SAMPLE_WAIT_SLOW_MS) && (stream->qp < ECAM_H264_QP_WORST) &&
++	    (sinceChange >= ECAM_QP_STEP_INTERVAL_MS))
++	{
++		stream->qp += 4u;
++		if (stream->qp > ECAM_H264_QP_WORST)
++			stream->qp = ECAM_H264_QP_WORST;
++	}
++	else if ((stream->sampleWaitAvgMs < ECAM_SAMPLE_WAIT_FAST_MS) &&
++	         (stream->qp > ECAM_H264_QP_BEST) && (sinceChange >= 4ull * ECAM_QP_STEP_INTERVAL_MS))
++		stream->qp -= 2u;
++
++	if (stream->qp < ECAM_H264_QP_BEST)
++		stream->qp = ECAM_H264_QP_BEST;
++
++	if (stream->qp != old)
++	{
++		stream->lastQpChangeTime = now;
++		WLog_INFO(TAG, "Camera quality: QP %" PRIu32 " -> %" PRIu32 " (Windows waits %" PRIu32
++		          " ms for a frame)",
++		          old, stream->qp, stream->sampleWaitAvgMs);
++	}
+ }
+ 
+ static UINT ecam_dev_sample_captured_callback(CameraDevice* dev, size_t streamIndex,
+@@ -470,6 +517,12 @@ static UINT ecam_dev_process_start_streams_request(CameraDevice* dev,
+ 	stream->samplesRequested = 0;
+ 	stream->lastSampleRequestTime = GetTickCount64();
+ 	stream->haveSample = FALSE;
++	/* keep the QP of the last stream: the link is likely the same */
++	stream->lastSampleResponseTime = 0;
++	stream->lastQpChangeTime = stream->lastSampleRequestTime;
++	stream->sampleWaitAvgMs = 0;
++	if (stream->qp == 0)
++		stream->qp = ECAM_H264_QP_BEST;
+ 
+ 	stream->pendingSample = Stream_New(nullptr, 4ull * mediaType.Width * mediaType.Height);
+ 	if (!stream->pendingSample)
+@@ -588,6 +641,7 @@ static UINT ecam_dev_process_sample_request(CameraDevice* dev, GENERIC_CHANNEL_C
+ 
+ 	stream->samplesRequested++;
+ 	stream->lastSampleRequestTime = GetTickCount64();
++	ecam_dev_adapt_quality(stream, stream->lastSampleRequestTime);
+ 	const UINT ret = ecam_dev_send_pending(dev, streamIndex, stream);
+ 	if (dev->ihal->RequestDrivenCapture && (ret == CHANNEL_RC_OK) && !stream->captureRunning)
+ 	{
+@@ -743,6 +797,35 @@ static UINT ecam_dev_process_media_type_list_request(CameraDevice* dev,
+ 
+ 	stream->formats = supportedFormats[formatIndex];
+ 
++	/* Slime OS: offer nothing taller than the cap (if anything is left) */
++	{
++		UINT32 maxHeight = ECAM_DEFAULT_MAX_HEIGHT;
++		const char* env = getenv("SLIMEOS_CAMERA_MAX_HEIGHT");
++		if (env)
++			maxHeight = (UINT32)strtoul(env, nullptr, 10);
++
++		size_t kept = 0;
++		for (size_t i = 0; i < nMediaTypes; i++)
++		{
++			if ((maxHeight == 0) || (mediaTypes[i].Height <= maxHeight))
++				kept++;
++		}
++
++		if ((kept > 0) && (kept < nMediaTypes))
++		{
++			size_t j = 0;
++			for (size_t i = 0; i < nMediaTypes; i++)
++			{
++				if (mediaTypes[i].Height <= maxHeight)
++					mediaTypes[j++] = mediaTypes[i];
++			}
++			WLog_INFO(TAG, "Camera: %" PRIuz " of %" PRIuz " media types offered (max %" PRIu32
++			          " lines)",
++			          kept, nMediaTypes, maxHeight);
++			nMediaTypes = kept;
++		}
++	}
++
+ 	/* replacing inputFormat with outputFormat in mediaTypes before sending response */
+ 	for (size_t i = 0; i < nMediaTypes; i++)
+ 	{
+diff --git a/channels/rdpecam/client/encoding.c b/channels/rdpecam/client/encoding.c
+index f0e4c61..5d21269 100644
+--- a/channels/rdpecam/client/encoding.c
++++ b/channels/rdpecam/client/encoding.c
+@@ -133,6 +133,9 @@ BOOL ecam_encoder_context_init(CameraDeviceStream* stream)
+ 	const UINT32 framerate =
+ 	    stream->currMediaType.FrameRateNumerator / stream->currMediaType.FrameRateDenominator;
+ 
++	/* Slime OS: the QP that ecam_dev_adapt_quality chose for the link */
++	freerdp_video_context_set_h264_qp(stream->video, stream->qp);
++
+ 	if (!freerdp_video_context_reconfigure(stream->video, stream->currMediaType.Width,
+ 	                                       stream->currMediaType.Height, framerate, 0,
+ 	                                       H264_CAMERA_VIDEO_REAL_TIME))
+diff --git a/include/freerdp/codec/video.h b/include/freerdp/codec/video.h
+index 0f81728..e06ac07 100644
+--- a/include/freerdp/codec/video.h
++++ b/include/freerdp/codec/video.h
+@@ -126,6 +126,11 @@ extern "C"
+ 	 *                                      H264_CAMERA_VIDEO_REAL_TIME);
+ 	 * @since version 3.24.0
+ 	 */
++	/**
++	 * @brief Slime OS: H.264 QP for the next reconfigure (0 = the default, 26)
++	 */
++	FREERDP_API void freerdp_video_context_set_h264_qp(FREERDP_VIDEO_CONTEXT* context, UINT32 qp);
++
+ 	WINPR_ATTR_NODISCARD
+ 	FREERDP_API BOOL freerdp_video_context_reconfigure(FREERDP_VIDEO_CONTEXT* context, UINT32 width,
+ 	                                                   UINT32 height, UINT32 framerate,
+diff --git a/libfreerdp/codec/video.c b/libfreerdp/codec/video.c
+index 120b258..5fb2c71 100644
+--- a/libfreerdp/codec/video.c
++++ b/libfreerdp/codec/video.c
+@@ -91,6 +91,7 @@ struct s_FREERDP_VIDEO_CONTEXT
+ 	UINT32 h264Framerate;
+ 	UINT32 h264Bitrate;
+ 	UINT32 h264UsageType;
++	UINT32 h264Qp;
+ 	wLog* log;
+ };
+ 
+@@ -240,6 +241,12 @@ void freerdp_video_context_free(FREERDP_VIDEO_CONTEXT* context)
+ 	free(context);
+ }
+ 
++void freerdp_video_context_set_h264_qp(FREERDP_VIDEO_CONTEXT* context, UINT32 qp)
++{
++	if (context)
++		context->h264Qp = qp;
++}
++
+ BOOL freerdp_video_context_reconfigure(FREERDP_VIDEO_CONTEXT* context, UINT32 width, UINT32 height,
+                                        UINT32 framerate, UINT32 bitrate, UINT32 usageType)
+ {
+@@ -277,7 +284,8 @@ BOOL freerdp_video_context_reconfigure(FREERDP_VIDEO_CONTEXT* context, UINT32 wi
+ 	                             H264_RATECONTROL_CQP))
+ 		goto fail;
+ 
+-	if (!h264_context_set_option(context->h264, H264_CONTEXT_OPTION_QP, 26))
++	if (!h264_context_set_option(context->h264, H264_CONTEXT_OPTION_QP,
++	                             context->h264Qp ? context->h264Qp : 26))
+ 		goto fail;
+ 
+ 	if (!h264_context_set_option(context->h264, H264_CONTEXT_OPTION_HW_ACCEL, FALSE))
+@@ -693,6 +701,7 @@ struct s_FREERDP_VIDEO_CONTEXT
+ 	UINT32 height;
+ 	H264_CONTEXT* h264;
+ 	BOOL h264Configured;
++	UINT32 h264Qp;
+ 	wLog* log;
+ };
+ 
+@@ -733,6 +742,12 @@ BOOL freerdp_video_conversion_supported(FREERDP_VIDEO_FORMAT srcFormat,
+ 	return (srcFormat == FREERDP_VIDEO_FORMAT_NV12) && (dstFormat == FREERDP_VIDEO_FORMAT_H264);
+ }
+ 
++void freerdp_video_context_set_h264_qp(FREERDP_VIDEO_CONTEXT* context, UINT32 qp)
++{
++	if (context)
++		context->h264Qp = qp;
++}
++
+ BOOL freerdp_video_context_reconfigure(FREERDP_VIDEO_CONTEXT* context, UINT32 width, UINT32 height,
+                                        UINT32 framerate, UINT32 bitrate, UINT32 usageType)
+ {
+@@ -783,7 +798,8 @@ BOOL freerdp_video_context_reconfigure(FREERDP_VIDEO_CONTEXT* context, UINT32 wi
+ 	    !h264_context_set_option(context->h264, H264_CONTEXT_OPTION_BITRATE, bitrate) ||
+ 	    !h264_context_set_option(context->h264, H264_CONTEXT_OPTION_RATECONTROL,
+ 	                             H264_RATECONTROL_CQP) ||
+-	    !h264_context_set_option(context->h264, H264_CONTEXT_OPTION_QP, 26) ||
++	    !h264_context_set_option(context->h264, H264_CONTEXT_OPTION_QP,
++	                             context->h264Qp ? context->h264Qp : 26) ||
+ 	    !h264_context_set_option(context->h264, H264_CONTEXT_OPTION_HW_ACCEL, FALSE))
+ 		goto fail;
+ 
+@@ -934,6 +950,11 @@ BOOL freerdp_video_conversion_supported(FREERDP_VIDEO_FORMAT srcFormat,
+ 	return FALSE;
+ }
+ 
++void freerdp_video_context_set_h264_qp(WINPR_ATTR_UNUSED FREERDP_VIDEO_CONTEXT* context,
++                                       WINPR_ATTR_UNUSED UINT32 qp)
++{
++}
++
+ BOOL freerdp_video_context_reconfigure(WINPR_ATTR_UNUSED FREERDP_VIDEO_CONTEXT* context,
+                                        WINPR_ATTR_UNUSED UINT32 width,
+                                        WINPR_ATTR_UNUSED UINT32 height,
