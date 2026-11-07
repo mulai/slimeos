@@ -32,6 +32,8 @@ Membranes update themselves from `membrane/update/manifest.json` on `main`.
   PIN prompt on update, no reminders.
 - Remote Support gives root on purpose and must never survive a reboot.
 - Website copy: say "Coming Soon" or hide a feature; never "not built yet".
+- News: a notable release, a shipped security fix or an upstream contribution
+  gets a post on slimeos.com/news (slimeos-web: `docs/news.md` has the rules).
 - Restart what you changed: the kiosk UI (`lockscreen/index.html`) needs
   the session restarted; `coordinator.sh` and the scripts it sources need
   `slimeos-bridge` restarted.
