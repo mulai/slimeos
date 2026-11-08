@@ -66,6 +66,7 @@ const ui = {
   core: { paired: false, tunnelIP: null, signedIn: null, version: '', platform: '' },
   brains: [],
   brainsError: null,
+  brainsLoading: false,
   code: null,          // Slime ID device code
   pairFor: null,       // the Brain a pairing was asked for
   pairError: null,
@@ -90,6 +91,7 @@ async function showHome() {
     return render();
   }
   ui.screen = 'picker';
+  ui.brainsLoading = true;
   render();
   try {
     ui.brains = (await call('brains')).brains;
@@ -102,6 +104,7 @@ async function showHome() {
       ui.brainsError = e.message;
     }
   }
+  ui.brainsLoading = false;
   render();
 }
 
@@ -293,7 +296,9 @@ const screens = {
 
   picker: () => {
     let body;
-    if (ui.brainsError && ui.brains.length === 0) {
+    if (ui.brainsLoading && ui.brains.length === 0) {
+      body = `<div class="waiting"><span class="spinner"></span> Loading your Brains…</div>`;
+    } else if (ui.brainsError && ui.brains.length === 0) {
       body = `<p class="subtitle">${esc(ui.brainsError)}</p>
         <div class="actions" style="width:220px"><button class="btn-secondary" data-act="home">Try again</button></div>`;
     } else if (ui.brains.length === 0) {

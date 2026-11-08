@@ -292,8 +292,26 @@ func (s *server) listBrains() (any, error) {
 	if sess == nil {
 		return nil, fail("signed_out", "Sign in with Slime ID to see your Brains.")
 	}
-	list, err := slimeIDBrains(sess.Token)
+	// Network errors get two more tries: right after wake, a Wi-Fi join or a
+	// captive portal, the first request often times out (11-08, hotel Wi-Fi).
+	var list []remoteBrain
+	var err error
+	for try := 1; try <= 3; try++ {
+		if list, err = slimeIDBrains(sess.Token); err == nil {
+			break
+		}
+		log.Printf("brains-list try %d: %v", try, err)
+		var ne net.Error
+		if !errors.As(err, &ne) || try == 3 {
+			break
+		}
+		time.Sleep(time.Duration(try) * 2 * time.Second)
+	}
 	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) {
+			return nil, fail("hub", "Couldn't reach slimeos.com to load your Brains. Check this PC's internet connection, then try again.")
+		}
 		return nil, fail("hub", "Couldn't load your Brains: %v", err)
 	}
 	s.mu.Lock()
