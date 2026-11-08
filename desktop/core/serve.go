@@ -399,6 +399,11 @@ func (s *server) ensureTunnel() (*tunnel, error) {
 	}
 	t, err := startTunnel(cfg, false)
 	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) {
+			log.Printf("tunnel: %v", err)
+			return nil, fail("hub", "Couldn't reach the Slime OS network. Check this PC's internet connection, then try again.")
+		}
 		return nil, err
 	}
 	if err := t.waitForHandshake(15 * time.Second); err != nil {

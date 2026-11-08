@@ -10,14 +10,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type wgPeer struct {
@@ -223,9 +226,24 @@ func resolveEndpoint(hostport string) (string, error) {
 	if a, err := netip.ParseAddr(host); err == nil {
 		return netip.AddrPortFrom(a, mustPort(port)).String(), nil
 	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", host, err)
+	// Right after wake or a Wi-Fi join the first lookup can hang ~30 s and
+	// fail (11-08): short tries, three of them, before giving up.
+	var ips []net.IP
+	for try := 1; ; try++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, err = net.DefaultResolver.LookupIP(ctx, "ip", host)
+		cancel()
+		if err == nil && len(ips) > 0 {
+			break
+		}
+		if err == nil {
+			err = errors.New("no addresses")
+		}
+		if try == 3 {
+			return "", fmt.Errorf("resolve %s: %w", host, err)
+		}
+		log.Printf("resolve %s try %d: %v", host, try, err)
+		time.Sleep(time.Duration(try) * time.Second)
 	}
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {
