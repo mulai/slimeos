@@ -85,7 +85,7 @@ jobs:
           gh release upload "$tag" dist/Slime-OS-Setup-x64.exe --clobber
 
   # FreeRDP's own macOS bundle script (SDL3 client, universal arm64 + x86_64),
-  # minus fdk-aac, at a pinned development commit until 3.33 ships with:
+  # minus fdk-aac, at a pinned release (3.33+ has what we need):
   #   - the AVFoundation camera backend (rdpecam, off by default for clients)
   #   - the native VideoToolbox H.264 decoder (WITH_APPLE_VIDEOTOOLBOX, on by
   #     default on macOS; replaces 3.32's experimental FFmpeg hwaccel path)
@@ -94,7 +94,7 @@ jobs:
   freerdp-macos:
     runs-on: macos-15
     env:
-      FREERDP_REF: 8a312188d093d71fe6c54352eb2162a5bfceb929 # master, 2026-11-06
+      FREERDP_REF: 65bcca1913a28cbdd7eb913599f692bd2b707991 # 3.33.1, 2026-11-09
       CACHE_REV: 2
     steps:
       - uses: actions/checkout@v4
