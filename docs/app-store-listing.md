@@ -169,6 +169,59 @@ changes.
 > account and pairing records on Cloudflare. Privacy policy:
 > https://www.slimeos.com/privacy
 
+### Business questions
+
+App Review (2026-11-15, 1.0 build 2, Guideline 2.1) asked who the app is
+for, what paid services it reaches and how users get an account. Answer
+under 3.1.3(f) (free companion to a paid web service): nothing is sold in
+the app and it never points users to a purchase. No prices (Tommy
+2026-11-23: cloud cost depends on the user's provider), but keep the
+managed-Brain sentence while slimeos.com/pricing sells our own Brains.
+
+> Target audience: adults and organisations who want a full Windows
+> computer in the cloud and reach it from the devices they already have:
+> individuals and remote workers, small businesses, schools and
+> universities, and non-profits. Also technical users and IT admins who run
+> their own Windows PC and connect to it with Slime OS. The app is not aimed
+> at children.
+>
+> Paid services: the app itself is free, with no in-app purchases, no ads
+> and no prices, purchase buttons or links to buy anywhere in the app. Slime
+> OS is a remote-desktop client for the user's own Windows computer (their
+> "Brain"). Users can connect to a computer they already have or rent
+> themselves from any cloud provider, paired with a code from that
+> computer: this is free and needs no account with us. Anyone can also try
+> our free Demo Brain without an account. As an optional alternative, users
+> can rent a managed cloud computer from us on our website. This is a
+> hosting service, comparable to web hosting or cloud storage: we run a
+> Windows computer for the user, and the app is a free companion for
+> reaching it, as described in Guideline 3.1.3(f). Nothing is sold in the
+> app, the app never mentions or links to the paid service, and it sells no
+> digital content.
+>
+> Costs: Slime OS itself costs nothing. The cost of a cloud computer
+> depends on the provider the user chooses and is paid to that provider,
+> not to us. Users who choose our optional managed cloud computer pay a
+> monthly subscription on our website instead; it is never offered or
+> mentioned in the app.
+>
+> Accounts: users create a free Slime ID (email and password) on our
+> website at https://www.slimeos.com/register. There is no sign-up in the
+> app. "Sign in with Slime ID" in the app shows a QR code and a short code
+> that the user approves from a browser where they are signed in. A user
+> who has rented a cloud computer from us then pairs the device with it
+> using a code from their dashboard on the website. Company accounts are
+> applied for from the dashboard and verified by us by hand; the company
+> then assigns cloud computers to its members' own Slime IDs. The Demo
+> Brain and the user's own computer need no Slime ID.
+>
+> If you'd like to review a managed cloud computer as well as the Demo
+> Brain, we're happy to provide a review account.
+
+If Apple takes up the review account: re-enable the Microsoft Store one
+(see FUTURE_SESSION_NOTES "STORE REVIEWER ACCOUNT"). If Apple asks for the
+price anyway: https://www.slimeos.com/pricing/ (unlisted, noindex).
+
 ## Export compliance
 
 The app uses encryption: WireGuard (ChaCha20-Poly1305, Curve25519, BLAKE2s)
